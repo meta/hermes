@@ -39,19 +39,21 @@ enum class TimeType : int8_t {
 ///    has an epoch value that is used to find out the least recently used
 ///    entry, but we omit the operations on them in this description.
 /// 2. Given a UTC time point t, check if it's included in candidate_, if yes,
-/// return the offset of candidate_. Otherwise, go to step 3.
+///    return the offset of candidate_. Otherwise, do the same for the previous
+///    candidate_ and swap the two, so that lookups alternating between two
+///    intervals hit. Otherwise, go to step 3.
 /// 3. Search the cache array and try to find two intervals:
 ///    before: [s_before, e_before] where s_before <= t and as close as
 ///    possible.
 ///    after: [s_after, e_after] where t < s_after and e_after ends as early as
 ///    possible.
-///    If one interval is not found, let it point to an empty interval in the
+///    If t is included in before, assign before to candidate_ and return its
+///    offset. Otherwise, go to step 4.
+/// 4. If one interval is not found, let it point to an empty interval in the
 ///    cache array (if no empty interval in it, reset the least recently used
 ///    one to empty and use it). Assign before to candidate_.
-/// 4. If the before interval is empty, compute the offset of t,
-///    and set its interval to [t, t]. Otherwise, go to step 5.
-/// 5. Check if t is included in the new non-empty before interval, if yes,
-///    return its offset. Otherwise, go to step 6.
+/// 5. If the before interval is empty, compute the offset of t,
+///    and set its interval to [t, t]. Otherwise, go to step 6.
 /// 6. If t > R_new, where R_new = before.end + kOffsetDeltaMs, compute the
 ///    offset for t and call extendOrRecomputeCacheEntry(after, t, offset) (this
 ///    function is described later) to update after, assign after to candidate_,
@@ -191,9 +193,18 @@ class LocalTimeOffsetCache {
 
   /// Scan the offset caches to find a cached interval starts at or before \p
   /// timeMs (as late as possible) and an interval ends after \p timeMs (as
-  /// early as possible). If none is found, reuse an empty cache. Return the
-  /// found two cache entries.
+  /// early as possible). Return the found two cache entries, or nullptr for an
+  /// interval that is not found.
   std::tuple<OffsetCacheEntry *, OffsetCacheEntry *> findBeforeAndAfterEntries(
+      int64_t timeMs);
+
+  /// Let \p before and \p after, as found by findBeforeAndAfterEntries() for
+  /// \p timeMs, point to an empty cache if they are nullptr, resetting the
+  /// least recently used caches as needed. Call this only on a cache miss, so
+  /// that hits do not evict other intervals.
+  void reuseEmptyEntries(
+      OffsetCacheEntry *&before,
+      OffsetCacheEntry *&after,
       int64_t timeMs);
 
   /// If entry->offsetMs == \p offsetMs and \p timeMs is included in
@@ -213,6 +224,9 @@ class LocalTimeOffsetCache {
   /// holds: candidate_->startMs <= t <= candidate_->endMs, where t is the last
   /// seen time point. It likely will cover subsequent time points.
   OffsetCacheEntry *candidate_;
+  /// The previous candidate_, which is tried next. Any entry is safe to try,
+  /// because a non-empty entry always has the correct offset for its interval.
+  OffsetCacheEntry *prevCandidate_;
   /// A list of cached intervals computed for previously seen time points.
   /// In the beginning, each interval is initialized to empty. When every
   /// interval is non-empty and we need a new empty one, reset the least
