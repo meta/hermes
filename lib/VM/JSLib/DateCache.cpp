@@ -10,85 +10,101 @@
 namespace hermes {
 namespace vm {
 
+void LocalTimeOffsetCache::reset() {
+  ::tzset();
+  caches_.fill(OffsetCacheEntry{});
+  candidate_ = caches_.data();
+  epoch_ = 0;
+#ifndef _WINDOWS
+  // Keep the reference time in the range that the OS accepts.
+  referenceTimeMs_ =
+      std::min<int64_t>(std::time(nullptr) * MS_PER_SECOND, kMaxNativeTimeMs);
+  referenceOffsetMs_ = computeTotalOffset(referenceTimeMs_, &referenceIsDST_);
+#endif
+}
+
 double LocalTimeOffsetCache::getLocalTimeOffset(
     double timeMs,
     TimeType timeType) {
-  if (needsToReset_) {
-    reset();
-  }
+  if (!std::isfinite(timeMs))
+    return std::numeric_limits<double>::quiet_NaN();
 
   if (timeType == TimeType::Utc) {
     // Out of allowed range by the spec, return NaN.
     if (timeMs < -TIME_RANGE_MS || timeMs > TIME_RANGE_MS)
       return std::numeric_limits<double>::quiet_NaN();
 
-    return ltza_ + daylightSavingOffsetInMs(timeMs);
+    return totalOffsetInMs(std::floor(timeMs));
   }
-  // To compute the DST offset, we need to use UTC time (as required by
-  // daylightSavingOffsetInMs()). However, getting the exact UTC time is not
-  // possible since that would be circular. Therefore, we approximate the UTC
-  // time by subtracting the standard time adjustment and then subtracting an
-  // additional hour to comply with the spec's requirements
-  // (https://tc39.es/ecma262/#sec-utc-t).
-  //
-  // For example, imagine a transition to DST that goes from UTC+0 to UTC+1,
-  // moving 00:00 to 01:00. Any time in the skipped hour gets mapped to a
-  // UTC time before the transition when we subtract an hour (e.g., 00:30 ->
-  // 23:30), which will correctly result in DST not being in effect.
-  //
-  // Similarly, during a transition from DST back to standard time, the hour
-  // from 00:00 to 01:00 is repeated. A local time in the repeated hour
-  // similarly gets mapped to a UTC time before the transition.
-  //
-  // Note that this will not work if the timezone offset has historical/future
-  // changes (which generates a different ltza than the one obtained here).
-  double guessUTC = timeMs - ltza_ - MS_PER_HOUR;
-  if (guessUTC < -TIME_RANGE_MS || guessUTC > TIME_RANGE_MS)
+
+  // A local time slightly outside the TimeClip range may convert to a valid
+  // UTC time. Bound it before converting to int64_t, allowing for the offset.
+  constexpr int64_t bound = detail::kLocalTimeOffsetBoundMs;
+  if (timeMs < -TIME_RANGE_MS - bound || timeMs > TIME_RANGE_MS + bound)
     return std::numeric_limits<double>::quiet_NaN();
-  return ltza_ + daylightSavingOffsetInMs(guessUTC);
+
+  // Discover the offsets on either side of a nearby transition. This assumes
+  // offsets are smaller than 48 hours in magnitude and there is at most one
+  // transition in this four-day window, as with the supported timezone data.
+  // The three lookups share one check for a system timezone change.
+  bool checkTimezone = true;
+  int before = totalOffsetInMs(std::floor(timeMs - bound), checkTimezone);
+  int after = totalOffsetInMs(std::floor(timeMs + bound), checkTimezone);
+  // For a transition at T with offsets a -> b, subtracting max(a, b) gives
+  // guessUTC < T exactly when timeMs < T + max(a, b). Thus skipped and repeated
+  // local times use the pre-transition offset, as required by UTC(t), while
+  // the first unambiguous time after the transition uses the new offset.
+  double guessUTC = timeMs - std::max(before, after);
+  // An offset of 48 hours or more breaks the assumptions above, and near the
+  // ends of the range moves the guess beyond the times that can be queried.
+  if (guessUTC < -TIME_RANGE_MS - 2 * bound ||
+      guessUTC > TIME_RANGE_MS + 2 * bound)
+    return std::numeric_limits<double>::quiet_NaN();
+  return totalOffsetInMs(std::floor(guessUTC), checkTimezone);
 }
 
-int LocalTimeOffsetCache::computeDaylightSaving(int64_t utcTimeMs) {
-  std::time_t t = utcTimeMs / MS_PER_SECOND;
+int LocalTimeOffsetCache::computeTotalOffset(int64_t utcTimeMs, bool *isDST) {
+  if (isDST)
+    *isDST = false;
+  std::time_t t = std::floor(utcTimeMs / MS_PER_SECOND);
   std::tm tm;
 #ifdef _WINDOWS
-  auto err = ::localtime_s(&tm, &t);
-  if (err) {
+  if (::localtime_s(&tm, &t))
     return 0;
-  }
-  // It's not officially documented that whether Windows C API caches time zone,
-  // but actual testing shows it does. So for now, we don't detect TZ changes
-  // and reset the cache here. Otherwise, we have to call tzset() and
-  // _get_timezone(), which is thread unsafe. And this behavior is the same as
-  // on Linux.
+  if (isDST)
+    *isDST = tm.tm_isdst > 0;
+
+  // Windows tm has no tm_gmtoff. Interpret its local calendar fields as UTC
+  // using timezone-independent arithmetic, then subtract the queried instant.
+  // Both sides must use whole seconds, including at a day or year boundary.
+  double localMs = makeDate(
+      makeDay(tm.tm_year + 1900, tm.tm_mon, tm.tm_mday),
+      makeTime(tm.tm_hour, tm.tm_min, tm.tm_sec, 0));
+  return localMs - t * MS_PER_SECOND;
 #else
-  std::tm *brokenTime = ::localtime_r(&t, &tm);
-  if (!brokenTime) {
+  if (!::localtime_r(&t, &tm))
     return 0;
-  }
-  int dstOffset = tm.tm_isdst ? MS_PER_HOUR : 0;
-  int ltza = tm.tm_gmtoff * MS_PER_SECOND - dstOffset;
-  // If ltza changes, we need to reset the cache.
-  if (ltza != ltza_) {
-    needsToReset_ = true;
-  }
+  if (isDST)
+    *isDST = tm.tm_isdst > 0;
+  return tm.tm_gmtoff * MS_PER_SECOND;
 #endif
-  return tm.tm_isdst ? MS_PER_HOUR : 0;
 }
 
-int LocalTimeOffsetCache::daylightSavingOffsetInMs(int64_t utcTimeMs) {
-  if (needsToReset_) {
-    reset();
-  }
+int LocalTimeOffsetCache::totalOffsetInMs(int64_t utcTimeMs) {
+  bool checkTimezone = true;
+  return totalOffsetInMs(utcTimeMs, checkTimezone);
+}
 
-  // Some OS library calls don't work right for dates that cannot be represented
-  // with int32_t. ES5.1 requires to map the time to a year with same
-  // leap-year-ness and same starting day for the year. But for compatibility,
-  // other engines, such as V8, use the actual year if it is in the range of
-  // 1970..2037, which corresponds to the time range 0..kMaxEpochTimeInMs.
-  if (utcTimeMs < 0 || utcTimeMs > kMaxEpochTimeInMs) {
-    utcTimeMs =
-        detail::equivalentTime(utcTimeMs / MS_PER_SECOND) * MS_PER_SECOND;
+int LocalTimeOffsetCache::totalOffsetInMs(
+    int64_t utcTimeMs,
+    [[maybe_unused]] bool &checkTimezone) {
+  // Pass the time to the OS unchanged when it is in the native range, so that
+  // the offset follows the timezone's history and current rules, as in V8.
+  // Otherwise, map the time to a year with the same leap-year-ness and
+  // starting day of the week (ES5.1 15.9.1.8).
+  if (utcTimeMs < kMinNativeTimeMs || utcTimeMs > kMaxNativeTimeMs) {
+    utcTimeMs = detail::equivalentTime(std::floor(utcTimeMs / MS_PER_SECOND)) *
+        MS_PER_SECOND;
   }
 
   // Reset the counter to avoid overflow. Each call of this function may
@@ -103,125 +119,159 @@ int LocalTimeOffsetCache::daylightSavingOffsetInMs(int64_t utcTimeMs) {
   // Cache hit.
   if (candidate_->include(utcTimeMs)) {
     candidate_->epoch = bumpEpoch();
-    return candidate_->dstOffsetMs;
+    return candidate_->offsetMs;
   }
 
   // Try to find cached intervals that happen before/after utcTimeMs.
-  auto [before, after] = findBeforeAndAfterEntries(utcTimeMs);
+  OffsetCacheEntry *before;
+  OffsetCacheEntry *after;
+  std::tie(before, after) = findBeforeAndAfterEntries(utcTimeMs);
+
+  // Hits in the cached interval.
+  if (before->include(utcTimeMs)) {
+    candidate_ = before;
+    before->epoch = bumpEpoch();
+    return before->offsetMs;
+  }
+
+#ifndef _WINDOWS
+  // The time is in no cached interval, so the OS may need to be queried. Check
+  // it for a timezone change first.
+  // Check a fixed instant, rather than the requested date: historical and
+  // seasonal offset changes must not be mistaken for system timezone changes.
+  // The DST flag also distinguishes zones whose offsets match there because
+  // only one of them observes DST. This remains a best-effort check; see
+  // referenceTimeMs_ for the changes it cannot detect.
+  // A reset empties every entry, so search again. Check at most once, so a
+  // concurrent timezone change cannot cause an unbounded loop.
+  if (checkTimezone) {
+    checkTimezone = false;
+    bool isDST;
+    if (computeTotalOffset(referenceTimeMs_, &isDST) != referenceOffsetMs_ ||
+        isDST != referenceIsDST_) {
+      reset();
+      std::tie(before, after) = findBeforeAndAfterEntries(utcTimeMs);
+    }
+  }
+#endif
+
   // Set candidate_ to before by default, and reassign it in case that the
   // after cache is hit or used.
   candidate_ = before;
 
   // No cached interval yet, compute a new one with utcTimeMs.
   if (before->isEmpty()) {
-    int dstOffset = computeDaylightSaving(utcTimeMs);
-    before->dstOffsetMs = dstOffset;
+    int offset = computeTotalOffset(utcTimeMs);
+    before->offsetMs = offset;
     before->startMs = utcTimeMs;
     before->endMs = utcTimeMs;
     before->epoch = bumpEpoch();
-    return dstOffset;
+    return offset;
   }
 
-  // Hits in the cached interval.
-  if (before->include(utcTimeMs)) {
-    before->epoch = bumpEpoch();
-    return before->dstOffsetMs;
-  }
-
-  // If utcTimeMs is larger than before->endMs + kDSTDeltaMs, we can't safely
-  // extend before, because it could have more than one DST transition in the
+  // If utcTimeMs is larger than before->endMs + kOffsetDeltaMs, we can't safely
+  // extend before, because it could have more than one offset transition in the
   // interval. Instead, try if we can extend after (or recompute it).
-  if ((utcTimeMs - kDSTDeltaMs) > before->endMs) {
-    int dstOffset = computeDaylightSaving(utcTimeMs);
-    extendOrRecomputeCacheEntry(after, utcTimeMs, dstOffset);
+  if ((utcTimeMs - kOffsetDeltaMs) > before->endMs) {
+    int offset = computeTotalOffset(utcTimeMs);
+    extendOrRecomputeCacheEntry(after, utcTimeMs, offset);
     // May help cache hit in subsequent calls (in case that the passed in time
     // values are adjacent).
     candidate_ = after;
-    return dstOffset;
+    return offset;
   }
 
   // Now, utcTimeMs is in the range of (before->endMs, before->endMs +
-  // kDSTDeltaMs].
+  // kOffsetDeltaMs].
 
   before->epoch = bumpEpoch();
   // If before->endMs gets too large, we need to make sure it won't overflow
-  // kMaxEpochTimeInMs after extending it.
-  int64_t newAfterStart = before->endMs < kMaxEpochTimeInMs - kDSTDeltaMs
-      ? before->endMs + kDSTDeltaMs
-      : kMaxEpochTimeInMs;
-  // We need to handle two cases here:
-  // 1. If after starts too late, recompute it or extend it to newAfterStart.
-  // 2. If after is empty, its startMs would be kMaxEpochTimeInMs. And if
-  // newAfterStart is also capped to kMaxEpochTimeInMs, we would need to
-  // recompute the after entry.
+  // kMaxNativeTimeMs after extending it.
+  int64_t newAfterStart = before->endMs < kMaxNativeTimeMs - kOffsetDeltaMs
+      ? before->endMs + kOffsetDeltaMs
+      : kMaxNativeTimeMs;
+  // If after starts too late, recompute it or extend it to newAfterStart. An
+  // empty after starts later than every cached time, so it is recomputed.
   if (newAfterStart <= after->startMs) {
-    int dstOffset = computeDaylightSaving(newAfterStart);
-    extendOrRecomputeCacheEntry(after, newAfterStart, dstOffset);
+    int offset = computeTotalOffset(newAfterStart);
+    // The OS contradicts the cache at the same time, so the cache is stale,
+    // for example after an undetected timezone change. Start over.
+    if (newAfterStart == after->startMs && offset != after->offsetMs) {
+      reset();
+      return computeTotalOffset(utcTimeMs);
+    }
+    extendOrRecomputeCacheEntry(after, newAfterStart, offset);
   } else {
     after->epoch = bumpEpoch();
   }
 
-  // Now after->startMs is in (before->endMs, before->endMs + kDSTDeltaMs].
+  // Now after->startMs is in (before->endMs, before->endMs + kOffsetDeltaMs].
 
-  // If before and after have the same DST offset, merge them.
-  if (before->dstOffsetMs == after->dstOffsetMs) {
+  // If before and after have the same offset, merge them.
+  if (before->offsetMs == after->offsetMs) {
     before->endMs = after->endMs;
-    *after = DSTCacheEntry{};
-    return before->dstOffsetMs;
+    *after = OffsetCacheEntry{};
+    return before->offsetMs;
   }
 
-  // Binary search in (before->endMs, after->startMs] for DST transition
+  // Binary search in (before->endMs, after->startMs] for offset transition
   // point. Note that after->startMs could be smaller than before->endMs
-  // + kDSTDeltaMs, but that small interval has the same DST offset, so we
+  // + kOffsetDeltaMs, but that small interval has the same offset, so we
   // can ignore them in the below search.
-  // Though 5 iterations should be enough to cover kDSTDeltaMs, if the
-  // assumption of only one transition in kDSTDeltaMs no longer holds, we may
+  // Though 5 iterations should be enough to cover kOffsetDeltaMs, if the
+  // assumption of only one transition in kOffsetDeltaMs no longer holds, we may
   // not be able to search the result. We'll stop the loop after 5 iterations
   // anyway.
   for (int i = 4; i >= 0; --i) {
     int delta = after->startMs - before->endMs;
     int64_t middle = before->endMs + delta / 2;
-    int middleDstOffset = computeDaylightSaving(middle);
-    if (before->dstOffsetMs == middleDstOffset) {
+    int middleOffset = computeTotalOffset(middle);
+    if (before->offsetMs == middleOffset) {
       before->endMs = middle;
       if (utcTimeMs <= before->endMs) {
-        return middleDstOffset;
+        return middleOffset;
       }
-    } else {
-      assert(after->dstOffsetMs == middleDstOffset);
+    } else if (after->offsetMs == middleOffset) {
       after->startMs = middle;
       if (utcTimeMs >= after->startMs) {
         // May help cache hit in subsequent calls (in case that the passed in
         // time values are adjacent).
         candidate_ = after;
-        return middleDstOffset;
+        return middleOffset;
       }
+    } else {
+      // A third offset in a window with at most one transition means that the
+      // cache is stale, for example after an undetected timezone change.
+      reset();
+      return computeTotalOffset(utcTimeMs);
     }
   }
 
-  // Fallthrough path of the binary search, just compute the DST for utcTimeMs.
-  return computeDaylightSaving(utcTimeMs);
+  // Fallthrough path of the binary search, just compute the offset for
+  // utcTimeMs.
+  return computeTotalOffset(utcTimeMs);
 }
 
-LocalTimeOffsetCache::DSTCacheEntry *
-LocalTimeOffsetCache::leastRecentlyUsedExcept(const DSTCacheEntry *const skip) {
-  DSTCacheEntry *result = nullptr;
+LocalTimeOffsetCache::OffsetCacheEntry *
+LocalTimeOffsetCache::leastRecentlyUsedExcept(
+    const OffsetCacheEntry *const skip) {
+  OffsetCacheEntry *result = nullptr;
   for (auto &cache : caches_) {
     if (&cache == skip)
       continue;
     if (!result || result->epoch > cache.epoch)
       result = &cache;
   }
-  *result = DSTCacheEntry{};
+  *result = OffsetCacheEntry{};
   return result;
 }
 
 std::tuple<
-    LocalTimeOffsetCache::DSTCacheEntry *,
-    LocalTimeOffsetCache::DSTCacheEntry *>
+    LocalTimeOffsetCache::OffsetCacheEntry *,
+    LocalTimeOffsetCache::OffsetCacheEntry *>
 LocalTimeOffsetCache::findBeforeAndAfterEntries(int64_t timeMs) {
-  LocalTimeOffsetCache::DSTCacheEntry *before = nullptr;
-  LocalTimeOffsetCache::DSTCacheEntry *after = nullptr;
+  LocalTimeOffsetCache::OffsetCacheEntry *before = nullptr;
+  LocalTimeOffsetCache::OffsetCacheEntry *after = nullptr;
 
   // `before` should start as late as possible, while `after` should end as
   // early as possible so that they're closest to timeMs.
@@ -263,12 +313,12 @@ LocalTimeOffsetCache::findBeforeAndAfterEntries(int64_t timeMs) {
 }
 
 void LocalTimeOffsetCache::extendOrRecomputeCacheEntry(
-    DSTCacheEntry *&entry,
+    OffsetCacheEntry *&entry,
     int64_t timeMs,
-    int dstOffsetMs) {
+    int offsetMs) {
   // It's safe to extend the interval if timeMs is in the checked range.
-  if (entry->dstOffsetMs == dstOffsetMs &&
-      entry->startMs - kDSTDeltaMs <= timeMs && timeMs <= entry->endMs) {
+  if (entry->offsetMs == offsetMs &&
+      entry->startMs - kOffsetDeltaMs <= timeMs && timeMs <= entry->endMs) {
     entry->startMs = timeMs;
   } else {
     // Recompute the after cache using timeMs.
@@ -277,7 +327,7 @@ void LocalTimeOffsetCache::extendOrRecomputeCacheEntry(
     }
     entry->startMs = timeMs;
     entry->endMs = timeMs;
-    entry->dstOffsetMs = dstOffsetMs;
+    entry->offsetMs = offsetMs;
     entry->epoch = bumpEpoch();
   }
 }
