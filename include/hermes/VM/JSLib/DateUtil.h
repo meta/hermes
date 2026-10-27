@@ -103,16 +103,13 @@ double dateFromTime(double t);
 int32_t weekDay(double t);
 
 //===----------------------------------------------------------------------===//
-// ES5.1 15.9.1.7
-
-/// Local time zone offset, explicitly not including DST offset.
-/// TODO: Cache this value to avoid recomputing every time.
-double localTZA();
-
-//===----------------------------------------------------------------------===//
 // ES5.1 15.9.1.8
 
 namespace detail {
+/// Bound on supported timezone offsets. Local-to-UTC conversion probes this
+/// far on either side of a local time to discover nearby offset transitions.
+constexpr int64_t kLocalTimeOffsetBoundMs = 2 * MS_PER_DAY;
+
 // Exposed for test only
 int32_t equivalentTime(int64_t epochSecs);
 } // namespace detail

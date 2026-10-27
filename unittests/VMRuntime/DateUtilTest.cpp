@@ -123,16 +123,46 @@ TEST(DateUtilTest, WeekDayTest) {
 }
 
 namespace {
-/// `localtime_r()` called in localTZA() caches the timezone. To correctly
+/// `localtime_r()` caches the timezone. To correctly
 /// handle different timezones in a single test, let's call `tzset()` explicitly
 /// to update the cached timezone.
 void setTimeZone(const char *tzname) {
   hermes::oscompat::set_env("TZ", tzname);
   ::tzset();
 }
+
+/// Encode civil fields with a one-based month, without a timezone adjustment.
+double timeValue(int year, int month, int date, int hour = 0, int minute = 0) {
+  return makeDate(makeDay(year, month - 1, date), makeTime(hour, minute, 0, 0));
+}
+
+/// Check whether the IANA timezone database is available by setting TZ to
+/// known IANA names (America/New_York and Pacific/Auckland) and verifying
+/// their offsets on July 1, 2018.
+///
+/// \return false on Windows (which does not support IANA names) and
+/// on systems without tzdata installed, where IANA names silently fall back
+/// to UTC (offset 0).
+bool hasIANATimezoneDB() {
+#ifdef _WINDOWS
+  return false;
+#else
+  static hermes::OptValue<bool> result = llvh::None;
+  if (result.hasValue())
+    return result.getValue();
+  setTimeZone("America/New_York");
+  LocalTimeOffsetCache cache;
+  auto nyOffset = cache.totalOffsetInMs(timeValue(2018, 7, 1));
+  setTimeZone("Pacific/Auckland");
+  cache.reset();
+  auto aucklandOffset = cache.totalOffsetInMs(timeValue(2018, 7, 1));
+  result = nyOffset == -4 * MS_PER_HOUR && aucklandOffset == 12 * MS_PER_HOUR;
+  return *result;
+#endif
+}
 } // namespace
 
-TEST(DateUtilTest, LocalTZATest) {
+TEST(DateUtilTest, TotalOffsetTest) {
   // On Windows, TZ env can only be set to a very limited format,
   // as documented in Microsoft Docs for _tzset. Specifically,
   // * They cannot be set to IANA TZDB zone names.
@@ -140,44 +170,38 @@ TEST(DateUtilTest, LocalTZATest) {
   //   digits), Windows always uses current US DST rules. It does NOT
   //   follow historic rules for old dates or rules of other regions.
 
-  // Ensure the local TZA is correct both in standard and daylight time zones.
-  // Use the following two zones to guarantee that at least one of
-  // the zones is under DST whatever day this test is ran.
+  LocalTimeOffsetCache cache;
+  const double january = timeValue(2019, 1, 15);
+  const double july = timeValue(2019, 7, 15);
 
   // US Pacific: DST is from Mar to Nov
-#ifdef _WINDOWS
-  setTimeZone("PST8PDT");
-#else
-  setTimeZone("America/Los_Angeles");
-#endif
-  EXPECT_EQ(-2.88e+7, localTZA());
+  setTimeZone(hasIANATimezoneDB() ? "America/Los_Angeles" : "PST8PDT");
+  cache.reset();
+  EXPECT_EQ(-8 * MS_PER_HOUR, cache.totalOffsetInMs(january));
+  EXPECT_EQ(-7 * MS_PER_HOUR, cache.totalOffsetInMs(july));
 
-  // New Zealand: DST is from Oct to Apr
-#ifdef _WINDOWS
-  // This test is skipped due to Windows deficiency in TZ env variable.
-#else
-  setTimeZone("Pacific/Auckland");
-  EXPECT_EQ(4.32e+7, localTZA());
-#endif
+  // New Zealand: DST is from Oct to Apr.
+  setTimeZone(hasIANATimezoneDB() ? "Pacific/Auckland" : "NZT-12");
+  cache.reset();
+  EXPECT_EQ(
+      (hasIANATimezoneDB() ? 13 : 12) * MS_PER_HOUR,
+      cache.totalOffsetInMs(january));
+  EXPECT_EQ(12 * MS_PER_HOUR, cache.totalOffsetInMs(july));
 
-  // Disble DST entirely and make sure the TZA is the same.
+  // Disable DST entirely and make sure the offset is the same.
   // Test both positive and negative zone.
 
   // Negative fixed zone
-#ifdef _WINDOWS
-  setTimeZone("PST8");
-#else
-  setTimeZone("Etc/GMT+8");
-#endif
-  EXPECT_EQ(-2.88e+7, localTZA());
+  setTimeZone(hasIANATimezoneDB() ? "Etc/GMT+8" : "PST8");
+  cache.reset();
+  EXPECT_EQ(-8 * MS_PER_HOUR, cache.totalOffsetInMs(january));
+  EXPECT_EQ(-8 * MS_PER_HOUR, cache.totalOffsetInMs(july));
 
   // Positive fixed zone
-#ifdef _WINDOWS
-  setTimeZone("JST-9");
-#else
-  setTimeZone("Asia/Tokyo");
-#endif
-  EXPECT_EQ(3.24e+7, localTZA());
+  setTimeZone(hasIANATimezoneDB() ? "Asia/Tokyo" : "JST-9");
+  cache.reset();
+  EXPECT_EQ(9 * MS_PER_HOUR, cache.totalOffsetInMs(january));
+  EXPECT_EQ(9 * MS_PER_HOUR, cache.totalOffsetInMs(july));
 
   hermes::oscompat::unset_env("TZ");
 }
@@ -212,26 +236,31 @@ TEST(DateUtilTest, EquivalentTimeTest) {
   EXPECT_EQ(1767270660, detail::equivalentTime(3833759507460));
 }
 
-TEST(DateUtilTest, DaylightSavingTATest) {
+TEST(DateUtilTest, HistoricalTotalOffsetTest) {
   LocalTimeOffsetCache localTimeOffsetCache;
-  /// A wrapper that implements the deleted daylightSavingTA() function.
-  auto daylightSavingTA = [&localTimeOffsetCache](double timeMs) {
-    return localTimeOffsetCache.daylightSavingOffsetInMs(timeMs);
+  auto totalOffset = [&localTimeOffsetCache](double timeMs) {
+    return localTimeOffsetCache.totalOffsetInMs(timeMs);
   };
 
   setTimeZone("America/Los_Angeles");
   localTimeOffsetCache.reset();
-  EXPECT_EQ(MS_PER_HOUR, daylightSavingTA(1489530532000)); // Mar 14, 2017
-  EXPECT_EQ(MS_PER_HOUR, daylightSavingTA(1019514530000)); // Apr 22, 2002
-  EXPECT_EQ(0, daylightSavingTA(1487111330000)); // Feb 14, 2017
-  EXPECT_EQ(0, daylightSavingTA(1017700130000)); // Apr 1, 2002
+  EXPECT_EQ(-7 * MS_PER_HOUR, totalOffset(1489530532000)); // Mar 14, 2017
+  EXPECT_EQ(-7 * MS_PER_HOUR, totalOffset(1019514530000)); // Apr 22, 2002
+  EXPECT_EQ(-8 * MS_PER_HOUR, totalOffset(1487111330000)); // Feb 14, 2017
+  // Apr 1, 2002 was before the 2007 US DST rule change. Only IANA tzdata
+  // has the historic rules needed to correctly report no DST for this date.
+  if (hasIANATimezoneDB())
+    EXPECT_EQ(-8 * MS_PER_HOUR, totalOffset(1017700130000)); // Apr 1, 2002
 
   setTimeZone("America/Chicago");
   localTimeOffsetCache.reset();
-  EXPECT_EQ(MS_PER_HOUR, daylightSavingTA(1489530532000)); // Mar 14, 2017
-  EXPECT_EQ(MS_PER_HOUR, daylightSavingTA(1019514530000)); // Apr 22, 2002
-  EXPECT_EQ(0, daylightSavingTA(1487111330000)); // Feb 14, 2017
-  EXPECT_EQ(0, daylightSavingTA(1017700130000)); // Apr 1, 2002
+  EXPECT_EQ(-5 * MS_PER_HOUR, totalOffset(1489530532000)); // Mar 14, 2017
+  EXPECT_EQ(-5 * MS_PER_HOUR, totalOffset(1019514530000)); // Apr 22, 2002
+  EXPECT_EQ(-6 * MS_PER_HOUR, totalOffset(1487111330000)); // Feb 14, 2017
+  // Apr 1, 2002 was before the 2007 US DST rule change. Only IANA tzdata
+  // has the historic rules needed to correctly report no DST for this date.
+  if (hasIANATimezoneDB())
+    EXPECT_EQ(-6 * MS_PER_HOUR, totalOffset(1017700130000)); // Apr 1, 2002
 
   hermes::oscompat::unset_env("TZ");
 }
@@ -289,6 +318,341 @@ TEST(DateUtilTest, LocalTimeTest) {
   localTimeOffsetCache.reset();
   EXPECT_EQ(1530493200000, localTime(1530460800000, localTimeOffsetCache));
   EXPECT_EQ(1530460800000, utcTime(1530493200000, localTimeOffsetCache));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, HalfHourDaylightSavingTest) {
+  if (!hasIANATimezoneDB())
+    return;
+  setTimeZone("Australia/Lord_Howe");
+  LocalTimeOffsetCache cache;
+
+  EXPECT_EQ(660 * MS_PER_MINUTE, cache.totalOffsetInMs(timeValue(2019, 1, 15)));
+  EXPECT_EQ(630 * MS_PER_MINUTE, cache.totalOffsetInMs(timeValue(2019, 7, 15)));
+  EXPECT_EQ(
+      timeValue(2019, 1, 15, 23), localTime(timeValue(2019, 1, 15, 12), cache));
+  EXPECT_EQ(
+      timeValue(2019, 7, 15, 22, 30),
+      localTime(timeValue(2019, 7, 15, 12), cache));
+  EXPECT_EQ(
+      timeValue(2019, 1, 15, 12), utcTime(timeValue(2019, 1, 15, 23), cache));
+  EXPECT_EQ(
+      timeValue(2019, 7, 15, 12),
+      utcTime(timeValue(2019, 7, 15, 22, 30), cache));
+
+  // The 30-minute fold repeats 01:30..02:00; select the earlier occurrence.
+  EXPECT_EQ(
+      timeValue(2019, 4, 6, 14, 45),
+      utcTime(timeValue(2019, 4, 7, 1, 45), cache));
+  EXPECT_EQ(
+      timeValue(2019, 4, 7, 1, 45),
+      localTime(timeValue(2019, 4, 6, 14, 45), cache));
+  EXPECT_EQ(
+      timeValue(2019, 4, 7, 1, 45),
+      localTime(timeValue(2019, 4, 6, 15, 15), cache));
+
+  // The gap skips 02:00..02:30; the first valid time is 02:30.
+  EXPECT_EQ(
+      timeValue(2019, 10, 5, 15, 29),
+      utcTime(timeValue(2019, 10, 6, 1, 59), cache));
+  EXPECT_EQ(
+      timeValue(2019, 10, 5, 15, 45),
+      utcTime(timeValue(2019, 10, 6, 2, 15), cache));
+  EXPECT_EQ(
+      timeValue(2019, 10, 5, 15, 30),
+      utcTime(timeValue(2019, 10, 6, 2, 30), cache));
+  EXPECT_EQ(
+      timeValue(2019, 10, 5, 15, 45),
+      utcTime(timeValue(2019, 10, 6, 2, 45), cache));
+  EXPECT_EQ(
+      timeValue(2019, 10, 6, 2, 30),
+      localTime(timeValue(2019, 10, 5, 15, 30), cache));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, TwoHourDaylightSavingTest) {
+  if (!hasIANATimezoneDB())
+    return;
+  setTimeZone("Antarctica/Troll");
+  LocalTimeOffsetCache cache;
+
+  EXPECT_EQ(0, cache.totalOffsetInMs(timeValue(2019, 1, 15)));
+  EXPECT_EQ(2 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(2019, 7, 15)));
+  EXPECT_EQ(
+      timeValue(2019, 1, 15, 12), localTime(timeValue(2019, 1, 15, 12), cache));
+  EXPECT_EQ(
+      timeValue(2019, 7, 15, 14), localTime(timeValue(2019, 7, 15, 12), cache));
+  EXPECT_EQ(
+      timeValue(2019, 1, 15, 12), utcTime(timeValue(2019, 1, 15, 12), cache));
+  EXPECT_EQ(
+      timeValue(2019, 7, 15, 12), utcTime(timeValue(2019, 7, 15, 14), cache));
+
+  // The two-hour gap skips 01:00..03:00; the first valid time is 03:00.
+  EXPECT_EQ(
+      timeValue(2019, 3, 31, 1), utcTime(timeValue(2019, 3, 31, 1), cache));
+  EXPECT_EQ(
+      timeValue(2019, 3, 31, 2, 30),
+      utcTime(timeValue(2019, 3, 31, 2, 30), cache));
+  EXPECT_EQ(
+      timeValue(2019, 3, 31, 1), utcTime(timeValue(2019, 3, 31, 3), cache));
+  EXPECT_EQ(
+      timeValue(2019, 3, 31, 1, 15),
+      utcTime(timeValue(2019, 3, 31, 3, 15), cache));
+  EXPECT_EQ(
+      timeValue(2019, 3, 31, 3), localTime(timeValue(2019, 3, 31, 1), cache));
+
+  // Both UTC instants map to 02:30 in the fold; select the earlier one.
+  EXPECT_EQ(
+      timeValue(2019, 10, 27, 0, 30),
+      utcTime(timeValue(2019, 10, 27, 2, 30), cache));
+  EXPECT_EQ(
+      timeValue(2019, 10, 27, 2, 30),
+      localTime(timeValue(2019, 10, 27, 0, 30), cache));
+  EXPECT_EQ(
+      timeValue(2019, 10, 27, 2, 30),
+      localTime(timeValue(2019, 10, 27, 2, 30), cache));
+  EXPECT_EQ(
+      timeValue(2019, 10, 27, 3), utcTime(timeValue(2019, 10, 27, 3), cache));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, HistoricalStandardOffsetChangeTest) {
+  if (!hasIANATimezoneDB())
+    return;
+  setTimeZone("Asia/Kathmandu");
+  LocalTimeOffsetCache cache;
+
+  // The standard offset changed from +05:30 to +05:45 at the start of 1986.
+  const double transition = timeValue(1985, 12, 31, 18, 30);
+  EXPECT_EQ(330 * MS_PER_MINUTE, cache.totalOffsetInMs(transition - 1));
+  EXPECT_EQ(345 * MS_PER_MINUTE, cache.totalOffsetInMs(transition));
+  EXPECT_EQ(timeValue(1986, 1, 1, 0, 15), localTime(transition, cache));
+  EXPECT_EQ(transition, utcTime(timeValue(1986, 1, 1, 0, 15), cache));
+  EXPECT_EQ(
+      timeValue(1985, 12, 31, 18, 35),
+      utcTime(timeValue(1986, 1, 1, 0, 5), cache));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, CloselySpacedOffsetTransitionsTest) {
+  if (!hasIANATimezoneDB())
+    return;
+  setTimeZone("America/Boa_Vista");
+  LocalTimeOffsetCache cache;
+
+  // DST lasted only 6 days 23 hours. Equal offsets on either side must not
+  // cause the cache to merge an interval across both transitions.
+  EXPECT_EQ(
+      -4 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(2000, 10, 7, 12)));
+  EXPECT_EQ(
+      -4 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(2000, 10, 16, 12)));
+  EXPECT_EQ(
+      -3 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(2000, 10, 10, 12)));
+
+  const double start = timeValue(2000, 10, 8, 4);
+  const double end = timeValue(2000, 10, 15, 3);
+  EXPECT_EQ(-4 * MS_PER_HOUR, cache.totalOffsetInMs(start - 1));
+  EXPECT_EQ(-3 * MS_PER_HOUR, cache.totalOffsetInMs(start));
+  EXPECT_EQ(-3 * MS_PER_HOUR, cache.totalOffsetInMs(end - 1));
+  EXPECT_EQ(-4 * MS_PER_HOUR, cache.totalOffsetInMs(end));
+
+  // Look up the times just outside the DST period first. A window longer than
+  // 6 days 23 hours would merge them into one interval.
+  LocalTimeOffsetCache freshCache;
+  EXPECT_EQ(-4 * MS_PER_HOUR, freshCache.totalOffsetInMs(start - 1));
+  EXPECT_EQ(-4 * MS_PER_HOUR, freshCache.totalOffsetInMs(end));
+  EXPECT_EQ(
+      -3 * MS_PER_HOUR,
+      freshCache.totalOffsetInMs(timeValue(2000, 10, 10, 12)));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, LocalTimeRangeBoundaryTest) {
+  const struct {
+    const char *zone;
+    double offset;
+  } cases[] = {{"JST-9", 9 * MS_PER_HOUR}, {"PST8", -8 * MS_PER_HOUR}};
+  const double limit = TIME_RANGE_MS;
+  const double localLimit = limit + 2 * MS_PER_DAY;
+
+  for (const auto &test : cases) {
+    setTimeZone(test.zone);
+    LocalTimeOffsetCache cache;
+    for (double utc : {-limit, limit}) {
+      const double local = localTime(utc, cache);
+      EXPECT_EQ(utc + test.offset, local);
+      EXPECT_EQ(utc, utcTime(local, cache));
+    }
+
+    // A local value outside TimeClip can still represent an in-range UTC time.
+    const double outside = test.offset > 0 ? limit + 1 : -limit - 1;
+    EXPECT_EQ(outside - test.offset, utcTime(outside, cache));
+
+    // At the local-input bound, the outer probe reaches 96 hours past TimeClip.
+    for (double local : {-localLimit, localLimit}) {
+      EXPECT_EQ(test.offset, cache.getLocalTimeOffset(local, TimeType::Local));
+    }
+    EXPECT_TRUE(std::isnan(utcTime(localLimit + 1, cache)));
+    EXPECT_TRUE(std::isnan(utcTime(-localLimit - 1, cache)));
+    EXPECT_TRUE(std::isnan(localTime(limit + 1, cache)));
+    EXPECT_TRUE(std::isnan(localTime(-limit - 1, cache)));
+  }
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, InvalidTimeOffsetTest) {
+  setTimeZone("JST-9");
+  LocalTimeOffsetCache cache;
+  const double invalidTimes[] = {
+      std::numeric_limits<double>::quiet_NaN(),
+      std::numeric_limits<double>::infinity(),
+      -std::numeric_limits<double>::infinity(),
+      std::numeric_limits<double>::max(),
+      -std::numeric_limits<double>::max()};
+  for (double t : invalidTimes) {
+    EXPECT_TRUE(std::isnan(localTime(t, cache)));
+    EXPECT_TRUE(std::isnan(utcTime(t, cache)));
+    EXPECT_TRUE(std::isnan(cache.getLocalTimeOffset(t, TimeType::Utc)));
+    EXPECT_TRUE(std::isnan(cache.getLocalTimeOffset(t, TimeType::Local)));
+  }
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, Int32EpochOffsetBoundaryTest) {
+  // Windows passes only [0, 2^31 - 1] seconds to the OS and a 32-bit time_t
+  // only [-(2^31 - 1), 2^31 - 1] seconds; other times use an equivalent year.
+  const struct {
+    const char *zone;
+    double offset;
+  } cases[] = {{"JST-9", 9 * MS_PER_HOUR}, {"PST8", -8 * MS_PER_HOUR}};
+  const int64_t maxInt32Time =
+      int64_t{std::numeric_limits<int32_t>::max()} * 1000;
+  const int64_t times[] = {
+      -maxInt32Time - 1,
+      -maxInt32Time,
+      -maxInt32Time + 1,
+      -1,
+      0,
+      1,
+      maxInt32Time - 1,
+      maxInt32Time,
+      maxInt32Time + 1};
+  for (const auto &test : cases) {
+    setTimeZone(test.zone);
+    LocalTimeOffsetCache cache;
+    for (int64_t t : times) {
+      EXPECT_EQ(test.offset, cache.totalOffsetInMs(t));
+      EXPECT_EQ(t + test.offset, localTime(t, cache));
+      EXPECT_EQ(t, utcTime(t + test.offset, cache));
+    }
+  }
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, EpochOffsetContinuityTest) {
+  if (!hasIANATimezoneDB())
+    return;
+  // Britain kept +01:00 all year from 1968 to 1971, so the offset is the same
+  // on both sides of the epoch, and local midnight on 1970-01-01 exists.
+  setTimeZone("Europe/London");
+  LocalTimeOffsetCache cache;
+  EXPECT_EQ(MS_PER_HOUR, cache.totalOffsetInMs(-1000));
+  EXPECT_EQ(MS_PER_HOUR, cache.totalOffsetInMs(0));
+  EXPECT_EQ(-MS_PER_HOUR, utcTime(timeValue(1970, 1, 1), cache));
+  EXPECT_EQ(timeValue(1970, 1, 1), localTime(-MS_PER_HOUR, cache));
+  const double halfPast = timeValue(1970, 1, 1, 0, 30);
+  EXPECT_EQ(halfPast, localTime(utcTime(halfPast, cache), cache));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, OffsetOutsideEquivalentYearRangeTest) {
+  if (!hasIANATimezoneDB())
+    return;
+  // Moscow used +03:00 in 1969 and has again since October 2014, but used
+  // +04:00 in 2014 itself, the equivalent year of both 1969 and 2042.
+  setTimeZone("Europe/Moscow");
+  LocalTimeOffsetCache cache;
+  EXPECT_EQ(3 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(1969, 7, 1)));
+  // A 32-bit time_t cannot represent 2042, so it still uses 2014.
+  if (sizeof(std::time_t) >= sizeof(int64_t))
+    EXPECT_EQ(3 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(2042, 7, 1)));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+#ifndef _WINDOWS
+TEST(DateUtilTest, TimeZoneChangeOnCacheMissTest) {
+  setTimeZone("PST8");
+  LocalTimeOffsetCache cache;
+  const double january = timeValue(2019, 1, 15);
+  const double july = timeValue(2019, 7, 15);
+  EXPECT_EQ(-8 * MS_PER_HOUR, cache.totalOffsetInMs(january));
+
+  // A miss in the new timezone must invalidate previously cached offsets.
+  setTimeZone("JST-9");
+  EXPECT_EQ(9 * MS_PER_HOUR, cache.totalOffsetInMs(july));
+  EXPECT_EQ(9 * MS_PER_HOUR, cache.totalOffsetInMs(january));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, TimeZoneChangeWithMatchingOffsetTest) {
+  // While the first zone observes DST, both zones use -04:00, so only the DST
+  // flag at the reference time reveals the change. Otherwise, the offsets
+  // differ there.
+  setTimeZone("EST5EDT,M3.2.0,M11.1.0");
+  LocalTimeOffsetCache cache;
+  const double january = timeValue(2019, 1, 15);
+  EXPECT_EQ(-5 * MS_PER_HOUR, cache.totalOffsetInMs(january));
+
+  setTimeZone("AST4");
+  EXPECT_EQ(-4 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(2019, 7, 15)));
+  EXPECT_EQ(-4 * MS_PER_HOUR, cache.totalOffsetInMs(january));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
+TEST(DateUtilTest, UndetectedTimeZoneChangeTest) {
+  if (!hasIANATimezoneDB())
+    return;
+  // Europe/Lisbon and Europe/London have had the same offsets and DST flags
+  // since 1996, so the reference time cannot detect a change between them. In
+  // March 1993, Lisbon changed from +01:00 to +02:00.
+  setTimeZone("Europe/Lisbon");
+  LocalTimeOffsetCache cache;
+  EXPECT_EQ(MS_PER_HOUR, cache.totalOffsetInMs(timeValue(1993, 3, 25, 1)));
+  EXPECT_EQ(2 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(1993, 3, 28, 13)));
+
+  // London used +00:00 between the cached times, an offset that matches
+  // neither cached interval, so the cache is stale and must start over.
+  setTimeZone("Europe/London");
+  EXPECT_EQ(0, cache.totalOffsetInMs(timeValue(1993, 3, 27, 13)));
+  EXPECT_EQ(MS_PER_HOUR, cache.totalOffsetInMs(timeValue(1993, 3, 28, 13)));
+
+  hermes::oscompat::unset_env("TZ");
+}
+#endif
+
+TEST(DateUtilTest, LargeTimeZoneOffsetTest) {
+  // Some C libraries accept offsets of 48 hours or more, which local-to-UTC
+  // conversion does not support. Near the ends of the range, such an offset
+  // must not move a lookup outside the times that can be queried.
+  setTimeZone("<+50>-50");
+  LocalTimeOffsetCache cache;
+  const double localLimit = TIME_RANGE_MS + 2 * MS_PER_DAY;
+  for (double local : {-localLimit, localLimit}) {
+    const double offset = cache.getLocalTimeOffset(local, TimeType::Local);
+    EXPECT_TRUE(std::isnan(offset) || std::abs(offset) <= 50 * MS_PER_HOUR);
+  }
 
   hermes::oscompat::unset_env("TZ");
 }
