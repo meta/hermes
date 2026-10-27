@@ -14,6 +14,7 @@ void LocalTimeOffsetCache::reset() {
   ::tzset();
   caches_.fill(OffsetCacheEntry{});
   candidate_ = caches_.data();
+  prevCandidate_ = caches_.data();
   epoch_ = 0;
 #ifndef _WINDOWS
   // Keep the reference time in the range that the OS accepts.
@@ -121,6 +122,14 @@ int LocalTimeOffsetCache::totalOffsetInMs(
     candidate_->epoch = bumpEpoch();
     return candidate_->offsetMs;
   }
+  // Lookups often alternate between two intervals, such as the probes on
+  // either side of a transition, so also try the previous candidate.
+  if (prevCandidate_->include(utcTimeMs)) {
+    std::swap(candidate_, prevCandidate_);
+    candidate_->epoch = bumpEpoch();
+    return candidate_->offsetMs;
+  }
+  prevCandidate_ = candidate_;
 
   // Try to find cached intervals that happen before/after utcTimeMs.
   OffsetCacheEntry *before;
@@ -128,7 +137,7 @@ int LocalTimeOffsetCache::totalOffsetInMs(
   std::tie(before, after) = findBeforeAndAfterEntries(utcTimeMs);
 
   // Hits in the cached interval.
-  if (before->include(utcTimeMs)) {
+  if (before && before->include(utcTimeMs)) {
     candidate_ = before;
     before->epoch = bumpEpoch();
     return before->offsetMs;
@@ -154,6 +163,9 @@ int LocalTimeOffsetCache::totalOffsetInMs(
     }
   }
 #endif
+
+  // This is a miss, so reuse empty caches for intervals that were not found.
+  reuseEmptyEntries(before, after, utcTimeMs);
 
   // Set candidate_ to before by default, and reassign it in case that the
   // after cache is hit or used.
@@ -285,6 +297,13 @@ LocalTimeOffsetCache::findBeforeAndAfterEntries(int64_t timeMs) {
     }
   }
 
+  return {before, after};
+}
+
+void LocalTimeOffsetCache::reuseEmptyEntries(
+    OffsetCacheEntry *&before,
+    OffsetCacheEntry *&after,
+    [[maybe_unused]] int64_t timeMs) {
   // None is found, reuse an empty cache for later computation.
   if (!before) {
     before = leastRecentlyUsedExcept(after);
@@ -308,8 +327,6 @@ LocalTimeOffsetCache::findBeforeAndAfterEntries(int64_t timeMs) {
       before->isEmpty() || after->isEmpty() ||
       before->endMs < after->startMs &&
           "`before` interval must strictly start before `after` interval");
-
-  return {before, after};
 }
 
 void LocalTimeOffsetCache::extendOrRecomputeCacheEntry(
