@@ -48,19 +48,23 @@ class TextDecoderNativeState : public jsi::NativeState {
 };
 
 /// Validate that 'thisVal' is a TextDecoder instance (has our NativeState).
-/// Returns the NativeState pointer, or throws a JSError if invalid.
+/// Returns the NativeState pointer, or throws a TypeError if invalid.
 inline TextDecoderNativeState *getTextDecoderState(
     jsi::Runtime &rt,
     const jsi::Value &thisVal,
     const char *methodName) {
   if (!thisVal.isObject()) {
-    throw jsi::JSError(
-        rt, std::string(methodName) + " called on non-TextDecoder object");
+    throwTypeError(
+        rt,
+        (std::string(methodName) + " called on non-TextDecoder object")
+            .c_str());
   }
   auto obj = thisVal.asObject(rt);
   if (!obj.hasNativeState<TextDecoderNativeState>(rt)) {
-    throw jsi::JSError(
-        rt, std::string(methodName) + " called on non-TextDecoder object");
+    throwTypeError(
+        rt,
+        (std::string(methodName) + " called on non-TextDecoder object")
+            .c_str());
   }
   return obj.getNativeState<TextDecoderNativeState>(rt).get();
 }
@@ -68,7 +72,7 @@ inline TextDecoderNativeState *getTextDecoderState(
 /// Get input bytes from a value that can be ArrayBuffer, TypedArray, or
 /// DataView. Returns an empty view for undefined/null. The result roots the
 /// backing ArrayBuffer, so it must outlive the use of its bytes.
-/// Throws JSError if the value is not a valid buffer type.
+/// Throws a TypeError if the value is not a valid buffer type.
 /// Throws JSINativeException (to be caught by caller) if buffer is detached.
 TypedArrayBufferInfo getInputBytes(jsi::Runtime &rt, const jsi::Value &val) {
   if (val.isUndefined() || val.isNull()) {
@@ -76,7 +80,7 @@ TypedArrayBufferInfo getInputBytes(jsi::Runtime &rt, const jsi::Value &val) {
   }
 
   if (!val.isObject()) {
-    throw jsi::JSError(
+    throwTypeError(
         rt,
         "TextDecoder.prototype.decode() requires an ArrayBuffer or ArrayBufferView");
   }
