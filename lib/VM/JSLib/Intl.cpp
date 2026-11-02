@@ -1578,7 +1578,7 @@ CallResult<HermesValue> intlDatePrototypeToLocaleDateString(
   JSDate *date = dyn_vmcast<JSDate>(args.getThisArg());
   if (!date) {
     return runtime.raiseTypeError(
-        "Date.prototype.toLocaleString() called on non-Date object");
+        "Date.prototype.toLocaleDateString() called on non-Date object");
   }
   return intlDatePrototypeToSomeLocaleString(runtime, args, date, kDTODate);
 }
