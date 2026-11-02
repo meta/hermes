@@ -29,7 +29,7 @@ on:
 jobs:
   set_release_type:
     runs-on: ubuntu-latest
-    if: github.repository == 'facebook/hermes'
+    if: github.repository == 'meta/hermes'
     outputs:
       RELEASE_TYPE: ${{ steps.set_release_type.outputs.RELEASE_TYPE }}
       HERMES_VERSION: ${{ steps.generate_version.outputs.HERMES_VERSION }}
