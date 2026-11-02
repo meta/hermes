@@ -1747,6 +1747,126 @@ typedArrayPrototypeToLocaleString(void *, Runtime &runtime, NativeArgs args) {
   return HermesValue::encodeStringValue(*builder->getStringPrimitive());
 }
 
+inline static bool isValidIntegerIndex(
+    Runtime &runtime,
+    Handle<JSTypedArrayBase> O,
+    Handle<HermesValue> indexHandle) {
+  // 1. If IsDetachedBuffer(O.[[ViewedArrayBuffer]]) is true, return false.
+  if (!O->attached(runtime)) {
+    return false;
+  }
+
+  auto index = indexHandle.getHermesValue();
+
+  // 2. If IsIntegralNumber(index) is false, return false.
+  if (LLVM_UNLIKELY(!index.isNumber())) {
+    return false;
+  }
+
+  // 3. If index is -0𝔽, return false.
+  if (LLVM_UNLIKELY(
+          index.getDouble() == 0 && std::signbit(index.getDouble()))) {
+    return false;
+  }
+
+  // 4. If ℝ(index) < 0 or ℝ(index) ≥ O.[[ArrayLength]], return false.
+  if (index.getNumber() < 0 || index.getNumber() >= O->getLength()) {
+    return false;
+  }
+
+  return true;
+}
+
+/// ES14.0 23.2.3.36
+CallResult<HermesValue>
+typedArrayPrototypeWith(void *, Runtime &runtime, NativeArgs args) {
+  // 2. Perform ? ValidateTypedArray(O).
+  if (JSTypedArrayBase::validateTypedArray(runtime, args.getThisHandle()) ==
+      ExecutionStatus::EXCEPTION) {
+    return ExecutionStatus::EXCEPTION;
+  }
+
+  // 1. Let O be this value
+  auto self = args.vmcastThis<JSTypedArrayBase>();
+
+  // 3. Let len be O.[[ArrayLength]].
+  size_t len = self->getLength();
+
+  // 4. Let relativeIndex be ? ToIntegerOrInfinity(index).
+  auto relativeIndexRes = toIntegerOrInfinity(runtime, args.getArgHandle(0));
+  if (LLVM_UNLIKELY(relativeIndexRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+
+  // Use double here, because ToInteger may return Infinity.
+  double relativeIndex = relativeIndexRes->getNumber();
+
+  // 5. If relativeIndex ≥ 0, let actualIndex be relativeIndex.
+  // 6. Else, let actualIndex be len + relativeIndex.
+  auto actualIndex =
+      (size_t)convertNegativeBoundsRelativeToLength(relativeIndex, (double)len);
+
+  // 7. If O.[[ContentType]] is BigInt, let numericValueBe ? ToBigInt(value)
+  // 8. Else, let numericValue be ? ToNumber(value)
+  CallResult<HermesValue> res = ExecutionStatus::EXCEPTION;
+  switch (self->getKind()) {
+    default:
+      res = toNumber_RJS(runtime, args.getArgHandle(1));
+      break;
+    case CellKind::BigInt64ArrayKind:
+    case CellKind::BigUint64ArrayKind:
+      res = toBigInt_RJS(runtime, args.getArgHandle(1));
+      break;
+  }
+  if (res == ExecutionStatus::EXCEPTION) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  auto targetValue = runtime.makeHandle(res.getValue());
+
+  HermesValue actualIndexValue =
+      HermesValue::encodeTrustedNumberValue(actualIndex);
+  Handle<> actualIndexValueHandle = runtime.makeHandle(actualIndexValue);
+  // 9. If IsValidIntegerIndex(O, 𝔽(actualIndex)) is false, throw a RangeError
+  // exception.
+  if (LLVM_UNLIKELY(!isValidIntegerIndex(runtime, self, actualIndexValueHandle))) {
+    return runtime.raiseRangeError("index invalid or out of range");
+  }
+
+  // 10. Let A be ? TypedArrayCreateSameType(O, « 𝔽(len) »).
+  auto status = JSTypedArrayBase::allocateSpecies(runtime, self, len);
+  if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  auto A = status.getValue();
+
+  // Get direct pointer to data blocks
+  auto srcBlock = self->getBuffer(runtime)->getDataBlock(runtime);
+  auto dstBlock = A->getBuffer(runtime)->getDataBlock(runtime);
+
+  auto byteWidth = self->getByteWidth();
+  auto actualByteOffset = actualIndex * byteWidth;
+
+  // Copy prefix
+  if (actualIndex > 0) {
+    memcpy(dstBlock, srcBlock, actualByteOffset);
+  }
+
+  // copy element
+  if (LLVM_UNLIKELY(
+          A->setOwnIndexed(A, runtime, actualIndex, targetValue) ==
+          ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+
+  // Copy suffix
+  if (actualIndex + 1 < len) {
+    auto remainingBytes = (len - actualIndex - 1) * byteWidth;
+    memcpy(dstBlock + actualByteOffset + byteWidth, srcBlock + actualByteOffset + byteWidth, remainingBytes);
+  }
+
+  return A.getHermesValue();
+}
+
 Handle<JSObject> createTypedArrayBaseConstructor(Runtime &runtime) {
   auto proto = Handle<JSObject>::vmcast(&runtime.typedArrayBasePrototype);
 
@@ -2009,6 +2129,13 @@ Handle<JSObject> createTypedArrayBaseConstructor(Runtime &runtime) {
       (void *)IterationKind::Entry,
       typedArrayPrototypeIterator,
       0);
+  defineMethod(
+      runtime,
+      proto,
+      Predefined::getSymbolID(Predefined::with),
+      nullptr,
+      typedArrayPrototypeWith,
+      2);
 
   DefinePropertyFlags dpf = DefinePropertyFlags::getNewNonEnumerableFlags();
 
