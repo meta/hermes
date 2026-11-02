@@ -80,6 +80,11 @@ jobs:
     secrets: inherit
     with:
       release-type: ${{ needs.set_release_type.outputs.RELEASE_TYPE }}
+  test-apple-runtime:
+    needs: build_hermes_macos
+    uses: ./.github/workflows/test-apple-runtime.yml
+  run-tests:
+    uses: ./.github/workflows/run-tests.yml
   publish:
     runs-on: 8-core-ubuntu
     needs:
