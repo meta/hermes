@@ -618,7 +618,7 @@ CallResult<HermesValue> datePrototypeToLocaleStringHelper(
   auto *date = dyn_vmcast<JSDate>(args.getThisArg());
   if (!date) {
     return runtime.raiseTypeError(
-        "Date.prototype.toString() called on non-Date object");
+        "Date.prototype.toLocaleString() called on non-Date object");
   }
   double t = date->getPrimitiveValue();
   if (!std::isfinite(t)) {
