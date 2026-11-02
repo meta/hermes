@@ -6,6 +6,6 @@
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/meta/hermes.git"
+        "url": "git+ssh://git@github.com/meta/hermes.git"
     }
 }
