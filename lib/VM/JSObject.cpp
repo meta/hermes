@@ -1506,10 +1506,11 @@ CallResult<bool> JSObject::putNamedWithReceiver_RJS(
     // object/proxy/internal setter, and the property is writable,
     // just write into the same slot.
 
+    bool isSameObj = *selfHandle == propObj &&
+        selfHandle.getHermesValue().getRaw() == receiver->getRaw();
+
     if (LLVM_LIKELY(
-            *selfHandle == propObj &&
-            selfHandle.getHermesValue().getRaw() == receiver->getRaw() &&
-            !desc.flags.accessor && !desc.flags.internalSetter &&
+            isSameObj && !desc.flags.accessor && !desc.flags.internalSetter &&
             !desc.flags.hostObject && !desc.flags.proxyObject &&
             desc.flags.writable)) {
       auto shv = SmallHermesValue::encodeHermesValue(*valueHandle, runtime);
@@ -1571,7 +1572,7 @@ CallResult<bool> JSObject::putNamedWithReceiver_RJS(
       return false;
     }
 
-    if (*selfHandle == propObj && desc.flags.internalSetter) {
+    if (isSameObj && desc.flags.internalSetter) {
       return internalSetter(
           selfHandle, runtime, name, desc, valueHandle, opFlags);
     }
