@@ -3,7 +3,7 @@ id: intl
 title: Internationalization APIs
 ---
 
-This document describes the current state of the Android and iOS implementation of the [ECMAScript Internationalization API Specification](https://tc39.es/ecma402/) (ECMA-402, or `Intl`). ECMA-402 is still evolving and the latest iteration that was taken into account is [7th edition](https://402.ecma-international.org/7.0/) which was published in June 2020. Each new edition is built on top of the last one and adds new capabilities typically as,
+This document describes the current state of the Android and iOS implementation of the [ECMAScript Internationalization API Specification](https://tc39.es/ecma402/) (ECMA-402, or `Intl`). ECMA-402 is still evolving and the latest iteration that was taken into account is [7th edition](https://402.ecma-international.org/7.0/) which was published in June 2020. Each new edition is built on top of the last one and adds new capabilities typically as:
 - New `Intl` service constructors (e.g. `Intl.Collator`, `Intl.NumberFormat` etc.) or extending existing ones by accepting more parameters
 - New functions or properties in `Intl` objects (e.g. `Intl.Collator.prototype.compare`)
 - New locale aware functions in standard Javascript object prototypes (e.g. `String.prototype.localeCompare`)

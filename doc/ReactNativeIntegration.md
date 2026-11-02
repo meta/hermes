@@ -65,7 +65,7 @@ You can then symbolicate a stacktrace as follows:
 $ANDROID_HOME/ndk/21.4.7075529/ndk-stack -sym ./<path-to-debug-symbols>/obj/local/arm64-v8a < crash.txt
 ```
 
-provided that `crash.txt` contains your stacktrace in plain text, and you replace `armeabi-v7a` with the correct architecture you used when the native crash was recorded.
+provided that `crash.txt` contains your stacktrace in plain text, and you replace `arm64-v8a` with the correct architecture you used when the native crash was recorded.
 
 As an alternative, you can trigger a crash and have a symbolicated logcat in real time with the following command:
 
