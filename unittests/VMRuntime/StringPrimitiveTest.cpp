@@ -156,11 +156,15 @@ TEST_F(StringPrimTest, ConcatTest) {
 // an interior pointer, or if someone else maintained a pointer to the string.
 template <typename StringType>
 void test1StringMemcpySafety(const StringType &s) {
+  // memcpy the string so we can freely poke at its contents.
+  llvh::AlignedCharArrayUnion<StringType> mb;
+  memcpy(mb.buffer, &s, sizeof(StringType));
+
   // Grub through the string's bits, looking for pointers to the interior of the
   // string.
   intptr_t start = reinterpret_cast<intptr_t>(&s);
   intptr_t end = reinterpret_cast<intptr_t>(&s + 1);
-  const intptr_t *stringGuts = reinterpret_cast<const intptr_t *>(&s);
+  const intptr_t *stringGuts = reinterpret_cast<intptr_t *>(mb.buffer);
   for (size_t i = 0; i < sizeof(StringType) / sizeof(void *); i++) {
     intptr_t p = stringGuts[i];
     EXPECT_FALSE(start <= p && p <= end) << "string size: " << s.size();
@@ -171,10 +175,7 @@ void test1StringMemcpySafety(const StringType &s) {
     EXPECT_FALSE(start <= p && p <= end) << "string size: " << s.size();
   }
 
-  // memcpy our string and verify the buffer, when interpreted as a string, is
-  // equal to the original.
-  llvh::AlignedCharArrayUnion<StringType> mb;
-  memcpy(mb.buffer, &s, sizeof(StringType));
+  // Verify the buffer, when interpreted as a string, is equal to the original.
   const StringType *memcpydStr =
       reinterpret_cast<const StringType *>(mb.buffer);
   EXPECT_EQ(s, *memcpydStr) << "string size: " << s.size();

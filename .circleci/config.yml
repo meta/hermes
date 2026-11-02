@@ -10,6 +10,7 @@ workflows:
               sanitize: ["ON", "OFF"]
               gc: ["MALLOC", "HADES"]
       - test-linux
+      - test-linux-armv7
 
 jobs:
   test-macos:
@@ -70,4 +71,27 @@ jobs:
           command: |
             cmake -S hermes -B build -DCMAKE_BUILD_TYPE=Debug
             cmake --build build -j 2
+            cmake --build build --target check-hermes -j 4
+
+  test-linux-armv7:
+    docker:
+      - image: arm32v7/ubuntu:jammy
+    resource_class: arm.medium
+    environment:
+      - DEBIAN_FRONTEND: noninteractive
+    working_directory: /root
+    steps:
+      - run:
+          name: Install dependencies
+          command: |
+            apt update
+            apt install -y git openssh-client cmake build-essential \
+                libicu-dev zip python3 tzdata clang-15
+      - checkout:
+          path: hermes
+      - run:
+          name: Run Hermes regression tests
+          command: |
+            cmake -S hermes -B build
+            cmake --build build -j 4
             cmake --build build --target check-hermes -j 4
