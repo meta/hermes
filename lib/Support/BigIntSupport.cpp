@@ -1741,10 +1741,6 @@ multiply(MutableBigIntRef dst, ImmutableBigIntRef lhs, ImmutableBigIntRef rhs) {
 
 namespace {
 namespace div_rem {
-static uint32_t getResultSize(ImmutableBigIntRef lhs, ImmutableBigIntRef rhs) {
-  return std::max(lhs.numDigits, rhs.numDigits) + 1;
-}
-
 static OperationStatus compute(
     MutableBigIntRef quoc,
     MutableBigIntRef rem,
@@ -1753,6 +1749,25 @@ static OperationStatus compute(
   assert(
       ((quoc.digits != nullptr) != (rem.digits != nullptr)) &&
       "untested -- calling with both or neither quoc and rem");
+
+  // Signal division by zero.
+  if (compare(rhs, 0) == 0) {
+    return OperationStatus::DIVISION_BY_ZERO;
+  }
+
+  if (lhs.numDigits + 1 < rhs.numDigits) {
+    // In this case, divideResultSize returns 0 and mismatches remainderResultSize
+
+    if (quoc.digits != nullptr) {
+      quoc.numDigits = 0;
+    }
+
+    if (rem.digits != nullptr) {
+      return initWithDigits(rem, lhs);
+    }
+
+    return OperationStatus::RETURNED;
+  }
 
   const uint32_t resultSize = divideResultSize(lhs, rhs);
   // set quoc's and rem's numDigits if their digits buffer is nullptr, which
@@ -1771,11 +1786,6 @@ static OperationStatus compute(
   // make sure to drop any extraneous digits.
   quoc.numDigits = resultSize;
   rem.numDigits = resultSize;
-
-  // Signal division by zero.
-  if (compare(rhs, 0) == 0) {
-    return OperationStatus::DIVISION_BY_ZERO;
-  }
 
   // tcDivide operates on unsigned number, so just like multiply, the operands
   // must be negated (and the result as well, if appropriate) if they are
@@ -1868,7 +1878,20 @@ static OperationStatus compute(
 } // namespace
 
 uint32_t divideResultSize(ImmutableBigIntRef lhs, ImmutableBigIntRef rhs) {
-  return div_rem::getResultSize(lhs, rhs);
+  if (lhs.numDigits + 1 < rhs.numDigits) {
+    // Special case: (res = 0, rem = lhs), regardless of rhs sign
+    // Can't use lhs.numDigits < rhs.numDigits here because -(2n**63n)/(2n**63n) is not 0
+    return 0;
+  }
+
+  if (compare(rhs, -1) == 0 && isNegative(lhs)) {
+    // In this (and only this) case, we can end up with more digits than we started with
+    // Examples: -(2n**63n)/-1n, -(2n**127n)/-1n
+    // We avoid this in general case as it makes division much slower
+    return lhs.numDigits + 1;
+  }
+
+  return lhs.numDigits;
 }
 
 OperationStatus
@@ -1879,7 +1902,13 @@ divide(MutableBigIntRef dst, ImmutableBigIntRef lhs, ImmutableBigIntRef rhs) {
 }
 
 uint32_t remainderResultSize(ImmutableBigIntRef lhs, ImmutableBigIntRef rhs) {
-  return div_rem::getResultSize(lhs, rhs);
+  if (lhs.numDigits + 1 < rhs.numDigits) {
+    // Special case: (res = 0, rem = lhs), regardless of rhs sign
+    // Can't use lhs.numDigits < rhs.numDigits here because -(2n**63n)/(2n**63n) is not 0
+    return lhs.numDigits;
+  }
+
+  return divideResultSize(lhs, rhs); // We currently expect them to be equivalent in div_rem::compute()
 }
 
 OperationStatus remainder(
