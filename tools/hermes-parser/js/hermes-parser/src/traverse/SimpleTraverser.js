@@ -15,7 +15,12 @@ import type {ESNode} from 'hermes-estree';
 
 import {getVisitorKeys, isNode} from './getVisitorKeys';
 
-export type TraverserCallback = (node: ESNode, parent: ?ESNode) => void;
+export type TraverserCallback = (
+  node: ESNode,
+  parent: ?ESNode,
+  parentKey?: ?string,
+  parentIndex?: ?number,
+) => void;
 export type TraverserOptions = Readonly<{
   /** The callback function which is called on entering each node. */
   enter: TraverserCallback,
@@ -66,13 +71,19 @@ export class SimpleTraverser {
    * @param parent The parent node.
    * @private
    */
-  _traverse(node: ESNode, parent: ?ESNode, options: TraverserOptions): void {
+  _traverse(
+    node: ESNode,
+    parent: ?ESNode,
+    options: TraverserOptions,
+    parentKey?: ?string,
+    parentIndex?: ?number,
+  ): void {
     if (!isNode(node)) {
       return;
     }
 
     try {
-      options.enter(node, parent);
+      options.enter(node, parent, parentKey, parentIndex);
     } catch (ex) {
       if (ex === SimpleTraverserSkip) {
         return;
@@ -89,15 +100,15 @@ export class SimpleTraverser {
 
       if (Array.isArray(child)) {
         for (let j = 0; j < child.length; ++j) {
-          this._traverse(child[j], node, options);
+          this._traverse(child[j], node, options, lookupKey, j);
         }
       } else {
-        this._traverse(child, node, options);
+        this._traverse(child, node, options, lookupKey, null);
       }
     }
 
     try {
-      options.leave(node, parent);
+      options.leave(node, parent, parentKey, parentIndex);
     } catch (ex) {
       if (ex === SimpleTraverserSkip) {
         return;
