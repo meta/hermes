@@ -8,7 +8,7 @@
 #include "JSRuntime.h"
 
 #include <hermes/CompileJS.h>
-#include <hermes/hermes.h>
+#include <hermes/hermes.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
 
 #include <MappedFileBuffer.h>
 

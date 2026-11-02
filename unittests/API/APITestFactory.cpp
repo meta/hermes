@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <hermes/hermes.h>
+#include <hermes/hermes.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
 #include <hermes_abi/HermesABIRuntimeWrapper.h>
 #include <hermes_abi/hermes_vtable.h>
 #include <hermes_sandbox/HermesSandboxRuntime.h>

@@ -10,7 +10,7 @@
 
 #include "SynthTrace.h"
 
-#include <hermes/hermes.h>
+#include <hermes/hermes.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
 #include <jsi/decorator.h>
 #include "llvh/Support/raw_ostream.h"
 

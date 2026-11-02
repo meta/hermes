@@ -7,7 +7,7 @@
 
 #include "hermes/Support/OSCompat.h"
 #include "hermes/TimerStats.h"
-#include "hermes/hermes.h"
+#include "hermes/hermes.h" // @manual=fbsource//xplat/hermes/API:HermesAPI
 
 #include "llvh/Support/CommandLine.h"
 #include "llvh/Support/FileSystem.h"

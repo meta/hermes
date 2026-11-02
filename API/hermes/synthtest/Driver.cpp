@@ -6,7 +6,7 @@
  */
 
 #include <hermes/TraceInterpreter.h>
-#include <hermes/hermes.h>
+#include <hermes/hermes.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
 
 #include <gtest/gtest.h>
 

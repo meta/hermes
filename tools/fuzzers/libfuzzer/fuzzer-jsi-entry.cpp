@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <hermes/hermes.h>
+#include <hermes/hermes.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
 #include <jsi/jsi.h>
 
 using facebook::hermes::HermesRuntime;

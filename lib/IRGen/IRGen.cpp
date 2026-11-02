@@ -7,7 +7,7 @@
 
 #include "hermes/IRGen/IRGen.h"
 
-#include "ESTreeIRGen.h"
+#include "ESTreeIRGen.h" // @manual
 
 #include "hermes/Parser/JSParser.h"
 #include "hermes/Support/SimpleDiagHandler.h"

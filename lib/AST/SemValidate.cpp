@@ -10,7 +10,7 @@
 
 #include "hermes/Support/PerfSection.h"
 
-#include "SemanticValidator.h"
+#include "SemanticValidator.h" // @manual
 
 namespace hermes {
 namespace sem {

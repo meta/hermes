@@ -7,7 +7,7 @@
 
 #include "hermes/Parser/JSParser.h"
 
-#include "JSParserImpl.h"
+#include "JSParserImpl.h" // @manual
 
 namespace hermes {
 namespace parser {

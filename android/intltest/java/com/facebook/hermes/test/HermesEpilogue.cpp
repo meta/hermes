@@ -7,7 +7,7 @@
 
 #include "HermesEpilogue.h"
 
-#include <hermes/hermes.h>
+#include <hermes/hermes.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
 
 #include <MappedFileBuffer.h>
 

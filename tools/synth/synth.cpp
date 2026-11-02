@@ -9,7 +9,7 @@
 #include <hermes/Support/Algorithms.h>
 #include <hermes/Support/MemoryBuffer.h>
 #include <hermes/TraceInterpreter.h>
-#include <hermes/hermes.h>
+#include <hermes/hermes.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
 #include <hermes/hermes_tracing.h>
 
 #include "llvh/ADT/Statistic.h"

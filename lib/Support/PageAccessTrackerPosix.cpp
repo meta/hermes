@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "hermes/Support/PageAccessTracker.h"
+#include "hermes/Support/PageAccessTracker.h" // @manual
 
 #ifdef HERMES_HAS_REAL_PAGE_TRACKER
 

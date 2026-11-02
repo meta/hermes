@@ -8,7 +8,7 @@
 #ifndef HERMES_HERMES_TRACING_H
 #define HERMES_HERMES_TRACING_H
 
-#include <hermes/hermes.h>
+#include <hermes/hermes.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
 
 namespace llvh {
 class raw_ostream;

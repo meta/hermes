@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "ESTreeIRGen.h"
+#include "ESTreeIRGen.h" // @manual
 #include "hermes/Regex/RegexSerialization.h"
 #include "hermes/Support/UTF8.h"
 

@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "JSParserImpl.h"
+#include "JSParserImpl.h" // @manual
 
 #include "hermes/AST/ESTreeJSONDumper.h"
 #include "hermes/Support/PerfSection.h"

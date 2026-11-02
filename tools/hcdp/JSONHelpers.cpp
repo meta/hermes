@@ -8,8 +8,8 @@
 #include "JSONHelpers.h"
 
 #include <hermes/Parser/JSONParser.h>
-#include <hermes/cdp/JSONValueInterfaces.h>
-#include <hermes/cdp/MessageTypesInlines.h>
+#include <hermes/cdp/JSONValueInterfaces.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
+#include <hermes/cdp/MessageTypesInlines.h> // @manual=fbsource//xplat/hermes/API:HermesAPI
 
 namespace hermes {
 

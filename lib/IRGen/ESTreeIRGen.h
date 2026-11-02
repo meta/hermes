@@ -8,7 +8,7 @@
 #ifndef HERMES_IRGEN_ESTREEIRGEN_H
 #define HERMES_IRGEN_ESTREEIRGEN_H
 
-#include "IRInstrument.h"
+#include "IRInstrument.h" // @manual
 #include "hermes/ADT/ScopedHashTable.h"
 #include "hermes/AST/SemValidate.h"
 #include "hermes/FrontEndDefs/NativeErrorTypes.h"

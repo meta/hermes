@@ -8,7 +8,7 @@
 #ifndef HERMES_SUPPORT_PAGEACCESSTRACKERPOSIX_H
 #define HERMES_SUPPORT_PAGEACCESSTRACKERPOSIX_H
 
-#include <sigmux.h>
+#include <sigmux/sigmux.h>
 #include <signal.h>
 #include <memory>
 #include <vector>

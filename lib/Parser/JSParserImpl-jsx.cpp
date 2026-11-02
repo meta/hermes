@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "JSParserImpl.h"
+#include "JSParserImpl.h" // @manual
 
 #include "llvh/Support/SaveAndRestore.h"
 

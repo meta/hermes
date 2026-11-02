@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "IRInstrument.h"
+#include "IRInstrument.h" // @manual
 
 namespace hermes {
 

@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "hermes/Support/PerfSection.h"
+#include "hermes/Support/PerfSection.h" // @manual
 
 #if defined(HERMES_USE_FBSYSTRACE) || defined(HERMESVM_PLATFORM_LOGGING)
 

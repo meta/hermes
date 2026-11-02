@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "ESTreeIRGen.h"
+#include "ESTreeIRGen.h" // @manual
 
 #include "llvh/ADT/SmallString.h"
 

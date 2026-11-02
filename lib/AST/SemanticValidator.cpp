@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "SemanticValidator.h"
+#include "SemanticValidator.h" // @manual
 
 #include "hermes/AST/ESTree.h"
 #include "hermes/Regex/RegexSerialization.h"
