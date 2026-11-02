@@ -142,6 +142,20 @@ public class PlatformDateTimeFormatterAndroid implements IPlatformDateTimeFormat
   }
 
   @Override
+  public HourCycle getPreferredHourCycle(ILocaleObject<?> localeObject, boolean hour12)
+      throws JSRangeErrorException {
+    HourCycle defaultCycle = getDefaultHourCycle(localeObject);
+    if (hour12) {
+      return defaultCycle == HourCycle.H11 || defaultCycle == HourCycle.H23
+          ? HourCycle.H11
+          : HourCycle.H12;
+    }
+    return defaultCycle == HourCycle.H11 || defaultCycle == HourCycle.H23
+        ? HourCycle.H23
+        : HourCycle.H24;
+  }
+
+  @Override
   public String getDefaultTimeZone(ILocaleObject<?> localeObject) throws JSRangeErrorException {
     return Calendar.getInstance((Locale) localeObject.getLocale()).getTimeZone().getID();
   }

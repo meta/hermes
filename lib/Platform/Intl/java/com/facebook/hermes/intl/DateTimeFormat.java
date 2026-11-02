@@ -409,17 +409,9 @@ public class DateTimeFormat {
       }
 
       if (!JSObjects.isUndefined(hour12)) {
-        if (JSObjects.getJavaBoolean(hour12)) { // true
-          if (hcDefault == IPlatformDateTimeFormatter.HourCycle.H11
-              || hcDefault == IPlatformDateTimeFormatter.HourCycle.H23)
-            hc = IPlatformDateTimeFormatter.HourCycle.H11;
-          else hc = IPlatformDateTimeFormatter.HourCycle.H12;
-        } else {
-          if (hcDefault == IPlatformDateTimeFormatter.HourCycle.H11
-              || hcDefault == IPlatformDateTimeFormatter.HourCycle.H23)
-            hc = IPlatformDateTimeFormatter.HourCycle.H23;
-          else hc = IPlatformDateTimeFormatter.HourCycle.H24;
-        }
+        hc =
+            mPlatformDateTimeFormatter.getPreferredHourCycle(
+                mResolvedLocaleObject, JSObjects.getJavaBoolean(hour12));
       }
       mHourCycle = hc;
     }

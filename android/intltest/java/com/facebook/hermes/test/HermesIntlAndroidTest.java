@@ -81,6 +81,47 @@ public class HermesIntlAndroidTest {
   }
 
   @Test
+  public void testDateTimeFormatMidnightHourCycles() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+      return;
+    }
+
+    try (JSRuntime rt = JSRuntime.makeHermesRuntime()) {
+      rt.evaluateJavaScript(
+          "var midnight = new Date('2026-05-29T00:54:00Z');\n"
+              + "function hourAtMidnight(locale, options) {\n"
+              + "  var formatter = new Intl.DateTimeFormat(locale, Object.assign({\n"
+              + "    timeStyle: 'short', timeZone: 'UTC'\n"
+              + "  }, options));\n"
+              + "  var parts = formatter.formatToParts(midnight);\n"
+              + "  var hour = parts.filter(function(part) {\n"
+              + "    return part.type === 'hour';\n"
+              + "  })[0].value;\n"
+              + "  var dayPeriod = parts.some(function(part) {\n"
+              + "    return part.type === 'dayPeriod';\n"
+              + "  });\n"
+              + "  return formatter.resolvedOptions().hourCycle + ':' + Number(hour)\n"
+              + "    + ':' + dayPeriod;\n"
+              + "}\n"
+              + "var midnightResults = [\n"
+              + "  hourAtMidnight('en-GB', {hourCycle: 'h11'}),\n"
+              + "  hourAtMidnight('en-GB', {hourCycle: 'h12'}),\n"
+              + "  hourAtMidnight('en-US', {hourCycle: 'h23'}),\n"
+              + "  hourAtMidnight('en-US', {hourCycle: 'h24'}),\n"
+              + "  hourAtMidnight('en-GB', {hour12: true}),\n"
+              + "  hourAtMidnight('en-US', {hour12: false}),\n"
+              + "  hourAtMidnight('en-GB-u-hc-h24', {hour12: true}),\n"
+              + "  hourAtMidnight('ja-JP', {hour12: true})\n"
+              + "].join(',');");
+
+      assertThat(rt.getGlobalStringProperty("midnightResults"))
+          .isEqualTo(
+              "h11:0:true,h12:12:true,h23:0:false,h24:24:false,"
+                  + "h12:12:true,h23:0:false,h12:12:true,h11:0:true");
+    }
+  }
+
+  @Test
   public void testDateTimeFormatCaseInsensitivity() {
     try (JSRuntime rt = JSRuntime.makeHermesRuntime()) {
       rt.evaluateJavaScript(

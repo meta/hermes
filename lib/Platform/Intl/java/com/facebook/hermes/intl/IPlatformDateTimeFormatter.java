@@ -492,6 +492,9 @@ public interface IPlatformDateTimeFormatter {
 
   HourCycle getDefaultHourCycle(ILocaleObject<?> localeObject) throws JSRangeErrorException;
 
+  HourCycle getPreferredHourCycle(ILocaleObject<?> localeObject, boolean hour12)
+      throws JSRangeErrorException;
+
   String getDefaultTimeZone(ILocaleObject<?> localeObject) throws JSRangeErrorException;
 
   String getDefaultNumberingSystem(ILocaleObject<?> localeObject) throws JSRangeErrorException;
