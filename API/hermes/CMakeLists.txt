@@ -85,9 +85,9 @@ if(HERMES_THREAD_SAFETY_ANALYSIS)
     AsyncDebuggerAPI.cpp
     ${CDP_API_SOURCES}
   )
-  if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+  if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang") # warning instead for struggle with std:mutex capabilities annotation
     set_property(SOURCE ${TSA_SOURCES} APPEND_STRING PROPERTY
-      COMPILE_FLAGS "-Wthread-safety -Werror=thread-safety-analysis -Werror=thread-safety-precise -D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS")
+      COMPILE_FLAGS "-Wthread-safety -Wthread-safety-analysis -Werror=thread-safety-precise -D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS")
   endif()
 endif()
 
