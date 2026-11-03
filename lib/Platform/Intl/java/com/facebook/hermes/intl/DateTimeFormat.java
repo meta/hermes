@@ -145,7 +145,7 @@ public class DateTimeFormat {
     return options;
   }
 
-  public String normalizeTimeZoneName(String timeZoneName) {
+  public final String normalizeTimeZoneName(String timeZoneName) {
     StringBuilder normalized = new StringBuilder(timeZoneName.length());
     int offset = 'a' - 'A';
     for (int idx = 0; idx < timeZoneName.length(); idx++) {
@@ -159,7 +159,7 @@ public class DateTimeFormat {
     return normalized.toString();
   }
 
-  public String normalizeTimeZone(String timeZone) throws JSRangeErrorException {
+  public final String normalizeTimeZone(String timeZone) throws JSRangeErrorException {
     for (String id : TimeZone.getAvailableIDs()) {
       if (normalizeTimeZoneName(id).equals(normalizeTimeZoneName(timeZone))) {
         return id;
