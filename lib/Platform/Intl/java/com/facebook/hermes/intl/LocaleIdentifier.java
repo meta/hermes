@@ -290,6 +290,7 @@ class LanguageTagsGenerated {
 
 class LocaleIdTokenizer {
 
+  @SuppressWarnings("serial") // no cross-version serialization; UID left computed
   public class LocaleIdSubtagIterationFailed extends Exception {
     private static final long serialVersionUID = 1L;
 

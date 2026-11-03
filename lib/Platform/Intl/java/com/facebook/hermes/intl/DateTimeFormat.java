@@ -428,6 +428,7 @@ public class DateTimeFormat {
   }
 
   @DoNotStrip
+  @SuppressWarnings("this-escape") // ctor calls only a private method; no subclass escape possible
   public DateTimeFormat(List<String> locales, Map<String, Object> options)
       throws JSRangeErrorException {
 

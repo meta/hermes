@@ -9,6 +9,7 @@ package com.facebook.hermes.intl;
 
 // If an Intl method throws this, it will be converted to a RangeError
 // exception in JS.
+@SuppressWarnings("serial") // no cross-version serialization; UID left computed
 public class JSRangeErrorException extends Exception {
   private static final long serialVersionUID = 1L;
 
