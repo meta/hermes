@@ -1,6 +1,6 @@
 {
     "name": "hermes-compiler",
-    "version": "260318099.0.6",
+    "version": "260318099.0.7",
     "private": false,
     "description": "The hermes compiler CLI used during the React Native build process",
     "license": "MIT",
