@@ -13,7 +13,6 @@ import static com.facebook.hermes.intl.IPlatformCollator.Sensitivity.VARIANT;
 import android.os.Build;
 import java.text.RuleBasedCollator;
 import java.util.ArrayList;
-import java.util.Locale;
 
 public class PlatformCollatorAndroid implements IPlatformCollator {
 
@@ -27,7 +26,7 @@ public class PlatformCollatorAndroid implements IPlatformCollator {
     mLocale = (LocaleObjectAndroid) localeObject;
 
     assert (Build.VERSION.SDK_INT < Build.VERSION_CODES.N);
-    mCollator = (RuleBasedCollator) RuleBasedCollator.getInstance((Locale) mLocale.getLocale());
+    mCollator = (RuleBasedCollator) RuleBasedCollator.getInstance(mLocale.getLocale());
 
     // TODO :: I can't find a way to set the decomposition mode.
 

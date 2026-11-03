@@ -291,6 +291,8 @@ class LanguageTagsGenerated {
 class LocaleIdTokenizer {
 
   public class LocaleIdSubtagIterationFailed extends Exception {
+    private static final long serialVersionUID = 1L;
+
     public LocaleIdSubtagIterationFailed() {
       super();
     }
