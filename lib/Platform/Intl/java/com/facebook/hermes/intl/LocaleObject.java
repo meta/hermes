@@ -10,11 +10,13 @@ package com.facebook.hermes.intl;
 import android.os.Build;
 
 public class LocaleObject {
+  @SuppressWarnings("rawtypes")
   public static ILocaleObject createDefault() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) return LocaleObjectICU.createDefault();
     else return LocaleObjectAndroid.createDefault();
   }
 
+  @SuppressWarnings("rawtypes")
   public static ILocaleObject createFromLocaleId(String localeId) throws JSRangeErrorException {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N)
       return LocaleObjectICU.createFromLocaleId(localeId);

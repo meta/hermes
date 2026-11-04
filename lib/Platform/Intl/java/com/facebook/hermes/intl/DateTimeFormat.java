@@ -428,6 +428,7 @@ public class DateTimeFormat {
   }
 
   @DoNotStrip
+  @SuppressWarnings("this-escape")
   public DateTimeFormat(List<String> locales, Map<String, Object> options)
       throws JSRangeErrorException {
 

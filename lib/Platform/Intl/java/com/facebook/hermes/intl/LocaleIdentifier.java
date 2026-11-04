@@ -290,6 +290,7 @@ class LanguageTagsGenerated {
 
 class LocaleIdTokenizer {
 
+  @SuppressWarnings("serial")
   public class LocaleIdSubtagIterationFailed extends Exception {
     public LocaleIdSubtagIterationFailed() {
       super();

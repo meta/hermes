@@ -252,6 +252,7 @@ public class UnicodeExtensionKeys {
         }
       };
 
+  @SuppressWarnings("rawtypes")
   public static boolean isValidKeyword(String key, String value, ILocaleObject localeObject)
       throws JSRangeErrorException {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {

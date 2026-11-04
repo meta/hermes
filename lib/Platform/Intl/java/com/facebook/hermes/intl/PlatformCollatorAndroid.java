@@ -23,6 +23,7 @@ public class PlatformCollatorAndroid implements IPlatformCollator {
   PlatformCollatorAndroid() {}
 
   @Override
+  @SuppressWarnings("cast")
   public IPlatformCollator configure(ILocaleObject<?> localeObject) throws JSRangeErrorException {
     mLocale = (LocaleObjectAndroid) localeObject;
 

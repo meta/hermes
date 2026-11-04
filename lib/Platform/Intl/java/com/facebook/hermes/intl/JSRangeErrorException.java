@@ -9,6 +9,7 @@ package com.facebook.hermes.intl;
 
 // If an Intl method throws this, it will be converted to a RangeError
 // exception in JS.
+@SuppressWarnings("serial")
 public class JSRangeErrorException extends Exception {
   public JSRangeErrorException() {}
 
