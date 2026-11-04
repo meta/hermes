@@ -82,13 +82,16 @@
 //
 // NOT covered here, and why:
 //  - The OTHER producer of Unreachable, the async/generator lowering. The
-//    tail of a lowered async body carries one, but that body -- the inner
-//    `Function<?anon_0_af>`, not the outer NCFunction wrapper of the same
-//    name -- still declines on catchInst and throwInst, so the emitter
-//    never runs for it. (An earlier version of this note claimed the async
-//    case as verified coverage. It was wrong: the function that compiled
-//    was the outer wrapper, and `_sh_unreachable` appeared nowhere in the
-//    emitted code.) The exceptions milestone opens that path.
+//    tail of a lowered async body carries one, in the inner
+//    `Function<?anon_0_af>` rather than the outer NCFunction wrapper of the
+//    same name. That body used to decline on catchInst and throwInst; since
+//    the exceptions milestone it compiles, and `_sh_unreachable` does show
+//    up in its emitted code. It is still not covered HERE, for the simple
+//    reason that this file contains no async function -- not because the
+//    path is blocked. (An earlier version of this note claimed the async
+//    case as verified coverage while catchInst still declined. It was
+//    wrong: the function that compiled was the outer wrapper, and
+//    `_sh_unreachable` appeared nowhere in the emitted code.)
 //  - ProfilePoint. It emits nothing at all unless HERMESVM_PROFILER_BB is
 //    defined, and no build in this project's matrix defines it. The
 //    emitter is arm64's, verbatim, including that #ifdef.

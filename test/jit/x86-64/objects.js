@@ -61,8 +61,9 @@
 //    this file was written -- a function constructor's body declined on
 //    PutByIdLoose, a class constructor's on GetById -- and the property
 //    milestone has since landed both, so props.js covers it. A derived
-//    class constructor still declines on ThrowIfThisInitialized, which
-//    waits for the exceptions milestone.
+//    class constructor used to decline on ThrowIfThisInitialized; since the
+//    exceptions milestone it compiles, and exceptions.js's `Derived` drives
+//    both that check and the ThrowIfEmpty on `this`.
 //  - loadParentNoTraps: emitted only for `super` -- a super method call, a
 //    super property read, or the implicit callee load in a derived
 //    constructor. This file has no `super` in it, so it is not covered

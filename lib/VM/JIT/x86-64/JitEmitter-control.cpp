@@ -12,6 +12,29 @@
 
 namespace hermes::vm::x86_64 {
 
+void Emitter::catchInst(FR frRes) {
+  comment("// Catch r%u", frRes.index());
+
+  HWReg hwTemp = allocTempGpX();
+  HWReg hwRes = getOrAllocFRInGpX(frRes, false);
+  frUpdatedWithHW(frRes, hwRes);
+  freeReg(hwTemp);
+
+  // Catch simply returns the thrown value and clears it.
+  //
+  // Nothing here touches the SHJmpBuf or the saved SHLocals: this runs at the
+  // top of a handler basic block, which emitCatchTable() has already jumped
+  // to AFTER calling _jit_find_catch_target(), and that call is what hands
+  // the saved SHLocals to _sh_catch_no_pop(). See emitCatchTable() for why
+  // its own rsp-relative accesses are sound.
+
+  // Read thrown value.
+  a.mov(hwRes.gpq(), x86::qword_ptr(xRuntime, RuntimeOffsets::thrownValue));
+  // Clear thrown value.
+  loadBits64InGp(hwTemp.gpq(), _sh_ljs_empty().raw, "empty");
+  a.mov(x86::qword_ptr(xRuntime, RuntimeOffsets::thrownValue), hwTemp.gpq());
+}
+
 void Emitter::ret(FR frValue) {
   // kGPReturnStash (rbx) is the return value stash (the x21 analogue):
   // leave() moves it to rax, the SysV return register, after restoring the
@@ -21,6 +44,109 @@ void Emitter::ret(FR frValue) {
   // could observe rbx's old, now-stale contents.
   movHWFromFR(HWReg::gpX(kGPReturnStash), frValue);
   a.jmp(returnLabel_);
+}
+
+void Emitter::throwInst(FR frInput) {
+  comment("// Throw r%u", frInput.index());
+
+  // We have to sync registers when the throw is inside a try region
+  // because we could read from the FRs again in this function.
+  if (isInTry())
+    syncAllFRTempExcept({});
+  // x86-64: the by-value SHLegacyValue argument goes in rsi, and xRuntime
+  // (r15) is neither an argument register nor a temp, so loading rdi after
+  // frInput cannot disturb it.
+  movHWFromFR(HWReg(x86::rsi), frInput);
+  freeAllFRTempExcept({});
+
+  a.mov(x86::rdi, xRuntime);
+  EMIT_RUNTIME_CALL(*this, void (*)(SHRuntime *, SHLegacyValue), _sh_throw);
+}
+
+void Emitter::throwIfEmptyUndefinedImpl(FR frRes, FR frInput, bool empty) {
+  comment(
+      "// %s r%u, r%u",
+      empty ? "ThrowIfEmpty" : "ThrowIfUndefined",
+      frRes.index(),
+      frInput.index());
+
+  asmjit::Label slowPathLab = newSlowPathLabel();
+
+  // We have to sync registers when the throw is inside a try region
+  // because we could read from the FRs again in this function.
+  if (isInTry())
+    syncAllFRTempExcept(frRes != frInput ? frRes : FR());
+  HWReg hwInput = getOrAllocFRInGpX(frInput, true);
+  HWReg hwTemp = allocTempGpX();
+  if (isInTry())
+    freeAllFRTempExcept({});
+  freeReg(hwTemp);
+
+  if (empty)
+    emit_sh_ljs_is_empty(a, hwTemp.gpq(), hwInput.gpq());
+  else
+    emit_sh_ljs_is_undefined(a, hwTemp.gpq(), hwInput.gpq());
+  a.je(slowPathLab);
+
+  HWReg hwRes = getOrAllocFRInGpX(frRes, false);
+  movHWFromHW<false>(hwRes, hwInput);
+  frUpdatedWithHW(frRes, hwRes);
+
+  slowPaths_.emplace_back(
+      slowPathLab,
+      emittingIP,
+      [empty, frRes, frInput](Emitter &em, SlowPath &sp) {
+        em.comment(
+            "// Slow path: %s r%u, r%u",
+            empty ? "ThrowIfEmpty" : "ThrowIfUndefined",
+            frRes.index(),
+            frInput.index());
+        em.a.bind(sp.slowPathLab);
+        em.a.mov(x86::rdi, xRuntime);
+        EMIT_RUNTIME_CALL(em, void (*)(SHRuntime *), _sh_throw_empty);
+        // Call does not return.
+      });
+}
+
+void Emitter::throwIfThisInitialized(FR frInput) {
+  comment("// ThrowIfThisInitialized r%u", frInput.index());
+
+  asmjit::Label slowPathLab = newSlowPathLabel();
+
+  // We have to sync registers when the throw is inside a try region
+  // because we could read from the FRs again in this function.
+  // Outside a try it's not observable behavior.
+  // Note that only the sync is needed, not a free. A free is required when a
+  // call is emitted on a path that continues in this basic block, since temps
+  // are caller-saved. Here the only call is the non-returning throw in the
+  // out-of-line slow path; the fall-through path calls nothing, and the catch
+  // handler begins a new basic block, which re-normalizes temp state anyway.
+  // Freeing would only force needless reloads for the rest of the block.
+  //
+  // Cf. fastArrayLoad's #else (non-compressed-pointer) path, which syncs
+  // without freeing for the same reason. Its
+  // HERMESVM_COMPRESSED_POINTERS/HERMESVM_BOXED_DOUBLES path is not
+  // comparable: it emits an unconditional runtime call, so it must sync and
+  // free regardless of isInTry(). Cf. also throwInst, which syncs only under
+  // isInTry() but frees unconditionally, because it emits its call inline.
+  if (isInTry())
+    syncAllFRTempExcept({});
+  HWReg hwInput = getOrAllocFRInGpX(frInput, true);
+  HWReg hwTemp = allocTempGpX();
+  freeReg(hwTemp);
+
+  emit_sh_ljs_is_empty(a, hwTemp.gpq(), hwInput.gpq());
+  a.jne(slowPathLab);
+
+  slowPaths_.emplace_back(
+      slowPathLab, emittingIP, [frInput](Emitter &em, SlowPath &sp) {
+        em.comment("// Slow path: ThrowIfThisInitialized r%u", frInput.index());
+        em.a.bind(sp.slowPathLab);
+        em.a.mov(x86::rdi, xRuntime);
+        EMIT_RUNTIME_CALL(
+            em, void (*)(SHRuntime *), _sh_throw_this_already_initialized);
+        // Call does not return.
+      });
 }
 
 void Emitter::jmpTrueFalse(

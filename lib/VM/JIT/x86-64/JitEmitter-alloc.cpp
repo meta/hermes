@@ -51,7 +51,12 @@ void Emitter::bumpAllocAndUnpoison(
   // likewise excludes its scratch register and vector temps.
   //
   // The count must be even to keep rsp 16-byte aligned across the call, which
-  // is the same property arm64's paired stp relies on.
+  // is the same property arm64's paired stp relies on. Rather than assert
+  // that separately, the pushes are counted into rspDelta_ (as putByIdImpl's
+  // are), so callRuntime()'s "multiple of 16" assert checks the alignment of
+  // this call site too, and the instruction-boundary assert checks that the
+  // pops below restore rsp exactly. The counter therefore describes ALL
+  // transient rsp movement in the backend, with no scope split.
   constexpr unsigned kNumGPTemps = (kGPTemp1.second - kGPTemp1.first + 1) +
       (kGPTemp2.second - kGPTemp2.first + 1);
   static_assert(kNumGPTemps % 2 == 0, "pushes must preserve rsp alignment");
@@ -59,6 +64,9 @@ void Emitter::bumpAllocAndUnpoison(
     a.push(x86::gpq(i));
   for (unsigned i = kGPTemp2.first; i <= kGPTemp2.second; ++i)
     a.push(x86::gpq(i));
+#ifndef NDEBUG
+  rspDelta_ += 8 * kNumGPTemps;
+#endif
 
   // rdi is written before rsi, so an `out` that happens to live in either
   // argument register is still read before it is overwritten.
@@ -75,6 +83,9 @@ void Emitter::bumpAllocAndUnpoison(
     a.pop(x86::gpq(i));
   for (int i = kGPTemp1.second; i >= (int)kGPTemp1.first; --i)
     a.pop(x86::gpq(i));
+#ifndef NDEBUG
+  rspDelta_ -= 8 * kNumGPTemps;
+#endif
 #endif
 
   // Allocating succeeded, update the level.

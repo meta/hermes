@@ -274,6 +274,28 @@ inline void emit_shv_string(x86::Assembler &a, const x86::Gp &inOut) {
 #endif
 }
 
+/// Emit code to check whether the input reg is empty, using the specified
+/// temp register. The input reg is not modified unless it is the same as the
+/// temp, which is allowed.
+/// CPU flags are updated as result. je on success.
+///
+/// x86-64: shaped exactly like emit_sh_ljs_is_null() below -- empty is an
+/// ETag, so the shift goes one bit further than the tag, the two-operand
+/// shift needs a copy when the registers differ, and the sign-extended imm32
+/// makes arm64's cmn-with-negation unnecessary.
+inline void emit_sh_ljs_is_empty(
+    x86::Assembler &a,
+    const x86::Gp &tempReg,
+    const x86::Gp &inputReg) {
+  // Get the ETag bits by right shifting one bit further than the tag.
+  static_assert(
+      (int16_t)HVETag_Empty == (int16_t)(-14) && "HVETag_Empty must be -14");
+  if (tempReg != inputReg)
+    a.mov(tempReg, inputReg);
+  a.sar(tempReg, kHV_NumDataBits - 1);
+  a.cmp(tempReg, asmjit::Imm(HVETag_Empty));
+}
+
 /// Emit code to check whether the input reg is null, using the specified
 /// temp register. The input reg is not modified unless it is the same as the
 /// temp, which is allowed.

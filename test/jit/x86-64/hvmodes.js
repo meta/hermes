@@ -7,8 +7,8 @@
 
 // RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
 // RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force %s > %t.jit0 && diff %t.int0 %t.jit0
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // RUN: %hermes -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // REQUIRES: jit
@@ -52,10 +52,10 @@
 // so a compressed pointer encoded wrong also gets a chance to be caught by
 // the GC and not only by a wrong value.
 //
-// The two -O differential RUN lines carry -Xjit-crash-on-error, because at
-// -O nothing here declines. The -O0 ones cannot: `Derived`'s implicit
-// constructor still contains a ThrowIfEmpty there, which waits for the
-// exceptions milestone. Move -Xjit-crash-on-error onto them once it lands.
+// All four differential RUN lines carry -Xjit-crash-on-error, because
+// nothing here declines in any of them. The -O0 ones could not until the
+// exceptions milestone: `Derived`'s implicit constructor contains a
+// ThrowIfEmpty, which declined there.
 //
 // STRINGS. This file was written while LoadConstString and AddS declined,
 // so no compiled function here could build a string: every function under
@@ -194,11 +194,10 @@ print(r.map(String).join("|"));
 // `build`, `litFast` and `litSlow` used to compile only at -O: at -O0 an
 // object literal lowers to NewObject plus a DefineOwnById per key, and every
 // key needed a LoadConstString. Both of those have since landed, so all
-// three compile at both levels now, and so does `global`. The one function
-// still missing from the CHECK0 set is `Derived`, which declines at -O0 on
-// the ThrowIfEmpty guarding its own class binding -- that is the exceptions
-// milestone's, and it is why the -O0 differential RUN lines above cannot
-// carry -Xjit-crash-on-error while the -O ones can.
+// three compile at both levels now, and so does `global`. `Derived` was the
+// last holdout -- it declined at -O0 on the ThrowIfEmpty guarding its own
+// class binding -- and the exceptions milestone closed it, which is what let
+// the -O0 differential RUN lines above take -Xjit-crash-on-error.
 // CHECK: JIT successfully compiled FunctionID 1, 'build'
 // CHECK: JIT successfully compiled FunctionID 2, 'readAll'
 // CHECK: 42|true|null|undefined|3.5|0.1|str|7|Symbol(s)|1234567890123456789012345678901234567890|1e+300|tail|9|Symbol(s)

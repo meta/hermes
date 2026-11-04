@@ -495,14 +495,6 @@ void Emitter::frameSetup(unsigned numFrameRegs, unsigned gpSaveCount) {
 }
 
 void Emitter::leave(llvh::ArrayRef<const asmjit::Label *> exceptionHandlers) {
-  // x86-64: the catch table lands with the exception-handling milestone. It
-  // is unreachable today -- a function with an exception table contains a
-  // Catch instruction, whose emitter still declines -- but decline here too
-  // rather than emit a function whose catch label is never bound.
-  if (LLVM_UNLIKELY(catchTableLabel_.isValid()))
-    unsupported("catch table");
-  assert(exceptionHandlers.empty() && "no exception handlers without a table");
-
   comment("// leaveFrame");
   a.bind(returnLabel_);
   if (dumpJitCode_ & DumpJitCode::EntryExit) {
@@ -511,6 +503,22 @@ void Emitter::leave(llvh::ArrayRef<const asmjit::Label *> exceptionHandlers) {
     a.lea(x86::rsi, x86::ptr(roDataLabel_, getDebugFunctionName()));
     EMIT_RUNTIME_CALL_WITHOUT_SAVED_IP(
         *this, void (*)(bool, const char *), _sh_print_function_entry_exit);
+  }
+
+  // x86-64: rsp must not still be transiently lowered for stack arguments,
+  // either when the _sh_end_try below reads the SHJmpBuf through rsp or when
+  // the epilogue starts unwinding it -- see the rspDelta_ contract on
+  // callImpl().
+  assert(rspDelta_ == 0 && "rsp delta not restored before epilogue");
+
+  if (catchTableLabel_.isValid()) {
+    comment("// _sh_end_try");
+    // shr->shCurJmpBuf = buf->prev
+    int32_t jmpBufOffset = (int32_t)getJmpBufOffset();
+    a.mov(
+        x86::rax,
+        x86::qword_ptr(x86::rsp, jmpBufOffset + offsetof(SHJmpBuf, prev)));
+    a.mov(x86::qword_ptr(xRuntime, offsetof(SHRuntime, shCurJmpBuf)), x86::rax);
   }
 
   // _sh_leave(shr, &locals.head, frame);
@@ -527,11 +535,6 @@ void Emitter::leave(llvh::ArrayRef<const asmjit::Label *> exceptionHandlers) {
   // register.
   a.mov(x86::rax, x86::rbx);
 
-  // x86-64: rsp must not still be transiently lowered for stack arguments
-  // when the epilogue starts unwinding it -- see the rspDelta_ contract on
-  // callImpl().
-  assert(rspDelta_ == 0 && "rsp delta not restored before epilogue");
-
   // Restore the stack in the exact reverse of the prologue.
   if (uint32_t stackSize = getStackSize())
     a.add(x86::rsp, stackSize);
@@ -543,6 +546,7 @@ void Emitter::leave(llvh::ArrayRef<const asmjit::Label *> exceptionHandlers) {
 
   a.ret();
 
+  emitCatchTable(exceptionHandlers);
   emitSlowPaths();
   emitTypeAssertFailTail();
   emitROData();
@@ -1061,6 +1065,66 @@ int32_t Emitter::uint64Const(uint64_t bits, const char *comment) {
     it->second = dataOfs;
   }
   return it->second;
+}
+
+void Emitter::emitCatchTable(
+    llvh::ArrayRef<const asmjit::Label *> exceptionHandlers) {
+  // No trys in the function, nothing to do here.
+  if (!catchTableLabel_.isValid())
+    return;
+
+  a.bind(catchTableLabel_);
+
+  asmjit::Label addressTableLab = a.newLabel();
+
+  // This block is reached only by falling out of the setjmp in frameSetup()
+  // with a non-zero return, i.e. by longjmp. longjmp restores rsp to its
+  // value at the setjmp, which is the post-prologue rsp, so the two
+  // rsp-relative accesses below are correct no matter what the throwing code
+  // was doing with rsp -- including a throw from inside putByIdImpl's two
+  // pushes, where the emitter's rspDelta_ was transiently non-zero. The same
+  // reasoning covers the ASan pushes in bumpAllocAndUnpoison(); see the
+  // rspDelta_ comment in JitEmitter.h.
+  //
+  // The SHJmpBuf sits at rsp + 0, and frameSetup() puts the alignment
+  // padding ABOVE the exception area rather than below it, so the SHJmpBuf
+  // is 16-byte aligned whatever the parity of the pushes -- the property
+  // _sh_setjmp's jmp_buf needs, and the one arm64 gets for free because its
+  // sp is architecturally 16-byte aligned.
+
+  // Find the catch target for the exception.
+  a.mov(x86::rdi, xRuntime);
+  loadBits64InGp(x86::rsi, (uint64_t)codeBlock_, "CodeBlock");
+  a.mov(x86::rdx, xFrame);
+  a.lea(x86::rcx, x86::ptr(x86::rsp, (int32_t)getJmpBufOffset()));
+  a.mov(x86::r8, x86::qword_ptr(x86::rsp, (int32_t)getSavedSHLocalsOffset()));
+  // x86-64: arm64's pc-relative `adr` is a RIP-relative `lea` here.
+  a.lea(x86::r9, x86::ptr(addressTableLab));
+  EMIT_RUNTIME_CALL_WITHOUT_SAVED_IP(
+      *this,
+      void *(*)(SHRuntime *,
+                SHCodeBlock *,
+                SHLegacyValue *,
+                SHJmpBuf *,
+                SHLocals *,
+                int32_t *),
+      _jit_find_catch_target);
+
+  // The address to branch to was returned here.
+  a.jmp(x86::rax);
+
+  // Table of offsets from addressTableLab to jump to.
+  //
+  // x86-64: arm64 gets this for free because every instruction is four bytes
+  // wide; here the table follows a variable-length `jmp`, so align it
+  // explicitly -- _jit_find_catch_target() reads it through an int32_t *.
+  // The section base is at least 4-byte aligned, so in-section alignment is
+  // absolute alignment.
+  a.align(asmjit::AlignMode::kData, 4);
+  a.bind(addressTableLab);
+  for (const asmjit::Label *handler : exceptionHandlers) {
+    a.embedLabelDelta(*handler, addressTableLab, /* size */ 4);
+  }
 }
 
 void Emitter::emitROData() {

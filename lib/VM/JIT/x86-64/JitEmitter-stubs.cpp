@@ -19,10 +19,6 @@
 
 namespace hermes::vm::x86_64 {
 
-void Emitter::catchInst(FR frRes) {
-  unsupported("catchInst");
-}
-
 void Emitter::getPNameList(FR frRes, FR frObj, FR frIdx, FR frSize) {
   unsupported("getPNameList");
 }
@@ -84,22 +80,6 @@ void Emitter::iteratorNext(FR frRes, FR frIteratorOrIdx, FR frSourceOrNext) {
 
 void Emitter::iteratorClose(FR frIteratorOrIdx, bool ignoreExceptions) {
   unsupported("iteratorClose");
-}
-
-void Emitter::throwInst(FR frInput) {
-  unsupported("throwInst");
-}
-
-void Emitter::throwIfEmpty(FR frRes, FR frInput) {
-  unsupported("throwIfEmpty");
-}
-
-void Emitter::throwIfUndefined(FR frRes, FR frInput) {
-  unsupported("throwIfUndefined");
-}
-
-void Emitter::throwIfThisInitialized(FR frInput) {
-  unsupported("throwIfThisInitialized");
 }
 
 } // namespace hermes::vm::x86_64
