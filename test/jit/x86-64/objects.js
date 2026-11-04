@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force %s > %t.jit0 && diff %t.int0 %t.jit0
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // RUN: %hermes -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // REQUIRES: jit
@@ -22,25 +22,29 @@
 // under test were in fact compiled, so the differential cannot degrade into
 // comparing the interpreter against itself.
 //
-// Every object here is BUILT by compiled code and READ by the interpreter.
-// That was forced when this file was written -- getById declined -- and it
-// is kept deliberately now that it no longer does: the reads stay in
-// `global`, which still declines (on typeOf, from the `typeof` in the
-// churn loops), so the values are checked by an interpreter that never saw
-// the emitter. props.js covers reading properties from compiled code.
+// THE ORACLE IS THE OTHER PROCESS, NOT THE OTHER HALF OF THIS ONE. When
+// this file was written every read here was performed by the interpreter,
+// because `global` declined and could not be compiled; the header said so
+// and leaned on it. That is no longer true. TypeOf and LoadConstString both
+// landed in milestone 5, and `global` -- the only function in this file
+// that used TypeOf, and at -O the only one that used LoadConstString -- now
+// compiles at both -O and -O0, so the whole program
+// runs as emitted code. What checks it is the first RUN line's separate
+// `%hermes %s` process, which has no JIT at all. Nothing in this file needs
+// an interpreted reader any more, and nothing here is written to avoid one.
 //
-// The literals are all-constant on purpose. A literal with a computed value
-// lowers to NewObjectWithBuffer followed by PutOwnBySlotIdx for that value,
-// and PutOwnBySlotIdx still declines, so such a function would not compile.
-// The same applies to nested literals ({x: {y: 1}}) and to array literals.
-//
-// The -O0 RUN lines carry far fewer status pins than the -O ones, and that
-// is not an oversight: at -O0 there is no literal buffer at all. Every
-// non-empty literal lowers to NewObject followed by one DefineOwnById per
-// property, and DefineOwnById declines. So at -O0 only the three functions
-// with no property definitions compile -- empty (NewObject), proto
-// (NewObjectWithParent) and isa (InstanceOf) -- and those three are what the
-// CHECK0 lines pin. NewObjectWithBuffer coverage is -O only.
+// EVERY FUNCTION HERE COMPILES AT BOTH -O AND -O0, so the CHECK and CHECK0
+// pin sets are identical and the differential RUN lines carry
+// -Xjit-crash-on-error: a decline is a regression and must abort rather than
+// quietly hand the function back to the interpreter. This too used to be
+// false. At -O0 there is no literal buffer -- every non-empty literal
+// lowers to NewObject plus one DefineOwnById per property -- and while
+// DefineOwnById declined only `empty`, `proto` and `isa` compiled. The
+// property milestone landed DefineOwnById, which brought `seven`, `fat`,
+// `shapeA`/`B`/`C` and `protoBuf` in; `small`, `wide`, `churn`,
+// `churnSmall` and `global` still needed LoadConstString for their string
+// literals and came in with milestone 5. NewObjectWithBuffer coverage is
+// still -O only, since the buffer form itself does not exist at -O0.
 //
 // The NewObjectWithBuffer slow path (_jit_new_empty_object_for_buffer) is
 // covered without any special arrangement: the hidden class it loads is a
@@ -61,11 +65,11 @@
 //    waits for the exceptions milestone.
 //  - loadParentNoTraps: emitted only for `super` -- a super method call, a
 //    super property read, or the implicit callee load in a derived
-//    constructor. getById no longer declines, but every one of those
-//    functions still contains getByIdWithReceiver or
-//    throwIfThisInitialized, both of which do, so no function containing
-//    LoadParentNoTraps compiles today. It stays ported and unreachable
-//    until the exceptions milestone.
+//    constructor. This file has no `super` in it, so it is not covered
+//    HERE, but it is no longer uncovered: hvmodes.js's `Derived.tag` is
+//    `super.tag() + 10`, and that method does compile now that getById and
+//    getByIdWithReceiver both do. hvmodes.js's item 4 is where it is
+//    pinned, as FunctionID 9, 'tag'.
 //  - typedLoadParent: emitted only from typed-class IRGen, i.e. not from
 //    plain JS at all.
 //  - newTypedObjectWithBuffer: likewise typed-class only.
@@ -211,6 +215,9 @@ function churnSmall(iters) {
   return keep === null ? -1 : 0;
 }
 
+// The whole file, `global` included, runs as emitted code now.
+// CHECK: JIT successfully compiled FunctionID 0, 'global'
+// CHECK0: JIT successfully compiled FunctionID 0, 'global'
 var eo = empty();
 // CHECK: JIT successfully compiled FunctionID 1, 'empty'
 // CHECK0: JIT successfully compiled FunctionID 1, 'empty'
@@ -223,39 +230,54 @@ print(
 
 var s = small();
 // CHECK: JIT successfully compiled FunctionID 2, 'small'
+// CHECK0: JIT successfully compiled FunctionID 2, 'small'
 print(s.a, s.b, s.c, s.d, s.e, s.f);
 // CHECK: 1 two true null 3.5 6
+// CHECK0: 1 two true null 3.5 6
 print(Object.keys(s).join(","));
 // CHECK-NEXT: a,b,c,d,e,f
+// CHECK0-NEXT: a,b,c,d,e,f
 
 var s7 = seven();
 // CHECK: JIT successfully compiled FunctionID 3, 'seven'
+// CHECK0: JIT successfully compiled FunctionID 3, 'seven'
 print(s7.a, s7.b, s7.c, s7.d, s7.e, s7.f, s7.g);
 // CHECK: 1 2 3 4 5 6 7
+// CHECK0: 1 2 3 4 5 6 7
 
 var w = wide();
 // CHECK: JIT successfully compiled FunctionID 4, 'wide'
+// CHECK0: JIT successfully compiled FunctionID 4, 'wide'
 print(w.a, w.f, w.h, w.i, w.j, w.k, w.l);
 // CHECK: 0 5 eight false null -0.25 12
+// CHECK0: 0 5 eight false null -0.25 12
 print(w.g === undefined, "g" in w, Object.keys(w).length);
 // CHECK-NEXT: true true 12
+// CHECK0-NEXT: true true 12
 
 var ft = fat();
 // CHECK: JIT successfully compiled FunctionID 5, 'fat'
+// CHECK0: JIT successfully compiled FunctionID 5, 'fat'
 print(ft.p0, ft.p5, ft.p39, Object.keys(ft).length);
 // CHECK: 0 5 39 40
+// CHECK0: 0 5 39 40
 
 var a1 = shapeA(), b1 = shapeB(), c1 = shapeC();
 // CHECK: JIT successfully compiled FunctionID 6, 'shapeA'
+// CHECK0: JIT successfully compiled FunctionID 6, 'shapeA'
 // CHECK: JIT successfully compiled FunctionID 7, 'shapeB'
+// CHECK0: JIT successfully compiled FunctionID 7, 'shapeB'
 // CHECK: JIT successfully compiled FunctionID 8, 'shapeC'
+// CHECK0: JIT successfully compiled FunctionID 8, 'shapeC'
 print(
     Object.keys(a1).join(","),
     Object.keys(b1).join(","),
     Object.keys(c1).join(","));
 // CHECK: x y,x x,y,z
+// CHECK0: x y,x x,y,z
 print(a1.x, b1.x, b1.y, c1.x, c1.y, c1.z);
 // CHECK-NEXT: 1 2 1 1 2 3
+// CHECK0-NEXT: 1 2 1 1 2 3
 
 // The three parent cases, in the order the emitter tests them.
 var base = shapeC();
@@ -276,8 +298,10 @@ print(Object.getPrototypeOf(pu) === Object.prototype);
 
 var pb = protoBuf(base);
 // CHECK: JIT successfully compiled FunctionID 10, 'protoBuf'
+// CHECK0: JIT successfully compiled FunctionID 10, 'protoBuf'
 print(Object.getPrototypeOf(pb) === base, pb.a, pb.b, pb.z);
 // CHECK: true 1 2 3
+// CHECK0: true 1 2 3
 
 print(isa(base, Object), isa(3, Object), isa(base, Array));
 // CHECK: JIT successfully compiled FunctionID 11, 'isa'
@@ -289,7 +313,11 @@ print(churn(30000));
 // churn's own status line prints between this and the line above, so this
 // one cannot be a CHECK-NEXT.
 // CHECK: JIT successfully compiled FunctionID 12, 'churn'
+// CHECK0: JIT successfully compiled FunctionID 12, 'churn'
 // CHECK: 8
+// CHECK0: 8
 print(churnSmall(30000));
 // CHECK: JIT successfully compiled FunctionID 13, 'churnSmall'
+// CHECK0: JIT successfully compiled FunctionID 13, 'churnSmall'
 // CHECK: 0
+// CHECK0: 0

@@ -19,54 +19,8 @@
 
 namespace hermes::vm::x86_64 {
 
-void Emitter::unreachable() {
-  unsupported("unreachable");
-}
-
-void Emitter::profilePoint(uint16_t point) {
-  unsupported("profilePoint");
-}
-
-void Emitter::directEval(FR frRes, FR frText, bool strictCaller) {
-  unsupported("directEval");
-}
-
 void Emitter::catchInst(FR frRes) {
   unsupported("catchInst");
-}
-
-void Emitter::loadConstString(
-    FR frRes,
-    RuntimeModule *runtimeModule,
-    uint32_t stringID) {
-  unsupported("loadConstString");
-}
-
-void Emitter::loadConstBigInt(
-    FR frRes,
-    RuntimeModule *runtimeModule,
-    uint32_t bigIntID) {
-  unsupported("loadConstBigInt");
-}
-
-void Emitter::addEmptyString(FR frRes, FR frInput) {
-  unsupported("addEmptyString");
-}
-
-void Emitter::addS(FR frRes, FR frLeft, FR frRight) {
-  unsupported("addS");
-}
-
-void Emitter::jmpBuiltinIs(
-    bool invert,
-    const asmjit::Label &target,
-    uint8_t builtinIndex,
-    FR frInput) {
-  unsupported("jmpBuiltinIs");
-}
-
-void Emitter::typeOf(FR frRes, FR frInput) {
-  unsupported("typeOf");
 }
 
 void Emitter::getPNameList(FR frRes, FR frObj, FR frIdx, FR frSize) {
@@ -80,21 +34,6 @@ void Emitter::getNextPName(
     FR frIdx,
     FR frSize) {
   unsupported("getNextPName");
-}
-
-void Emitter::toPropertyKey(FR frRes, FR frVal) {
-  unsupported("toPropertyKey");
-}
-
-void Emitter::jmpTypeOfIs(
-    const asmjit::Label &target,
-    FR frInput,
-    TypeOfIsTypes types) {
-  unsupported("jmpTypeOfIs");
-}
-
-void Emitter::typeOfIs(FR frRes, FR frInput, TypeOfIsTypes types) {
-  unsupported("typeOfIs");
 }
 
 void Emitter::uintSwitchImm(
@@ -147,10 +86,6 @@ void Emitter::iteratorClose(FR frIteratorOrIdx, bool ignoreExceptions) {
   unsupported("iteratorClose");
 }
 
-void Emitter::debugger() {
-  unsupported("debugger");
-}
-
 void Emitter::throwInst(FR frInput) {
   unsupported("throwInst");
 }
@@ -165,14 +100,6 @@ void Emitter::throwIfUndefined(FR frRes, FR frInput) {
 
 void Emitter::throwIfThisInitialized(FR frInput) {
   unsupported("throwIfThisInitialized");
-}
-
-void Emitter::createRegExp(
-    FR frRes,
-    SHSymbolID patternID,
-    SHSymbolID flagsID,
-    uint32_t regexpID) {
-  unsupported("createRegExp");
 }
 
 } // namespace hermes::vm::x86_64

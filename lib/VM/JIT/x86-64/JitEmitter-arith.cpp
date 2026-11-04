@@ -185,6 +185,58 @@ void Emitter::toInt32(FR frRes, FR frInput, bool isSigned) {
       });
 }
 
+void Emitter::addEmptyString(FR frRes, FR frInput) {
+  comment("// AddEmptyString r%u, r%u", frRes.index(), frInput.index());
+
+  syncAllFRTempExcept(frRes != frInput ? frRes : FR());
+  // TODO: As with binary bit ops, it should be possible to only do this in the
+  // slow path.
+  syncToFrame(frInput);
+
+  asmjit::Label slowPathLab = newSlowPathLabel();
+  asmjit::Label contLab = newContLabel();
+
+  HWReg hwInput = getOrAllocFRInGpX(frInput, true);
+  HWReg hwTemp = allocTempGpX();
+  freeReg(hwTemp);
+  freeAllFRTempExcept(frRes);
+
+  HWReg hwRes = getOrAllocFRInGpX(frRes, false);
+
+  // Check if the input is already a string and don't do anything.
+  // x86-64: emit_sh_ljs_is_string() leaves its answer in EFLAGS and this jne
+  // is what consumes it, so nothing that writes flags may be placed between
+  // the two. Any reorder here is a bug.
+  emit_sh_ljs_is_string(a, hwTemp.gpq(), hwInput.gpq());
+  a.jne(slowPathLab);
+
+  // Fast path.
+  movHWFromHW<false>(hwRes, hwInput);
+  frUpdatedWithHW(frRes, hwRes, FRType::Pointer);
+
+  a.bind(contLab);
+
+  slowPaths_.emplace_back(
+      slowPathLab,
+      contLab,
+      emittingIP,
+      [frRes, frInput, hwRes](Emitter &em, SlowPath &sp) {
+        em.comment(
+            "// Slow path: AddEmptyString r%u, r%u",
+            frRes.index(),
+            frInput.index());
+        em.a.bind(sp.slowPathLab);
+        em.a.mov(x86::rdi, xRuntime);
+        em.loadFrameAddr(x86::rsi, frInput);
+        EMIT_RUNTIME_CALL(
+            em,
+            SHLegacyValue (*)(SHRuntime *, const SHLegacyValue *),
+            _sh_ljs_add_empty_string_rjs);
+        em.movHWFromHW<false>(hwRes, HWReg::gpX(0));
+        em.a.jmp(sp.contLab);
+      });
+}
+
 void Emitter::arithUnop(
     bool forceNumber,
     FR frRes,
@@ -343,6 +395,49 @@ void Emitter::bitNot(FR frRes, FR frInput) {
         em.movHWFromHW<false>(hwRes, HWReg::gpX(0));
         em.a.jmp(sp.contLab);
       });
+}
+
+void Emitter::typeOf(FR frRes, FR frInput) {
+  comment("// TypeOf r%u, r%u", frRes.index(), frInput.index());
+  syncAllFRTempExcept(frRes == frInput ? FR() : frRes);
+  syncToFrame(frInput);
+  freeAllFRTempExcept(FR());
+
+  a.mov(x86::rdi, xRuntime);
+  loadFrameAddr(x86::rsi, frInput);
+  // TODO: Use a function that preserves temporary registers.
+  EMIT_RUNTIME_CALL(
+      *this, SHLegacyValue (*)(SHRuntime *, SHLegacyValue *), _sh_ljs_typeof);
+
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<false>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
+}
+
+void Emitter::addS(FR frRes, FR frLeft, FR frRight) {
+  comment(
+      "// AddS r%u, r%u, r%u", frRes.index(), frLeft.index(), frRight.index());
+
+  // x86-64: as on arm64 this is an unconditional runtime call. AddS is only
+  // emitted when the compiler already proved both operands are strings, so
+  // there is no type check to fast-path around; the work that is left --
+  // allocating and filling the concatenation, or building a rope -- is all
+  // the runtime's.
+  syncAllFRTempExcept(frRes != frLeft && frRes != frRight ? frRes : FR());
+  syncToFrame(frLeft);
+  syncToFrame(frRight);
+  freeAllFRTempExcept({});
+
+  a.mov(x86::rdi, xRuntime);
+  loadFrameAddr(x86::rsi, frLeft);
+  loadFrameAddr(x86::rdx, frRight);
+  EMIT_RUNTIME_CALL(
+      *this,
+      SHLegacyValue (*)(SHRuntime *, SHLegacyValue *, SHLegacyValue *),
+      _sh_ljs_string_add);
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<false>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
 }
 
 void Emitter::mod(bool forceNumber, FR frRes, FR frLeft, FR frRight) {

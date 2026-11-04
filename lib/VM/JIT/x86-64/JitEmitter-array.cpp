@@ -242,6 +242,24 @@ void Emitter::fastArrayLoad(FR frRes, FR frArr, FR frIdx) {
 #endif
 }
 
+void Emitter::toPropertyKey(FR frRes, FR frVal) {
+  comment("// ToPropertyKey r%u, r%u", frRes.index(), frVal.index());
+  syncAllFRTempExcept(frRes != frVal ? frRes : FR());
+  syncToFrame(frVal);
+  freeAllFRTempExcept({});
+
+  a.mov(x86::rdi, xRuntime);
+  loadFrameAddr(x86::rsi, frVal);
+  EMIT_RUNTIME_CALL(
+      *this,
+      SHLegacyValue (*)(SHRuntime *, const SHLegacyValue *),
+      _sh_ljs_to_property_key);
+
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<false>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
+}
+
 void Emitter::fastArrayStore(FR frArr, FR frIdx, FR frVal) {
   comment(
       "// FastArrayStore r%u, r%u, r%u",

@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
 // RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force %s > %t.jit0 && diff %t.int0 %t.jit0
 // RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
@@ -52,16 +52,29 @@
 // so a compressed pointer encoded wrong also gets a chance to be caught by
 // the GC and not only by a wrong value.
 //
-// NO STRING OPERATIONS IN COMPILED CODE. LoadConstString and AddS still
-// decline (milestone 5), so a compiled function here cannot build a string.
-// Every function under test therefore returns numbers or an array, and all
-// the formatting happens in top-level code, which the interpreter runs.
-// String VALUES are still covered -- they reach the emitter through object
+// The two -O differential RUN lines carry -Xjit-crash-on-error, because at
+// -O nothing here declines. The -O0 ones cannot: `Derived`'s implicit
+// constructor still contains a ThrowIfEmpty there, which waits for the
+// exceptions milestone. Move -Xjit-crash-on-error onto them once it lands.
+//
+// STRINGS. This file was written while LoadConstString and AddS declined,
+// so no compiled function here could build a string: every function under
+// test returns numbers or an array, and all the formatting was left to
+// top-level code, which the interpreter ran. Both opcodes landed in
+// milestone 5 and `global` compiles now, so that constraint is gone -- but
+// the functions have been left as they are, because what this file is FOR
+// is the per-mode encoding of values, and keeping the string handling out of
+// them keeps each one small enough to reason about. String VALUES were
+// always covered, and still are: they reach the emitter through the object
 // literal buffers ("s" in litFast/litSlow) and through the String tag of the
-// SHV decode, which is what matters for the modes.
+// SHV decode, which is what matters for the modes. strings.js covers the
+// string OPERATIONS.
 //
 // The last two RUN lines pin that the functions under test were compiled, so
 // the differential cannot degrade into comparing the interpreter to itself.
+// The `%hermes %s` process in each differential RUN line is the oracle; it
+// has no JIT at all, and it is what makes the comparison meaningful now that
+// nothing in this program is interpreted in the JIT run.
 //
 // A GAP, STATED HONESTLY. This file pins WHAT the code computes in each
 // build, not WHICH branch computed it. Nothing here would notice if
@@ -169,20 +182,27 @@ function churn(n, sym, big) {
   return acc + last.f6;
 }
 
+// The whole file, `global` included, runs as emitted code now.
+// CHECK: JIT successfully compiled FunctionID 0, 'global'
+// CHECK0: JIT successfully compiled FunctionID 0, 'global'
+
 var o = build(sym, big);
 var r = null;
 for (var i = 0; i < 3000; ++i)
   r = readAll(o);
 print(r.map(String).join("|"));
-// `build` compiles only at -O: at -O0 an object literal lowers to NewObject
-// plus a DefineOwnById per key, and every key is a LoadConstString. The same
-// is true of litFast/litSlow below, and `Derived` additionally declines at
-// -O0 on the ThrowIfEmpty guarding its own class binding. readAll, the two
-// `tag`s and churn compile at both levels, and churn is what drives the
-// literal and build paths in the -O0 configuration.
+// `build`, `litFast` and `litSlow` used to compile only at -O: at -O0 an
+// object literal lowers to NewObject plus a DefineOwnById per key, and every
+// key needed a LoadConstString. Both of those have since landed, so all
+// three compile at both levels now, and so does `global`. The one function
+// still missing from the CHECK0 set is `Derived`, which declines at -O0 on
+// the ThrowIfEmpty guarding its own class binding -- that is the exceptions
+// milestone's, and it is why the -O0 differential RUN lines above cannot
+// carry -Xjit-crash-on-error while the -O ones can.
 // CHECK: JIT successfully compiled FunctionID 1, 'build'
 // CHECK: JIT successfully compiled FunctionID 2, 'readAll'
 // CHECK: 42|true|null|undefined|3.5|0.1|str|7|Symbol(s)|1234567890123456789012345678901234567890|1e+300|tail|9|Symbol(s)
+// CHECK0: JIT successfully compiled FunctionID 1, 'build'
 // CHECK0: JIT successfully compiled FunctionID 2, 'readAll'
 // CHECK0: 42|true|null|undefined|3.5|0.1|str|7|Symbol(s)|1234567890123456789012345678901234567890|1e+300|tail|9|Symbol(s)
 
@@ -192,6 +212,8 @@ print(lf.a, lf.b, lf.c, lf.d, lf.e, lf.f);
 // CHECK: JIT successfully compiled FunctionID 3, 'litFast'
 // CHECK: JIT successfully compiled FunctionID 4, 'litSlow'
 // CHECK: 1 2.5 -0.25 s true null
+// CHECK0: JIT successfully compiled FunctionID 3, 'litFast'
+// CHECK0: JIT successfully compiled FunctionID 4, 'litSlow'
 // CHECK0: 1 2.5 -0.25 s true null
 print(ls.a, ls.b, ls.c, ls.d, ls.e, ls.f);
 // CHECK: 0.1 1e+300 s true null 2.5

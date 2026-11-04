@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force %s > %t.jit0 && diff %t.int0 %t.jit0
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // RUN: %hermes -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // REQUIRES: jit
@@ -26,14 +26,25 @@
 // both optimization levels, and one with a computed element is a
 // NewArrayWithBuffer for the literal prefix followed by
 // DefineOwnInDenseArray for the rest. Every function here therefore compiles
-// at both levels, and the CHECK and CHECK0 lines are identical.
+// at both levels, and the CHECK and CHECK0 lines are identical -- literally
+// so: the two -Xdump-jitcode=2 runs produce the same sequence of compile
+// events, and the CHECK0 pins are a line-for-line mirror of the CHECK ones.
+// Because nothing declines in either, the four differential RUN lines carry
+// -Xjit-crash-on-error, so a future decline aborts instead of quietly
+// weakening this file into an interpreter-versus-interpreter comparison.
 //
 // The element reads and writes below are ordinary property access
 // (GetByVal/PutByVal/GetByIndex), not the FastArray opcodes -- plain JS
 // never emits those. fastarrays.js covers the FastArray family, which needs
-// -typed. `global` still declines here, on loadConstString from the string
-// literals, so the printing is done by the interpreter and the values it
-// prints were built by compiled code.
+// -typed.
+//
+// `global` USED TO DECLINE HERE and no longer does. The string literals in
+// the top-level code needed LoadConstString, which arrived in milestone 5,
+// so the printing below was done by the interpreter and this header called
+// that out as the reason the printed values were trustworthy. The top level
+// is compiled code now, and the oracle is what it always really was: the
+// first RUN line's separate `%hermes %s` process, which runs the same
+// program with no JIT at all.
 
 function small() {
   return [1, 2, 3];
@@ -124,6 +135,9 @@ function churn(iters) {
   return keep === null ? -1 : keep.length;
 }
 
+// The whole file, `global` included, runs as emitted code now.
+// CHECK: JIT successfully compiled FunctionID 0, 'global'
+// CHECK0: JIT successfully compiled FunctionID 0, 'global'
 var s = small();
 // CHECK: JIT successfully compiled FunctionID 1, 'small'
 // CHECK0: JIT successfully compiled FunctionID 1, 'small'
