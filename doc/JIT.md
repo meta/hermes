@@ -515,17 +515,23 @@ every function in it compiles and the output is byte-identical to the
 interpreter -- zero declines, ASan clean. That property, not any single
 opcode's test, is what "opcode-complete" means for this backend now.
 
-**Open maintainer question: destination-FR exclusion from pre-call syncs in
-try regions.** Both backends' `syncAllFRTempExcept` calls before a
-potentially-throwing call inside a try exclude that instruction's own
-destination FR from the sync (`frRes != ... ? frRes : FR()`, throughout
-`JitEmitter-*.cpp`). Whether a *throwing non-call* instruction can have its
-destination register still live at the catch handler depends on whether
-register allocation's liveness computation treats exceptional edges as
-uses -- if it does not, the exclusion could in principle be unsound.
-`test/jit/x86-64/exceptions.js` does not construct a case exercising this
-shape, so it is flagged here for maintainer confirmation rather than closed
-by a test.
+**Confirmed bug, unfixed: destination-FR exclusion from pre-call syncs in
+try regions.** Milestone 6 confirmed that excluding an instruction's own
+destination FR from the pre-call `syncAllFRTempExcept` is unsound inside a
+try: register allocation coalesces a live variable's phi with that
+destination, so the prior value is dropped instead of stored, and the
+handler reads the frame slot's `_sh_enter` zero fill --
+`var y = "prior"; try { y = o.throwingGetter; } catch { use(y); }` yields
+`0`. Identical on arm64 and x86-64, on HV64/HV32/BOXED, at `-O` only.
+Plain calls are unaffected (`CallInst` syncs the whole frame), and the JIT
+asserts cannot catch it: the value is well-formed, merely stale.
+`test/jit/try-catch-dest-reg.js` is the minimal repro, committed
+`XFAIL: *` so a fix announces itself as an XPASS; its header carries the
+dump evidence. The fix is deliberately deferred to the maintainer: it
+spans 54 exclusion sites per backend, 108 across both (39 of the guarded
+`frRes != x ? frRes : FR()` form plus 15 unconditional
+`syncAllFRTempExcept(frRes)`, the latter having no aliasing guard at all),
+or else requires liveness to treat exceptional edges as uses.
 
 The 497-file differential sweep over `test/hermes/*.js` (plain `hermes`
 vs `-Xjit=force`, same binary) went from ~270 files compiling at least one
@@ -565,22 +571,23 @@ Inc/Dec/Negate, ToNumber/ToNumeric, all comparisons/branches, BitAnd/Or/
 Xor/shifts/BitNot, ToInt32/ToUint32, type asserts, environment and
 function field access.
 
-**What milestone 6 holds.** Reaching full opcode coverage is not the same
-as being production-ready: `test/jit/*.js` (the arm64-authored suite) is
-still gated to arm64 by `test/jit/lit.local.cfg` and has not been
-un-gated for x86-64 -- the x86-64-specific tests under `test/jit/x86-64/`
-(22 tests) are a parallel, independently written suite, not a replacement
-for running the original one on this backend. There are no x86-64 golden
-dumps analogous to arm64's `cmake-build-arm64/jit-baseline.dump`, no CI
-recipe wiring the three heap-value-mode builds into a regular run, and no
+**What milestone 6 holds.** `test/jit/*.js` (the arm64-authored suite) is
+no longer gated to arm64: `test/jit/lit.local.cfg` now skips the
+directory only when no `jit-arch-*` feature exists at all, and the audit
+that came with the un-gating found no file needing an architecture gate.
+Its 48 files now run on x86-64 alongside the 22 x86-64-specific tests
+under `test/jit/x86-64/` (one of the 48 is still `!slow_debug`-gated and
+one is the `XFAIL` repro above). Full opcode coverage still is not the
+same as being production-ready, though. There are no x86-64 golden dumps
+analogous to arm64's `cmake-build-arm64/jit-baseline.dump`, no CI recipe
+wiring the three heap-value-mode builds into a regular run, and no
 performance pass at all -- every design choice so far has been "does it
 compile and match", never "is it fast". Milestone 6 is where those close:
 golden-dump capture and `jit-diff.sh`-based regression checking for
-x86-64, un-gating `test/jit` (and reconciling whatever arm64-only
-assumptions surface when the same files run against this backend), a CI
-recipe that runs the three-mode matrix on every change, and a first perf
-sanity pass. Counter support (`-Xjit-emit-counters`, NumCall/NumCallSlow)
-already works and needs no further milestone-6 work. To build:
+x86-64, a CI recipe that runs the three-mode matrix on every change, and
+a first perf sanity pass. Counter support (`-Xjit-emit-counters`,
+NumCall/NumCallSlow) already works and needs no further milestone-6 work.
+To build:
 
   cmake -B cmake-build-x86jit -G Ninja -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
