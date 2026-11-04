@@ -638,6 +638,10 @@ section:
 3. A static_assert message-form inconsistency across both backends'
    `JitEmitter-*` files (some bare-condition, some message-form, no
    pattern to which) -- a style sweep, not a correctness issue.
+   Swept 2026-08-26: every `static_assert(cond && "msg")` now uses the
+   two-argument form, and the arm64 `HVTag_Str` message was corrected.
+   Bare one-argument asserts (e.g. `static_assert(HERMESVALUE_VERSION ==
+   2)`) were left as-is.
 
 **x86-64 dump baseline and the byte-identical-refactor workflow.**
 `utils/jit/jit-dump.sh` / `jit-diff.sh` now cover x86-64 with no
