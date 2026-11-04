@@ -3,3 +3,4 @@ components:
   - compiler
   - gc
   - jit
+  - vm
