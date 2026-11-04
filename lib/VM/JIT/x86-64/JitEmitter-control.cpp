@@ -9,6 +9,8 @@
 #if HERMESVM_JIT_X86_64
 #include "JitEmitter-internal.h"
 #include "JitEmitter.h"
+// For _jit_string_switch_imm_table_lookup(), called by stringSwitchImm().
+#include "../JitHandlers.h"
 
 namespace hermes::vm::x86_64 {
 
@@ -571,6 +573,171 @@ void Emitter::typeOfIs(FR frRes, FR frInput, TypeOfIsTypes origTypes) {
 
   // xRes contains either 0 or 1 at this point, turn it into a bool HermesValue.
   emit_sh_ljs_bool(a, xRes, xTemp);
+}
+
+void Emitter::uintSwitchImm(
+    FR frInput,
+    const asmjit::Label &defaultLabel,
+    llvh::ArrayRef<const asmjit::Label *> labels,
+    uint32_t minVal,
+    uint32_t maxVal) {
+  comment(
+      "// uintSwitchImm r%u, min %u, max %u", frInput.index(), minVal, maxVal);
+
+  // x86-64: arm64 has to ask isAddSubImm() whether minVal/maxVal fit an
+  // add/sub immediate and materialize them in a register when they do not.
+  // Here every bound is used as an imm32 against a 32-bit register, which
+  // holds any uint32 exactly -- the immediates below are written as int32_t
+  // so that a bound above INT32_MAX is encoded as its 32-bit bit pattern
+  // rather than rejected as out of range. That is sufficient because both
+  // comparisons are UNSIGNED (jb/ja): a 32-bit cmp compares bit patterns, and
+  // which of the two the encoder considered "negative" does not enter into
+  // it. The subtraction below is likewise exact modulo 2^32, and the value is
+  // known to be >= minVal by then. So there is no analogue of arm64's second
+  // register here at all, and hwTempTarget is used only for the table
+  // address. test/jit/x86-64/switches.js's `big` is the case that exercises
+  // it here; test/jit/switch-bigval.js is the upstream analogue, but that
+  // directory is still gated to arm64.
+
+  // End of the basic block.
+  syncAllFRTempExcept({});
+
+  // Load the input value into a double register to check if it's an int.
+  HWReg hwInput = getOrAllocFRInVecD(frInput, true);
+
+  HWReg hwTempInput = allocTempGpX();
+  HWReg hwTempTarget = allocTempGpX();
+  HWReg hwTempD = allocTempVecD();
+  freeReg(hwTempInput);
+  freeReg(hwTempTarget);
+  freeReg(hwTempD);
+
+  x86::Gp xTempInput = hwTempInput.gpq();
+  x86::Gp xTempTarget = hwTempTarget.gpq();
+
+  // Convert the input to an integer and back to double, and check if the
+  // value remained the same. If it didn't, jump to the default label.
+  emit_double_is_uint32(a, xTempInput, hwTempD.xmm(), hwInput.xmm());
+  // x86-64: arm64's fcmp reports an unordered compare as NE, so its single
+  // b.ne covers a NaN operand too. vucomisd reports unordered as EQUAL, so a
+  // NaN would fall through here and be treated as the uint32 value 0, which
+  // for a table starting at 0 runs the first case. (For a table with a
+  // higher minVal the range check below happens to reject the 0 anyway, so
+  // the visible damage depends on the switch.) The jp is what sends a NaN to
+  // the default label in every case; see emit_double_is_uint32()'s contract.
+  a.jne(defaultLabel);
+  a.jp(defaultLabel);
+
+  // Check if the integer value is in range. First check minVal.
+  // Note that a value below minVal or above maxVal is the ONLY remaining way
+  // to miss: the conversion above already rejected everything that is not an
+  // exact uint32.
+  a.cmp(xTempInput.r32(), asmjit::Imm((int32_t)minVal));
+  // If the value is lower than minVal, jump to the default label.
+  a.jb(defaultLabel);
+
+  // Now check maxVal, which is inclusive.
+  a.cmp(xTempInput.r32(), asmjit::Imm((int32_t)maxVal));
+  // If the value is higher than maxVal, jump to the default label.
+  a.ja(defaultLabel);
+
+  // Compute the offset into the jump table, dereference, and jump.
+  // Offset by the minVal if necessary.
+  if (minVal != 0) {
+    // A 32-bit sub zeroes the upper half of the destination, which is what
+    // keeps xTempInput usable as a 64-bit scaled index below.
+    a.sub(xTempInput.r32(), asmjit::Imm((int32_t)minVal));
+  }
+
+  // Label for the start of the jump table. It is also the base that the
+  // deltas in the table are relative to, exactly as on arm64, where the same
+  // label doubles as the base of the br. Here the base has to be materialized
+  // into a register anyway, so the two uses are one lea.
+  asmjit::Label tableLab = a.newLabel();
+
+  // xTempInput contains the index into the jump table.
+  //
+  // x86-64: arm64 needs three instructions here -- adr, an ldr with an LSL 2
+  // scaled index, and an add with an sxtw of the loaded word. On x86 the
+  // scaled index and the displacement are part of the memory operand, and
+  // movsxd does the sign extension as part of the load, so it is a lea, a
+  // movsxd and an add. The sign extension is required, not decorative: the
+  // deltas are signed, and every case whose basic block precedes the table --
+  // which is most of them, since the table is emitted at the switch -- has a
+  // negative one.
+  a.lea(xTempTarget, x86::ptr(tableLab));
+  a.movsxd(xTempInput, x86::dword_ptr(xTempTarget, xTempInput, 2));
+  // Add the jump offset to the base of the table to get the target address.
+  a.add(xTempTarget, xTempInput);
+  // Branch to the target address.
+  a.jmp(xTempTarget);
+
+  // Emit the jump table.
+  // NOTE: The jump table is emitted immediately after the jmp instruction
+  // that uses it, as on arm64. Nothing falls into it: the jmp above is
+  // unconditional.
+  //
+  // x86-64: arm64's table is inherently 4-byte aligned because every arm64
+  // instruction is 4 bytes wide. Here it follows a variable-length jmp, so
+  // align it explicitly. Unlike emitCatchTable()'s table -- which C++ reads
+  // through an int32_t * and where alignment is a correctness matter -- this
+  // one is read by the movsxd above, and x86 permits unaligned loads, so this
+  // is only about not splitting the load across a cache line. The padding
+  // bytes are never executed.
+  a.align(asmjit::AlignMode::kData, 4);
+  a.bind(tableLab);
+  for (const asmjit::Label *label : labels) {
+    a.embedLabelDelta(*label, tableLab, /* size */ 4);
+  }
+
+  // Do this always, since this could be the end of the BB.
+  freeAllFRTempExcept({});
+}
+
+void Emitter::stringSwitchImm(
+    FR frInput,
+    RuntimeModule *runtimeModule,
+    uint32_t tableIndex,
+    const asmjit::Label &defaultLabel,
+    llvh::ArrayRef<StringSwitchCase> cases) {
+  comment("// stringSwitchImm r%u, size %zu", frInput.index(), cases.size());
+
+  // End of the basic block.
+  syncAllFRTempExcept({});
+  // The handler reads the value through the frame address passed below, so
+  // the slot has to hold the current value.
+  syncToFrame(frInput);
+
+  loadBits64InGp(x86::rdi, (uint64_t)runtimeModule, "RuntimeModule");
+  a.mov(x86::esi, asmjit::Imm(tableIndex));
+  loadFrameAddr(x86::rdx, frInput);
+
+  // No saved IP: the lookup neither allocates nor throws. It hashes the
+  // string and reads the table the shared driver populated.
+  EMIT_RUNTIME_CALL_WITHOUT_SAVED_IP(
+      *this,
+      void *(*)(RuntimeModule *, uint32_t, SHLegacyValue *),
+      _jit_string_switch_imm_table_lookup);
+
+  // The lookup returns null when the value is not a string, or is a string
+  // that no case matches.
+  a.test(x86::rax, x86::rax);
+  a.je(defaultLabel);
+  // Otherwise, branch to the address that was returned.
+  a.jmp(x86::rax);
+
+  // The `cases` labels are NOT resolved here: this emitter only has to make
+  // sure they end up bound in this function's code. The shared driver
+  // (JITContext::Compiler::compileCodeBlock) walks the same StringSwitchCase
+  // list after compilation succeeds and writes each label's resolved address
+  // into the runtime module's string switch table, which is what the lookup
+  // above returns. That is why the labels must stay valid -- i.e. must be the
+  // basic block labels, not copies -- until compilation of this code block
+  // completes. Same contract as arm64.
+  (void)cases;
+
+  // Do this always, since this could be the end of the BB.
+  freeAllFRTempExcept({});
 }
 
 void Emitter::jmpUndefined(const asmjit::Label &target, FR frInput) {
