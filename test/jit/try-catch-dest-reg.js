@@ -7,13 +7,16 @@
 
 // RUN: %hermes -fno-inline -Xjit=force -Xjit-crash-on-error %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
-// XFAIL: *
+// XFAIL: jit-arch-arm64, jit-arch-x86-64
 
 // KNOWN BUG, DELIBERATELY LEFT FAILING. Both backends are affected; the
 // fix is maintainer-bound (see doc/JIT.md, "destination-FR exclusion from
 // pre-call syncs in try regions"), so this file records the defect instead
-// of hiding it. When the fix lands, this test XPASSes and lit flags it --
-// drop the XFAIL line then.
+// of hiding it. When the fix lands on both backends, this test XPASSes and
+// lit flags it -- drop the XFAIL line then. If a fix lands on only ONE
+// backend, remove that backend's feature from the XFAIL list above (and
+// leave the other backend's feature in place) so the fixed arch starts
+// passing for real while the still-broken one stays honestly XFAIL.
 //
 // Expected (what the interpreter prints, and what the spec requires):
 //     caught y=prior

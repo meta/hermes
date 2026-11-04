@@ -31,8 +31,8 @@ The machine-code emitter is [asmjit](https://asmjit.com) (vendored in
 
 | File | Role |
 |---|---|
-| `include/hermes/VM/JIT/Config.h` | Decides `HERMESVM_JIT` from `HERMESVM_ALLOW_JIT` + platform. Requires arm64 and either no compressed pointers or a contiguous heap. On Apple platforms the JIT is additionally disabled *except* on macOS and Mac Catalyst, so arm64 macOS is a supported (and convenient) host for testing the JIT. |
-| `include/hermes/VM/JIT/JIT.h` | Dispatches to the per-arch `JITContext`; provides a no-op `JITContext` when the JIT is disabled. Already contains an `#elif defined(__x86_64__)` branch expecting `hermes/VM/JIT/x86-64/JIT.h` (does not exist yet). |
+| `include/hermes/VM/JIT/Config.h` | Decides `HERMESVM_JIT` from `HERMESVM_ALLOW_JIT` + platform: arm64, or x86-64 SysV (`__x86_64__`/`_M_X64`, non-Windows), each requiring no compressed pointers or a contiguous heap. On Apple platforms the JIT is additionally disabled *except* on macOS and Mac Catalyst, so arm64 macOS is a supported (and convenient) host for testing the JIT. Also defines the per-arch selectors `HERMESVM_JIT_ARM64`/`HERMESVM_JIT_X86_64` (exactly one set when the JIT is enabled), which `JIT.h` and arch-specific sources dispatch/guard on. |
+| `include/hermes/VM/JIT/JIT.h` | Dispatches to the per-arch `JITContext` via `HERMESVM_JIT_ARM64`/`HERMESVM_JIT_X86_64`, including `hermes/VM/JIT/arm64/JIT.h` or `hermes/VM/JIT/x86-64/JIT.h` accordingly; provides a no-op `JITContext` when the JIT is disabled. |
 | `include/hermes/VM/JIT/arm64/JIT.h` | Public `JITContext`: enablement, thresholds, `shouldCompile`/`compile`, counters, `markRoots`. |
 | `lib/VM/JIT/JitCompiler.cpp` | `JITContext::Compiler`: per-opcode `emitXXX` methods that decode operands and forward to the `Emitter`. Drives BB-by-BB compilation. Arch-independent; compiled inside the arch namespace selected by `JitCurArch.h`. |
 | `lib/VM/JIT/arm64/JIT.cpp` | `JITContext` housekeeping: construction, `setHCIdLimit`, `dumpCounters`, `markRoots`. |
@@ -40,8 +40,9 @@ The machine-code emitter is [asmjit](https://asmjit.com) (vendored in
 | `lib/VM/JIT/arm64/JitEmitter.cpp` | Emitter lifecycle: constructor, `enter`/`frameSetup`/`leave` (prologue/epilogue), `newBasicBlock`, the runtime-call plumbing (`callRuntime*`), slow-path/catch-table/RO-data emission, `initHCLazyIDMayAlloc`, `addToRuntime`. |
 | `lib/VM/JIT/arm64/JitEmitter-regalloc.cpp` | The register-file engine: `getOrAllocFRIn*`, `movHW*`, sync/spill/free. |
 | `lib/VM/JIT/arm64/JitEmitter-internal.{h,cpp}` | Shared emission helpers: the `emit_sh_ljs_*` tag/encoding helpers, `emit_load_from_base_offset`, the SHV decoder, `EMIT_RUNTIME_CALL*` macros (`.h`); cold non-member helpers, object/environment init, asmjit error handler and logger (`.cpp`). |
-| `lib/VM/JIT/arm64/JitEmitter-{alloc,const,object,property,call,env,array,arith,control}.cpp` | The per-instruction emitters, split by topic: young-gen allocation; constant materialization; object construction; the property protocol (incl. `GetByIdImpl`); JS calls; environments/closures; arrays/iterators/arguments; arithmetic and comparisons; control flow, switches and throws. See `doc/specs/2026-08-18-jitemitter-split-design.md` for the split rationale and boundaries. |
+| `lib/VM/JIT/arm64/JitEmitter-{alloc,const,object,property,call,env,array,arith,control}.cpp` | The per-instruction emitters, split by topic: young-gen allocation; constant materialization; object construction; the property protocol (incl. `GetByIdImpl`); JS calls; environments/closures; arrays/iterators/arguments; arithmetic and comparisons; control flow, switches and throws. See `doc/superpowers/specs/2026-08-18-jitemitter-split-design.md` for the split rationale and boundaries. |
 | `lib/VM/JIT/arm64/JitImpl.h` | `JITContext::Impl`: the asmjit `JitRuntime` (owns executable memory), HC lazy-ID counter, and `usedHCs` root array. |
+| `include/hermes/VM/JIT/x86-64/JIT.h`, `lib/VM/JIT/x86-64/*` | The x86-64 backend: 16 files under `lib/VM/JIT/x86-64/` (`JIT.cpp`, `JitEmitter.{h,cpp}`, `JitEmitter-regalloc.cpp`, `JitEmitter-internal.{h,cpp}`, `JitEmitter-{alloc,arith,array,call,const,control,env,object,property}.cpp`, `JitImpl.h`) plus the public header, mirroring the arm64 rows above file-for-file with the same class/method surface. See "The x86-64 backend" below for the arch-specific design (register budget, condition-code mapping, tag encoding, and so on). |
 | `lib/VM/JIT/JitHandlers.{h,cpp}` | C++ helpers callable from emitted code that are JIT-specific (the generic ones are the `_sh_ljs_*` functions from the SH runtime). Arch-independent. |
 | `include/hermes/VM/JIT/JitCounters.h` | The `JIT_COUNTERS` list and `JitCounter` enum. The counter array is ABI between the VM and emitted code; arch-independent. |
 | `lib/VM/JIT/DiscoverBB.cpp` | Scans bytecode to find basic-block boundaries (branch targets, fallthroughs after branches, Catch, switch tables, exception handler targets). Arch-independent. |
@@ -489,7 +490,7 @@ emulation catches logic divergence but not the memory bugs an ASan build on
 real hardware would. arm64 macOS remains a supported (and much faster)
 JIT host — see the Config.h row in the source layout table.
 
-## x86-64 porting notes
+## The x86-64 backend
 
 **Milestone 5 status: the backend reaches arm64's full opcode surface.**
 `JitEmitter-stubs.cpp` -- the file that once held every emitter that
@@ -572,22 +573,71 @@ Inc/Dec/Negate, ToNumber/ToNumeric, all comparisons/branches, BitAnd/Or/
 Xor/shifts/BitNot, ToInt32/ToUint32, type asserts, environment and
 function field access.
 
-**What milestone 6 holds.** `test/jit/*.js` (the arm64-authored suite) is
-no longer gated to arm64: `test/jit/lit.local.cfg` now skips the
-directory only when no `jit-arch-*` feature exists at all, and the audit
-that came with the un-gating found no file needing an architecture gate.
-Its 48 files now run on x86-64 alongside the 22 x86-64-specific tests
-under `test/jit/x86-64/` (one of the 48 is still `!slow_debug`-gated and
-one is the `XFAIL` repro above). Full opcode coverage still is not the
-same as being production-ready, though. There are no x86-64 golden dumps
-analogous to arm64's `cmake-build-arm64/jit-baseline.dump`, no CI recipe
-wiring the three heap-value-mode builds into a regular run, and no
-performance pass at all -- every design choice so far has been "does it
-compile and match", never "is it fast". Milestone 6 is where those close:
-golden-dump capture and `jit-diff.sh`-based regression checking for
-x86-64, a CI recipe that runs the three-mode matrix on every change, and
-a first perf sanity pass. Counter support (`-Xjit-emit-counters`,
-NumCall/NumCallSlow) already works and needs no further milestone-6 work.
+**Status: the x86-64 port is complete, per the spec's v1 definition**
+(`doc/superpowers/specs/2026-08-23-x86-64-jit-design.md`, "Scope and
+goals": full `test/jit` plus the differential stress matrix passing
+natively under ASan, in both heap modes, with perf "sane"). All 6
+bring-up milestones are done:
+
+- `test/jit/*.js` (the arm64-authored suite) is no longer gated to
+  arm64: `test/jit/lit.local.cfg` skips the directory only when no
+  `jit-arch-*` feature exists at all, and the audit that came with the
+  un-gating found no file needing an architecture gate. Its 49 files
+  (one still `!slow_debug`-gated, one the `XFAIL` repro above) run
+  green on x86-64 alongside the 23 x86-64-specific tests under
+  `test/jit/x86-64/` -- natively, under ASan+Debug, in all three
+  heap-value modes (HV64, HV32, BOXED), and again on the Release build
+  with asserts compiled out. The Release run's unsupported file is a
+  *different* one, though: `slow_debug`/`debug_options` flip with
+  build type, so `large_literal_obj.js` runs there and
+  `getbyid-fast.js` (`REQUIRES: debug_options`) is skipped instead --
+  same 68/1/1 count, not the same membership (see `doc/JITTesting.md`,
+  "Release-build validation").
+- The `aarch64/jit-stress.js` differential matrix -- interpreter vs.
+  `-Xjit=force`, with and without `-Xjit-emit-type-asserts`, at both
+  `-O` and `-O0` -- is byte-identical on every config exercised,
+  including the Release tree (the first NDEBUG x86-64 run in this
+  port; no assert-side-effect-dependent divergence found).
+- A first perf sanity pass on the Release build clears the spec's "must
+  not lose to the interpreter on hot loops" bar on all three sanity
+  workloads: 2.25x (numeric loop), 1.61x (scaled `stress.js` shapes),
+  1.45x (property/IC-heavy loop). No tuning attempted; that is
+  post-v1 work per the spec.
+- arm64 stayed byte-identical throughout every milestone-6 change: the
+  self-compare and stored-baseline-diff gates were re-run after each
+  x86-64-only commit and after the final corpus growth (see "x86-64
+  dump baseline" below), and every diff traces to test-corpus additions,
+  never to a changed instruction in an existing function.
+- x86-64 has its own dump-baseline and `jit-diff.sh`-based regression
+  workflow (below), a documented five-configuration CI-shaped matrix
+  with the gates each one carries, and the perf sanity pass above.
+  Counter support (`-Xjit-emit-counters`, NumCall/NumCallSlow) has
+  worked since it landed and needed no milestone-6 changes.
+
+Full commands and gate-by-gate evidence are in `doc/JITTesting.md` (see
+the pointer paragraph at the end of this section); the CI-recipes
+paragraph there also documents the release-build/perf run in detail.
+
+**Open findings, maintainer-bound.** None of these were fixed in this
+branch -- each is either cross-backend or arm64-only, so the fix belongs
+with whoever owns arm64's byte-identical contract. All three are
+recorded in full, with reproductions, in
+`doc/superpowers/specs/2026-08-23-x86-64-jit-design.md`'s "Delivered"
+section:
+
+1. The try-region destination-sync bug above (both backends,
+   `test/jit/try-catch-dest-reg.js`).
+2. **arm64 reify-arguments stale-type hole**: after
+   `reifyArgumentsImpl`, arm64 never widens the lazy-arguments FR's
+   recorded type past its pre-reification `FRType::OtherNonPtr`, so a
+   later type-sensitive fast path can trust a stale "non-pointer"
+   claim. x86-64 hit this under `-Xjit-emit-type-asserts` and fixed it
+   locally (`lib/VM/JIT/x86-64/JitEmitter-array.cpp`,
+   `reifyArgumentsImpl`); arm64 was left as-is to keep its emission
+   byte-identical to its stored baseline.
+3. A static_assert message-form inconsistency across both backends'
+   `JitEmitter-*` files (some bare-condition, some message-form, no
+   pattern to which) -- a style sweep, not a correctness issue.
 
 **x86-64 dump baseline and the byte-identical-refactor workflow.**
 `utils/jit/jit-dump.sh` / `jit-diff.sh` now cover x86-64 with no
@@ -607,6 +657,15 @@ ADDR/g` rule already collapsed all of them; the only addition was
 `/^\.dq /d`, dropping the RO_DATA payload listing exactly as `/^\.xword /d`
 does on arm64 (the `[RO_DATA]`/`[RO_DATA+N]` references in code carry no
 embedded hex, so only the listing needed it).
+
+That trailing rule is width-only, not origin-aware, which is a real
+limitation and not just a theoretical one: a `mov reg, imm64` whose
+immediate is a genuine 64-bit constant -- a NaN-boxing tag mask, an
+IEEE 754 double's bit pattern -- prints at 8+ hex digits just like an
+ASLR-moved pointer, and gets collapsed to `ADDR` the same way. A change
+to such a constant is therefore invisible on the instruction line; it
+surfaces only as a comment-line diff, which `--comments-ok` suppresses.
+See `utils/jit/README.md`'s "Limitations" section for the full writeup.
 
 The workflow mirrors arm64's exactly:
 
