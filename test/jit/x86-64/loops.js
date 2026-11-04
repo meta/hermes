@@ -5,15 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
 
 // Loops and branches that stay in machine code: every conditional branch
 // below resolves inside the compiled function, with no return to the
 // interpreter. The first RUN line is the real check -- interpreter and JIT
-// must print the same thing. The second RUN line makes sure every function
+// must print the same thing, and carries -Xjit-crash-on-error since nothing
+// here declines (measured). The second RUN line makes sure every function
 // below was in fact compiled, so the differential cannot degrade into
 // comparing the interpreter against itself.
 //

@@ -33,6 +33,16 @@
 // `%hermes %s` process, which has no JIT at all. Nothing in this file needs
 // an interpreted reader any more, and nothing here is written to avoid one.
 //
+// The literals are all-constant on purpose, but not because a computed
+// value would fail to compile any more. A literal with a computed value
+// lowers to NewObjectWithBuffer followed by PutOwnBySlotIdx for that value,
+// and PutOwnBySlotIdx landed with props.js's `nested`; confirmed separately
+// that a literal with a parameter-derived value, a nested literal
+// ({x: {y: 1}}), and an array literal with a computed element all compile
+// and match the interpreter now. This file keeps its literals all-constant
+// anyway, since that is what isolates the buffer-fill path under test from
+// the by-slot-idx store path, which has its own coverage in props.js.
+//
 // EVERY FUNCTION HERE COMPILES AT BOTH -O AND -O0, so the CHECK and CHECK0
 // pin sets are identical and the differential RUN lines carry
 // -Xjit-crash-on-error: a decline is a regression and must abort rather than
@@ -164,8 +174,10 @@ function protoBuf(p) {
   return {__proto__: p, a: 1, b: 2};
 }
 
-// InstanceOf. The constructor arrives as a parameter, because naming a
-// global would need GetGlobalObject, which still declines.
+// InstanceOf. The constructor arrives as a parameter rather than a named
+// global; GetGlobalObject itself compiles now (globals.js covers it in
+// isolation), but this file's point is InstanceOf's three cases, not
+// global access, so the parameter form stays.
 function isa(v, C) {
   return v instanceof C;
 }

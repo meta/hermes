@@ -5,17 +5,20 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes -fstatic-builtins %s > %t.int && %hermes -fstatic-builtins -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes -fstatic-builtins %s > %t.int && %hermes -fstatic-builtins -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes -fstatic-builtins %s > %t.int && %hermes -fstatic-builtins -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes -fstatic-builtins %s > %t.int && %hermes -fstatic-builtins -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
 // RUN: %hermes -fstatic-builtins -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
 
 // CallBuiltin, which is the one call shape that needs no callee value at
 // all: -fstatic-builtins turns `Math.floor(x)` into a single opcode that
 // names the builtin by index, so a compiled function can reach the standard
-// library without any of the property access that still declines. Both sides
-// of the differential pass -fstatic-builtins, since without it these calls
-// are ordinary property loads and none of these functions would compile.
+// library without any property access at all. Both sides of the
+// differential pass -fstatic-builtins so that CallBuiltin is the opcode
+// actually under test; without it these calls lower to ordinary property
+// loads instead, which compile too now (confirmed separately) but exercise
+// props.js's opcodes rather than this file's. Both RUN lines carry
+// -Xjit-crash-on-error: nothing here declines (measured).
 //
 // The four bodies below use exactly these opcodes: LoadParam, Mov,
 // CallBuiltin, AddN, DivN, Ret, LoadConstZero, LoadConstUInt8, Less,

@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force %s > %t.jit0 && diff %t.int0 %t.jit0
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // RUN: %hermes -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // RUN: %hermes -Xjit=force -Xjit-emit-counters %s 2>&1 >/dev/null | %FileCheck --check-prefix=COUNT %s
@@ -28,22 +28,31 @@
 // keeps as a real call. The last one checks that the emitted code really
 // took the call path, by counting the calls it made.
 //
-// Nothing here reaches a global binding from inside a compiled function:
-// GetGlobalObject and the property-access opcodes still decline, so a
-// function that names a global (`print`, or a sibling function declared at
-// the top level) would not compile at all. Every callee therefore arrives
-// either as a parameter or through the enclosing function's environment,
-// which is also why the recursive functions are nested inside factories.
-// This is the one deliberate divergence from the shapes the plan sketched.
+// Nothing here reaches a global binding from inside a compiled function, but
+// that is no longer a compile-time necessity -- GetGlobalObject and the
+// property-access opcodes both compile now (globals.js and props.js cover
+// them). Every callee here still arrives either as a parameter or through
+// the enclosing function's environment, which is what makes the recursive
+// functions nested inside factories; that shape is kept because it is what
+// isolates the call-arity opcodes under test from property access, not
+// because the alternative would fail to compile.
 //
-// Two paths in the emitter are NOT covered here:
-//   - Calling a non-callable, which throws. Exceptions are a later
-//     milestone; the throwing slow path is emitted but nothing reaches it.
+// All four differential RUN lines carry -Xjit-crash-on-error, because
+// nothing here declines in any of them (measured).
+//
+// Two paths in the emitter are not covered by any lit test:
+//   - Calling a non-callable, which throws: confirmed separately (a
+//     try/catch around a call to a non-function value) to compile and match
+//     the interpreter now that exceptions have landed.
 //   - CallWithNewTargetLong (a register arg count), which comes from spread
-//     and apply, i.e. from arrays -- still declined.
-// GetBuiltinClosure is likewise emitted but unreachable: the only bytecode
-// that produces it belongs to async/iterator/eval lowerings whose functions
-// decline for other reasons.
+//     and apply: confirmed separately (`f(...arr)`, `new C(...arr)`,
+//     `f.apply(null, arr)`) to compile and match.
+// GetBuiltinClosure is likewise not covered by a lit test: it is reachable
+// from plain JS through a direct `eval(...)` call, which landed in
+// milestone 5; checked by hand to compile and match. The async/iterator lowerings
+// that also produce it remain out of reach -- async through the permanent
+// AsyncBreakCheck decline, iterators through opcodes this file does not
+// build.
 
 // Direct recursion. fib refers to itself through makeFib's environment, so
 // the self-call is a real call in compiled code rather than an inlined one.

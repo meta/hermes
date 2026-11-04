@@ -49,9 +49,11 @@
 //     off-by-one or a reversal shows up as the wrong catch running.
 //   - the SHJmpBuf ADDRESS: it lives at rsp + 0, which longjmp restores to
 //     its setjmp-time value no matter what the throwing code was doing with
-//     rsp. That placement also makes it 16-byte aligned unconditionally
-//     (see frameSetup()'s layout comment), which is what jmp_buf requires on
-//     x86-64 and which arm64 never had to arrange.
+//     rsp. That placement also makes it 16-byte aligned unconditionally (see
+//     frameSetup()'s layout comment) -- more than jmp_buf actually requires
+//     on x86-64 (alignof(jmp_buf) == 8), but free headroom that costs
+//     nothing to keep, and the alignment arm64 gets for free from its
+//     architectural sp.
 //   - the saved SHLocals: the JIT does not push an SHLocals of its own, so
 //     the prologue stashes the runtime's on entry and the catch table hands
 //     it to _sh_catch_no_pop, which is what unwinds the handle scopes and
@@ -70,8 +72,9 @@
 // sufficient.
 //
 // THE THROWER IS NOT ALWAYS COMPILED. Under -Xjit=force every function is
-// compiled, so all six differential RUN lines above catch a throw raised by
-// another compiled frame. The fifth RUN line covers the other direction:
+// compiled, so all four -Xjit=force differential RUN lines above catch a
+// throw raised by another compiled frame. The fifth RUN line covers the
+// other direction:
 // in threshold mode `hotCatcher` is called forty-one times and compiles,
 // while `coldThrower` is called exactly once and never does, so a throw
 // raised by the INTERPRETER unwinds into a compiled frame's setjmp. The
@@ -369,18 +372,18 @@ function build(mode) {
   try {
     return new Derived(mode).seen;
   } catch (e) {
-    return e.name;
+    return e.message;
   }
 }
 say(build("ok") + "|" + build("early") + "|" + build("twice"));
 // CHECK: JIT successfully compiled FunctionID 17, 'build'
 // CHECK: JIT successfully compiled FunctionID 21, 'Derived'
 // CHECK: JIT successfully compiled FunctionID 20, 'Base'
-// CHECK-NEXT: ok|ReferenceError|ReferenceError
+// CHECK-NEXT: ok|accessing an uninitialized variable|Cannot call super constructor twice
 // CHECK0: JIT successfully compiled FunctionID 17, 'build'
 // CHECK0: JIT successfully compiled FunctionID 21, 'Derived'
 // CHECK0: JIT successfully compiled FunctionID 20, 'Base'
-// CHECK0-NEXT: ok|ReferenceError|ReferenceError
+// CHECK0-NEXT: ok|accessing an uninitialized variable|Cannot call super constructor twice
 
 // The interpreted-thrower case, which only the threshold RUN line reaches.
 // hotCatcher runs its no-call branch forty times, which is far past the
@@ -407,5 +410,23 @@ say(hot + "|" + hotCatcher(5));
 // CHECK0: JIT successfully compiled FunctionID 19, 'hotCatcher'
 // CHECK0: JIT successfully compiled FunctionID 18, 'coldThrower'
 // CHECK0-NEXT: 0|cold 5
+// COLD: JIT successfully compiled FunctionID 0, 'global'
+// COLD: JIT successfully compiled FunctionID 6, 'loopCatch'
+// COLD: JIT successfully compiled FunctionID 2, 'boom'
+// COLD: JIT successfully compiled FunctionID 1, 'say'
+// COLD: JIT successfully compiled FunctionID 8, 'nested'
+// COLD: JIT successfully compiled FunctionID 9, 'twoTries'
+// COLD: JIT successfully compiled FunctionID 22, ''
+// COLD: JIT successfully compiled FunctionID 16, 'churn'
+// COLD: JIT successfully compiled FunctionID 17, 'build'
+// COLD: JIT successfully compiled FunctionID 21, 'Derived'
+// COLD: JIT successfully compiled FunctionID 20, 'Base'
 // COLD: JIT successfully compiled FunctionID 19, 'hotCatcher'
 // COLD-NOT: FunctionID 18, 'coldThrower'
+// The chain above pins, in order, every function expected to compile in
+// threshold mode, so a function dropping out or the order changing fails
+// the test. Plain COLD lines skip non-matching lines, so an extra function
+// crossing the threshold is not caught. The chain must end at hotCatcher,
+// which is what COLD-NOT scans after: hotCatcher drives coldThrower's
+// calls, so its "successfully compiled" line would precede coldThrower's in
+// dump order if coldThrower ever compiled.

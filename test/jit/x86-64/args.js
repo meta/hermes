@@ -143,6 +143,16 @@ function noArgs() {
 
 // Reify without ever reading an element, so the ReifyArguments fast path
 // (already an object) is reached on the second call within one frame.
+//
+// The `a === b` comparison is LOAD-BEARING: it is what selects
+// strictEqualImpl's raw-bit tier, and that tier is exactly what the stale
+// FRType::OtherNonPtr claim on the lazy-arguments register used to license
+// incorrectly (see the fix in reifyArgumentsImpl's frUpdateType call in
+// JitEmitter-array.cpp). This is the only regression test that flows a
+// reified `arguments` into a type-sensitive emitter, and that miscompile is
+// still live on arm64 (see the comment at that frUpdateType call site).
+// Replacing `a === b` with something like a.length comparison would still
+// pass but would silently delete this coverage -- keep the === here.
 function reifyTwice() {
   var a = arguments;
   var b = arguments;

@@ -1088,9 +1088,12 @@ void Emitter::emitCatchTable(
   //
   // The SHJmpBuf sits at rsp + 0, and frameSetup() puts the alignment
   // padding ABOVE the exception area rather than below it, so the SHJmpBuf
-  // is 16-byte aligned whatever the parity of the pushes -- the property
-  // _sh_setjmp's jmp_buf needs, and the one arm64 gets for free because its
-  // sp is architecturally 16-byte aligned.
+  // is 16-byte aligned whatever the parity of the pushes. That is more than
+  // _sh_setjmp's jmp_buf actually requires on x86-64 (alignof(jmp_buf) ==
+  // 8) -- it is free headroom, not a correctness requirement -- but it is
+  // also the alignment arm64 gets for free because its sp is
+  // architecturally 16-byte aligned, so keeping it costs nothing and keeps
+  // the two backends' invariants easy to compare.
 
   // Find the catch target for the exception.
   a.mov(x86::rdi, xRuntime);

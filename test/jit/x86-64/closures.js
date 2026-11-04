@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force %s > %t.jit0 && diff %t.int0 %t.jit0
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // RUN: %hermes -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // REQUIRES: jit
@@ -21,8 +21,12 @@
 // functions under test were in fact compiled, so the differential cannot
 // degrade into comparing the interpreter against itself.
 //
-// Restricted to opcodes the x86-64 backend compiles today: no array or object
-// literals and no string operations, since those still decline.
+// Restricted to plain closures and environments on purpose, without array or
+// object literals or string operations -- not because those decline (they
+// all compile now; arrays.js, objects.js and strings.js cover them), but to
+// keep this file's shapes isolated to the one opcode family it is testing.
+// Every differential RUN line above carries -Xjit-crash-on-error: nothing
+// here declines, in either optimization level (measured).
 //
 // The -O0 RUN lines are here for coverage, not for the flag. At -O the scope
 // optimizer merges every scope in this file into the function's own, so the
@@ -115,8 +119,9 @@ function nest(x) {
 // some of them still live. Without this the whole file fits in one young
 // generation and the GC never looks at what the emitted code wrote: an
 // environment whose cell header, size field or parent link is wrong is
-// invisible until something scans it. churn itself calls mkCounter, so it
-// declines; the environments are still built by compiled code.
+// invisible until something scans it. churn itself compiles too (see its
+// pin below), so both the environments it builds by calling mkCounter and
+// its own loop body run as emitted code.
 function churn(iters) {
   var keep = null;
   var acc = 0;

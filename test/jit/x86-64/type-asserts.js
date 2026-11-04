@@ -5,24 +5,26 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
 
 // -Xjit-emit-type-asserts on x86-64: every emitTypeAssert/emitTypeAssertFR
 // call site ported for arithmetic, comparisons, branches and bit ops, plus
 // the Class C global-register-write checks at instruction boundaries. The
-// first RUN line establishes the baseline without the flag; the second
+// first RUN line establishes the baseline without the flag, and carries
+// -Xjit-crash-on-error since nothing here declines (measured); the second
 // re-runs with it and must print byte-identical output -- a passing check
 // is silent, so a miscompiled check would show up only as a diff or a
 // crash. The third RUN line makes sure every function below was in fact
 // compiled, so the differential can never silently degrade into comparing
 // the interpreter against itself.
 //
-// Restricted to opcodes the x86-64 backend compiles today: arithmetic,
-// comparisons, branches and bit ops. No property access, no calls inside
-// the compiled functions, no array literals.
+// Restricted to arithmetic, comparisons, branches and bit ops on purpose --
+// not because property access, calls or array literals fail to compile
+// (they all do now), but to keep this file's shapes isolated to the type
+// assert sites it is exercising.
 
 function addNumbers(a, b) {
   var sum = 0;

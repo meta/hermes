@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
 
@@ -13,7 +13,8 @@
 // int conversions (ToInt32/ToUint32). As in arith.js, the first RUN line is
 // the real check -- interpreter and JIT must print the same thing -- and the
 // second only pins that the functions under test were compiled, so the
-// differential cannot degrade into interpreter-vs-interpreter.
+// differential cannot degrade into interpreter-vs-interpreter. The first RUN
+// line carries -Xjit-crash-on-error: nothing here declines (measured).
 //
 // One value per print, and the operands always arrive as parameters: a
 // literal `2147483647 | 0` would be folded at compile time and never reach

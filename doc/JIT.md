@@ -490,15 +490,71 @@ JIT host — see the Config.h row in the source layout table.
 
 ## x86-64 porting notes
 
-Milestone 4 status: The x86-64 backend fully compiles object and array
-literals via inline heap buffers, the three-tier property inline-cache
-architecture with HiddenClass lazy-ID pinning (object specialization,
-parent specialization, generic tier), globals (now compiling), and the
-fast-array family under -typed, in all three heap-value modes (HV64,
-HV32, BOXED; see the build matrix below). Approximate coverage: ~270 of
-497 sweep files compile at least one function. All three modes run the
-same test/jit/x86-64 suite (15 tests); the matrix is gated via separate
-CMake trees, and hvmodes.js exercises conditional code paths.
+**Milestone 5 status: the backend reaches arm64's full opcode surface.**
+`JitEmitter-stubs.cpp` -- the file that once held every emitter that
+declined outright -- is gone; there is no x86-64-specific "unsupported
+opcode" list left to enumerate. The one permanent decline is
+`AsyncBreakCheck`, and it is not an x86-64 gap at all: `EMIT_UNIMPLEMENTED
+(AsyncBreakCheck)` lives in the architecture-independent driver
+(`JitCompiler.cpp`) and declines identically on both backends. Everything
+else -- exceptions/try/catch/finally with the per-function catch table,
+switches (dense uint jump table and string), iterators/for-of, arguments
+(reified and not), for-in, strings (AddS, AddEmptyString, LoadConstString,
+LoadConstBigInt), typeof/typeOfIs/jmpBuiltinIs, direct eval -- compiles,
+in all three heap-value modes.
+
+The headline gate is `test/jit/x86-64/stress.js`, a standing lit copy of
+`aarch64/jit-stress.js` (the differential soak test the plan requires):
+one program that touches arithmetic, strings, property ICs with shape
+transitions, object/array literals, closures/recursion, exceptions across
+frames, switches, classes/super/getters, generators, destructuring,
+for-of/for-in, `arguments`, higher-order builtin callbacks and a JSON
+round-trip. Under `-Xjit=force -Xjit-crash-on-error`, at both -O and -O0,
+with and without `-Xjit-emit-type-asserts`, on HV64, HV32 and BOXED alike,
+every function in it compiles and the output is byte-identical to the
+interpreter -- zero declines, ASan clean. That property, not any single
+opcode's test, is what "opcode-complete" means for this backend now.
+
+**Open maintainer question: destination-FR exclusion from pre-call syncs in
+try regions.** Both backends' `syncAllFRTempExcept` calls before a
+potentially-throwing call inside a try exclude that instruction's own
+destination FR from the sync (`frRes != ... ? frRes : FR()`, throughout
+`JitEmitter-*.cpp`). Whether a *throwing non-call* instruction can have its
+destination register still live at the catch handler depends on whether
+register allocation's liveness computation treats exceptional edges as
+uses -- if it does not, the exclusion could in principle be unsound.
+`test/jit/x86-64/exceptions.js` does not construct a case exercising this
+shape, so it is flagged here for maintainer confirmation rather than closed
+by a test.
+
+The 497-file differential sweep over `test/hermes/*.js` (plain `hermes`
+vs `-Xjit=force`, same binary) went from ~270 files compiling at least one
+function in milestone 4 to 480 in milestone 5, run on all three
+heap-value modes (HV64: 480; HV32: 479, one file crossed the sweep's
+10-second interpreter timeout under this mode's extra decode overhead;
+BOXED: 480). Of 497 files, the same 6 differ between the interpreter and
+the JIT run in every mode, and all 6 are explained and not JIT bugs: 3
+are nondeterministic even between two plain interpreter runs with no JIT
+involved at all (random array-literal contents, a wall-clock timestamp,
+a property-limit count that depends on incidental memory layout), and 3
+are deliberate stack-exhaustion tests (`stack-overflow.js` and friends)
+where the JIT recurses measurably deeper before hitting the
+native-stack-overflow check than the interpreter does, because a
+compiled JS frame uses less native stack per call than an interpreted
+one -- a stable capacity difference between the two execution modes,
+verified by running each side several times and confirming it lands on
+the same value (or, for one file, oscillates between two ASLR-adjacent
+values) every time, never anywhere near the other side's number. Five
+further files time out under the sweep's plain invocation in most modes;
+all five have their own lit `RUN:` line with flags the sweep does not
+pass (`-time-limit=`, `-gc-max-heap=`, `-test262`, `-lazy`) and are
+unrelated to JIT correctness.
+
+Milestone 4 added object and array literals via inline heap buffers, the
+three-tier property inline-cache architecture with HiddenClass lazy-ID
+pinning (object specialization, parent specialization, generic tier),
+globals, and the fast-array family under -typed, in all three heap-value
+modes (HV64, HV32, BOXED; see the build matrix below).
 
 Milestone 3 adds arithmetic, comparisons, branches, bit operations, type
 assertions, young-gen bump allocation, environments, closures, calls
@@ -509,13 +565,22 @@ Inc/Dec/Negate, ToNumber/ToNumeric, all comparisons/branches, BitAnd/Or/
 Xor/shifts/BitNot, ToInt32/ToUint32, type asserts, environment and
 function field access.
 
-Still declining (milestone 5+): exceptions/try, switches, iterators,
-arguments, for-in, strings (AddS, AddEmptyString, LoadConstString,
-LoadConstBigInt, CreateRegExp), typeof (TypeOf, TypeOfIs, JmpTypeOfIs,
-JmpBuiltinIs), generator resume (body compiles; no GeneratorResume here),
-eval, debugger, ToPropertyKey, ProfilePoint, Unreachable. Counter:
--Xjit-emit-counters (NumCall/NumCallSlow) works. test/jit gated to arm64
-during bring-up. To build:
+**What milestone 6 holds.** Reaching full opcode coverage is not the same
+as being production-ready: `test/jit/*.js` (the arm64-authored suite) is
+still gated to arm64 by `test/jit/lit.local.cfg` and has not been
+un-gated for x86-64 -- the x86-64-specific tests under `test/jit/x86-64/`
+(22 tests) are a parallel, independently written suite, not a replacement
+for running the original one on this backend. There are no x86-64 golden
+dumps analogous to arm64's `cmake-build-arm64/jit-baseline.dump`, no CI
+recipe wiring the three heap-value-mode builds into a regular run, and no
+performance pass at all -- every design choice so far has been "does it
+compile and match", never "is it fast". Milestone 6 is where those close:
+golden-dump capture and `jit-diff.sh`-based regression checking for
+x86-64, un-gating `test/jit` (and reconciling whatever arm64-only
+assumptions surface when the same files run against this backend), a CI
+recipe that runs the three-mode matrix on every change, and a first perf
+sanity pass. Counter support (`-Xjit-emit-counters`, NumCall/NumCallSlow)
+already works and needs no further milestone-6 work. To build:
 
   cmake -B cmake-build-x86jit -G Ninja -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \

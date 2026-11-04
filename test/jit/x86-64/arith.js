@@ -5,21 +5,24 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
 
 // Number arithmetic: Add/Sub/Mul/Div and their N variants, Mod, Inc/Dec,
 // Negate, ToNumber and ToNumeric. The first RUN line is the real check --
 // the same program run by the interpreter and by the JIT must print the
-// same thing. The second RUN line only makes sure the functions under test
+// same thing, and carries -Xjit-crash-on-error since nothing here declines
+// (measured). The second RUN line only makes sure the functions under test
 // were in fact compiled, so the differential cannot degrade into comparing
 // the interpreter against itself.
 //
-// Straight-line bodies only: branches and comparisons are not implemented
-// yet, and neither are array literals, so each value is printed by its own
-// call rather than collected into an array.
+// Straight-line bodies only, so each value is printed by its own call
+// rather than collected into an array -- not because branches, comparisons
+// or array literals fail to compile (they all do now; see loops.js, cmp.js
+// and arrays.js), but to keep this file's shapes isolated to the
+// arithmetic opcodes it is testing.
 //
 // Mixed-type operands (true/null) take the runtime slow call, which is a
 // call inside the compiled function, not a reason to decline it.
