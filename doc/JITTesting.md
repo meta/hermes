@@ -76,18 +76,20 @@ the per-config table below can just list which ones apply.
 
 - **G1 — `test/jit` + `test/jit/x86-64`** (`LIT_FILTER="jit/"` under
   `check-hermes`): the behavioral/compile-status suite. On x86-64,
-  71 tests: 69 pass, 1 `XFAIL` (`try-catch-dest-reg.js`, the confirmed
-  destination-FR-exclusion bug — see `doc/JIT.md`), 1 unsupported
-  (`large_literal_obj.js`, `!slow_debug`). On arm64 the same directory
-  yields 47 pass / 1 `XFAIL` / 23 unsupported (the 22 `x86-64/`-only
-  files plus the same `!slow_debug` skip). The +1 pass on both
-  architectures relative to earlier counts is
-  `test/jit/reify-arguments-type.js`, the shared reifyArguments
-  stale-type regression test (`doc/JIT.md` "Open findings" item 2).
+  73 tests: 72 pass, 1 unsupported (`large_literal_obj.js`,
+  `!slow_debug`), and no `XFAIL` anywhere. On arm64 the same directory
+  yields 49 pass / 24 unsupported (the 23 `x86-64/`-only files plus the
+  same `!slow_debug` skip). Two changes account for the +2 passes on
+  both architectures relative to the milestone-6 counts:
+  `test/jit/reify-arguments-type.js` joined the suite (the shared
+  reifyArguments stale-type regression test, `doc/JIT.md` findings item
+  2), and `try-catch-dest-reg.js` stopped being `XFAIL` — the
+  try-region destination-sync bug it recorded is fixed, so it is now a
+  plain passing regression test (findings item 1).
 
-  That 69/1/1 is for configs 2-4 (ASan+Debug, where `slow_debug` and
+  That 72/1 is for configs 2-4 (ASan+Debug, where `slow_debug` and
   `debug_options` are both `ON`). Config 5 (Release) also lands on
-  69/1/1, but it is a numerical coincidence over a *different*
+  72/1, but it is a numerical coincidence over a *different*
   membership: `slow_debug` and `debug_options` both flip with build
   type (the `slow_debug`/`debug_options` lit params in `CMakeLists.txt`,
   `IF:$<CONFIG:Debug>`), so under
@@ -151,11 +153,11 @@ test folding most of G1/G4 into one script (see `aarch64/README.md`).
 
 | Config | G1 | G2 | G3 | G4 | G5 | G6 |
 |---|---|---|---|---|---|---|
-| 1. arm64-qemu | yes (47/1/23) | yes (see README) | yes (own baseline) | yes (`qemu-sanity.sh`) | no | n/a (qemu timings are meaningless — see README "Limitations") |
-| 2. x86-64 HV64 ASan | yes (69/1/1) | yes (4332 tests: 4174 pass / 7 xfail / 151 unsupported) | yes (own baseline) | yes | yes (480/497) | n/a (ASan skews timings) |
-| 3. x86-64 HV32 ASan | yes (69/1/1) | not run separately (G1 + G4 + G5 are the gate for this config; G2 is HV64's job) | n/a (only HV64 has a stored baseline — the emitted code differs by design across modes, see `doc/JIT.md`) | yes | yes (479/497 — one file crosses the sweep's 10s timeout under this mode's extra decode) | n/a |
-| 4. x86-64 BOXED ASan | yes (69/1/1) | not run separately | n/a | yes | yes (480/497) | n/a |
-| 5. x86-64 Release | yes (69/1/1, `getbyid-fast.js` unsupported instead of `large_literal_obj.js` — see G1 above) | not run (not requested; G1 is the release-specific gate — see below) | not run this task (no release baseline captured; G3's byte-identical-refactor workflow is a dev-loop tool for the ASan tree, not a release CI gate) | yes | not run (no emitter change to re-verify; G4 already covers behavior) | **yes — new this milestone, see below** |
+| 1. arm64-qemu | yes (49/24) | yes (see README) | yes (own baseline) | yes (`qemu-sanity.sh`) | no | n/a (qemu timings are meaningless — see README "Limitations") |
+| 2. x86-64 HV64 ASan | yes (72/1) | yes (4332 tests: 4174 pass / 7 xfail / 151 unsupported) | yes (own baseline) | yes | yes (480/497) | n/a (ASan skews timings) |
+| 3. x86-64 HV32 ASan | yes (72/1) | not run separately (G1 + G4 + G5 are the gate for this config; G2 is HV64's job) | n/a (only HV64 has a stored baseline — the emitted code differs by design across modes, see `doc/JIT.md`) | yes | yes (479/497 — one file crosses the sweep's 10s timeout under this mode's extra decode) | n/a |
+| 4. x86-64 BOXED ASan | yes (72/1) | not run separately | n/a | yes | yes (480/497) | n/a |
+| 5. x86-64 Release | yes (72/1, `getbyid-fast.js` unsupported instead of `large_literal_obj.js` — see G1 above) | not run (not requested; G1 is the release-specific gate — see below) | not run this task (no release baseline captured; G3's byte-identical-refactor workflow is a dev-loop tool for the ASan tree, not a release CI gate) | yes | not run (no emitter change to re-verify; G4 already covers behavior) | **yes — new this milestone, see below** |
 
 Why G2 is HV64-only: it is a whole-repository regression check
 unrelated to heap-value-mode-specific code paths; running it three times
@@ -232,21 +234,21 @@ therefore **not** exercised, let alone validated, under NDEBUG by that
 run — no NDEBUG-only failure among the tests that ran.
 
 Re-run 2026-08-26 after `test/jit/reify-arguments-type.js` joined the
-suite (the arm64 reifyArguments stale-type fix, `doc/JIT.md` "Open
-findings" item 2):
+suite (the arm64 reifyArguments stale-type fix, `doc/JIT.md` findings
+item 2) and after the try-region destination-sync fix dropped
+`try-catch-dest-reg.js`'s `XFAIL` (findings item 1):
 
 ```
 LIT_FILTER="jit/" check-hermes, cmake-build-x86jit-rel:
 -- Testing: 71 of 4292 tests, 16 threads --
-  Expected Passes    : 69
-  Expected Failures  : 1
+  Expected Passes    : 70
   Unsupported Tests  : 1
 ```
 
-Current numbers are 69/1/1 over 71 files, one more pass than the
-2026-08-25 transcript and with the same non-ASan-tree membership
-(`large_literal_obj.js` runs, `getbyid-fast.js` unsupported) described
-above.
+Current numbers are 72/1 over 73 files — four more passes than the
+2026-08-25 transcript, no expected failures left, and the same
+non-ASan-tree membership (`large_literal_obj.js` runs, `getbyid-fast.js`
+unsupported) described above.
 
 G4, all three differential variants against `aarch64/jit-stress.js`,
 byte-identical in every case (interpreter vs. `-Xjit=force

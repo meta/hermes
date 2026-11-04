@@ -517,23 +517,34 @@ every function in it compiles and the output is byte-identical to the
 interpreter -- zero declines, ASan clean. That property, not any single
 opcode's test, is what "opcode-complete" means for this backend now.
 
-**Confirmed bug, unfixed: destination-FR exclusion from pre-call syncs in
-try regions.** Milestone 6 confirmed that excluding an instruction's own
-destination FR from the pre-call `syncAllFRTempExcept` is unsound inside a
-try: register allocation coalesces a live variable's phi with that
-destination, so the prior value is dropped instead of stored, and the
-handler reads the frame slot's `_sh_enter` zero fill --
-`var y = "prior"; try { y = o.throwingGetter; } catch { use(y); }` yields
+**Fixed: destination-FR exclusion from pre-call syncs in try regions.**
+Milestone 6 confirmed that excluding an instruction's own destination FR
+from the pre-call `syncAllFRTempExcept` is unsound inside a try: register
+allocation coalesces a live variable's phi with that destination, so the
+prior value was dropped instead of stored, and the handler read the frame
+slot's `_sh_enter` zero fill --
+`var y = "prior"; try { y = o.throwingGetter; } catch { use(y); }` yielded
 `0`. Identical on arm64 and x86-64, on HV64/HV32/BOXED, at `-O` only.
-Plain calls are unaffected (`CallInst` syncs the whole frame), and the JIT
-asserts cannot catch it: the value is well-formed, merely stale.
-`test/jit/try-catch-dest-reg.js` is the minimal repro, committed
-`XFAIL: *` so a fix announces itself as an XPASS; its header carries the
-dump evidence. The fix is deliberately deferred to the maintainer: it
-spans 54 exclusion sites per backend, 108 across both (39 of the guarded
-`frRes != x ? frRes : FR()` form plus 15 unconditional
+Plain calls were unaffected (`CallInst` syncs the whole frame), and the
+JIT asserts could not catch it: the value is well-formed, merely stale.
+
+The exclusion spanned 54 sites per backend, 108 across both (39 of the
+guarded `frRes != x ? frRes : FR()` form plus 15 unconditional
 `syncAllFRTempExcept(frRes)`, the latter having no aliasing guard at all),
-or else requires liveness to treat exceptional edges as uses.
+so the fix is central rather than per-site: `syncAllFRTempExcept` itself
+now drops the exclusion when `isInTry()`, in both backends. That is sound
+because syncing an extra FR only stores that FR's current value -- the
+exclusion was always a pure optimization, and every call site issues it
+before allocating its destination register, so the destination still holds
+its pre-instruction value at sync time. The cost is one extra store per
+throwing instruction, and only in functions that contain a try; those have
+no global registers anyway (`RegisterAllocator::getRegClass` forces
+`RegClass::Other` there), so the store goes straight to the memory frame.
+`test/jit/try-catch-dest-reg.js` is the minimal repro and is now a plain
+passing regression test on both architectures; its header carries the
+before/after dump evidence. This is the first deliberate divergence of
+arm64 emission from the export base: the port's byte-identical constraint
+covered the port itself, not a subsequent cross-backend bug fix.
 
 The 497-file differential sweep over `test/hermes/*.js` (plain `hermes`
 vs `-Xjit=force`, same binary) went from ~270 files compiling at least one
@@ -582,16 +593,17 @@ bring-up milestones are done:
 - `test/jit/*.js` (the arm64-authored suite) is no longer gated to
   arm64: `test/jit/lit.local.cfg` skips the directory only when no
   `jit-arch-*` feature exists at all, and the audit that came with the
-  un-gating found no file needing an architecture gate. Its 49 files
-  (one still `!slow_debug`-gated, one the `XFAIL` repro above) run
-  green on x86-64 alongside the 23 x86-64-specific tests under
+  un-gating found no file needing an architecture gate. Its 50 files
+  (one still `!slow_debug`-gated; the former `XFAIL` repro above now
+  passes outright) run green on x86-64 alongside the 23
+  x86-64-specific tests under
   `test/jit/x86-64/` -- natively, under ASan+Debug, in all three
   heap-value modes (HV64, HV32, BOXED), and again on the Release build
   with asserts compiled out. The Release run's unsupported file is a
   *different* one, though: `slow_debug`/`debug_options` flip with
   build type, so `large_literal_obj.js` runs there and
   `getbyid-fast.js` (`REQUIRES: debug_options`) is skipped instead --
-  same 68/1/1 count, not the same membership (see `doc/JITTesting.md`,
+  same 72/1 count, not the same membership (see `doc/JITTesting.md`,
   "Release-build validation").
 - The `aarch64/jit-stress.js` differential matrix -- interpreter vs.
   `-Xjit=force`, with and without `-Xjit-emit-type-asserts`, at both
@@ -618,15 +630,25 @@ Full commands and gate-by-gate evidence are in `doc/JITTesting.md` (see
 the pointer paragraph at the end of this section); the CI-recipes
 paragraph there also documents the release-build/perf run in detail.
 
-**Open findings, maintainer-bound.** None of these were fixed in this
-branch -- each is either cross-backend or arm64-only, so the fix belongs
-with whoever owns arm64's byte-identical contract. All three are
-recorded in full, with reproductions, in
+**Findings from the port.** All three were originally left to the
+maintainer, since each is cross-backend or arm64-only and so touches
+arm64's byte-identical contract; all three have since been fixed on this
+branch. They are recorded in full, with reproductions, in
 `doc/superpowers/specs/2026-08-23-x86-64-jit-design.md`'s "Delivered"
 section:
 
-1. The try-region destination-sync bug above (both backends,
-   `test/jit/try-catch-dest-reg.js`).
+1. **Try-region destination-sync bug** (fixed): the pre-call
+   `syncAllFRTempExcept` excluded the instruction's own destination FR,
+   which is unsound inside a try -- see the paragraph above. Fixed
+   2026-08-26 centrally in both backends' `syncAllFRTempExcept`, which
+   now ignores the exclusion when `isInTry()`. Regression test
+   `test/jit/try-catch-dest-reg.js` (previously `XFAIL`) passes outright
+   on both architectures. Unlike finding 2, this one does change emitted
+   code: `jit-diff.sh` reports `INSTRUCTIONS CHANGED` on both stored
+   baselines, in each case a single added store of the destination FR
+   before the throwing call in the repro's try region (arm64 folds it
+   into the neighbouring `stp`). That divergence from the export base is
+   deliberate.
 2. **arm64 reify-arguments stale-type hole** (fixed): after
    `reifyArgumentsImpl`, arm64 never widened the lazy-arguments FR's
    recorded type past its pre-reification `FRType::OtherNonPtr`, so a
@@ -835,7 +857,7 @@ port, and therefore the first run where `NDEBUG` strips every assert
 (including ones with potential side effects, e.g. the rspDelta
 bookkeeping counter and the per-instruction invariant checks). It builds
 clean and passes both standing gates with no NDEBUG-only divergence:
-`LIT_FILTER="jit/"` matches the ASan trees exactly (68 pass / 1 XFAIL /
+`LIT_FILTER="jit/"` matches the ASan trees exactly (72 pass /
 1 unsupported), and the `aarch64/jit-stress.js` differential is
 byte-identical to the interpreter in all three variants (`-Xjit=force`,
 plus `-Xjit-emit-type-asserts`, and `-O0`), with all 31 functions
