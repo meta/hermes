@@ -2,3 +2,4 @@ name: Hermes
 components:
   - compiler
   - gc
+  - jit
