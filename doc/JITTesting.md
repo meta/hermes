@@ -154,10 +154,14 @@ test folding most of G1/G4 into one script (see `aarch64/README.md`).
 | Config | G1 | G2 | G3 | G4 | G5 | G6 |
 |---|---|---|---|---|---|---|
 | 1. arm64-qemu | yes (49/24) | yes (see README) | yes (own baseline) | yes (`qemu-sanity.sh`) | no | n/a (qemu timings are meaningless — see README "Limitations") |
-| 2. x86-64 HV64 ASan | yes (72/1) | yes (4332 tests: 4174 pass / 7 xfail / 151 unsupported) | yes (own baseline) | yes | yes (480/497) | n/a (ASan skews timings) |
+| 2. x86-64 HV64 ASan | yes (72/1) | yes (4333 tests: 4176 pass / 6 xfail / 151 unsupported) | yes (own baseline) | yes | yes (480/497) | n/a (ASan skews timings) |
 | 3. x86-64 HV32 ASan | yes (72/1) | not run separately (G1 + G4 + G5 are the gate for this config; G2 is HV64's job) | n/a (only HV64 has a stored baseline — the emitted code differs by design across modes, see `doc/JIT.md`) | yes | yes (479/497 — one file crosses the sweep's 10s timeout under this mode's extra decode) | n/a |
 | 4. x86-64 BOXED ASan | yes (72/1) | not run separately | n/a | yes | yes (480/497) | n/a |
 | 5. x86-64 Release | yes (72/1, `getbyid-fast.js` unsupported instead of `large_literal_obj.js` — see G1 above) | not run (not requested; G1 is the release-specific gate — see below) | not run this task (no release baseline captured; G3's byte-identical-refactor workflow is a dev-loop tool for the ASan tree, not a release CI gate) | yes | not run (no emitter change to re-verify; G4 already covers behavior) | **yes — new this milestone, see below** |
+
+The config-2 G2 figures above are from a fresh full `check-hermes` run
+on 2026-08-26 at commit e9059de85 (the head of this fix series), after
+all three findings in `doc/JIT.md`'s findings list were fixed.
 
 Why G2 is HV64-only: it is a whole-repository regression check
 unrelated to heap-value-mode-specific code paths; running it three times

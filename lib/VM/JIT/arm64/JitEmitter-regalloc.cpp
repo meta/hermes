@@ -196,6 +196,12 @@ void Emitter::syncAllFRTempExcept(FR exceptFR) {
   // destination (see test/jit/try-catch-dest-reg.js). Sync everything
   // so the frame is correct along the exceptional edge. Costs one
   // extra store per throwing instruction, only in functions with try.
+  // This relies on the caller invoking this sync before allocating or
+  // writing the instruction's destination register, so the destination
+  // FR still holds its pre-instruction value when it is stored here.
+  // Every current call site does this; an emitter that allocated the
+  // destination first would silently store garbage to the
+  // handler-visible frame slot.
   if (exceptFR.isValid() && isInTry())
     exceptFR = FR();
 
