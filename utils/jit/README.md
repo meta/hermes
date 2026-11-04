@@ -1,24 +1,29 @@
 # JIT dump tools
 
-Tools for checking that a change to the arm64 JIT emitter did not change the
-code it emits.
+Tools for checking that a change to the arm64 or x86-64 JIT emitter did not
+change the code it emits.
 
 - `jit-dump.sh` — capture a canonicalized dump of all JIT-emitted code from
   one `hermes` binary.
 - `jit-diff.sh` — capture from two binaries and compare, reporting comment
   changes separately from instruction changes.
 
+Both tools work unmodified on either architecture: they take a `hermes`
+binary, not a target triple, and the canonicalizer's rules are keyed on the
+disassembly syntax each backend actually emits, so the arm64 and x86-64
+rules coexist without a flag. See "x86-64" below for what differs.
+
 ## Why not just diff `-Xdump-jitcode` output?
 
 Because two runs of an **unchanged** binary produce different dumps.
 
-`Emitter::loadBits64InGp` asks `isCheapConst()` whether a 64-bit value has at
-most two non-zero 16-bit halfwords. If it does, the value is materialized
-inline with `mov`/`movk`; if not, it is spilled to the read-only data section
-and loaded with `ldr`. JIT-emitted code bakes in runtime pointers, and ASLR
-moves those every run. So the emitter genuinely selects *different
-instructions* from one run to the next, and every subsequent RO-data offset
-shifts along with them.
+On arm64, `Emitter::loadBits64InGp` asks `isCheapConst()` whether a 64-bit
+value has at most two non-zero 16-bit halfwords. If it does, the value is
+materialized inline with `mov`/`movk`; if not, it is spilled to the
+read-only data section and loaded with `ldr`. JIT-emitted code bakes in
+runtime pointers, and ASLR moves those every run. So the emitter genuinely
+selects *different instructions* from one run to the next, and every
+subsequent RO-data offset shifts along with them.
 
 You can see this for yourself:
 
@@ -39,6 +44,40 @@ drops the RO-data contents, and normalizes any remaining wide hex literal to
 labels, ordering, and the emitter's own comments. In practice that is about
 92% of the dump, and the same command without `--raw` reports zero
 differences.
+
+## x86-64
+
+x86-64 needs *less* canonicalization than arm64, not more. Its
+`loadBits64InGp` (`lib/VM/JIT/x86-64/JitEmitter.h`) is an unconditional `mov
+reg, imm64` — there is no `isCheapConst()` split and no RO-data fallback for
+GP constants, so the mechanism that makes two arm64 runs of the *same*
+binary diverge is simply absent for those loads. What still varies run to
+run is only the immediate itself: runtime/heap pointers ASLR moves (call
+targets, `runtimeModule`, `codeBlock_`, property-cache addresses, ...).
+
+Checked against a real x86-64 dump (two-run self-diff over `test/jit/*.js`
+and `test/jit/x86-64/*.js`): every line that differs between two runs has
+the shape `mov reg, 0x<8+ hex digits>`, and the pre-existing trailing rule
+(`s/0x[0-9A-Fa-f]{8,}/ADDR/g`) already collapses all of them. No dedicated
+"mov reg, imm -> CONST reg" rule was added for x86-64: it would be
+redundant with that trailing rule for everything that actually varies, and
+adding one risked *hiding* real diffs behind a hex constant a future
+refactor makes short. Small hex immediates that use the same `mov reg,
+0x..` shape — type tags, packed kind/size headers, bytecode-IP deltas — are
+deliberately left verbatim: they are not ASLR-dependent, so a real change to
+them should show up as a diff.
+
+x86-64 does still spill values (doubles, property-cache pointers) to a
+RO_DATA section, addressed from code as `[RO_DATA]` / `[RO_DATA+N]` (a
+stable label + offset, no embedded hex) with asmjit's own `.dq 0x...`
+listing at the end of the function — the syntactic analogue of arm64's
+`.xword`. `jit-dump.sh` drops those listing lines (`/^\.dq /d`) the same way
+it drops `.xword`.
+
+Net effect: run `jit-dump.sh` / `jit-diff.sh` on an x86-64 binary exactly as
+you would on arm64 — same commands, same `test/jit` corpus, same zero-diff
+expectation for an unchanged binary. `cmake-build-x86jit/jit-baseline.dump`
+is the x86-64 analogue of arm64's `cmake-build-arm64/jit-baseline.dump`.
 
 ## Usage
 
@@ -112,9 +151,13 @@ code and will happily compare equal between two runs.
 
 **Canonicalized lines are not compared.** A change that alters *which*
 instruction form is chosen for a constant is invisible to these tools, because
-that is exactly what gets collapsed to `CONST`. If your change touches
-`isCheapConst`, `loadBits64InGp`, `uint64Const`, or RO-data layout, these tools
-cannot verify it.
+that is exactly what gets collapsed to `CONST`/`ADDR` or dropped. On arm64,
+if your change touches `isCheapConst`, `loadBits64InGp`, `uint64Const`, or
+RO-data layout, these tools cannot verify it. On x86-64 the exposure is
+narrower — `loadBits64InGp` has no split to hide — but the `.dq` RO-data
+listing is dropped outright, so a change to an RO-data constant
+(`uint64Const`/`roConst64`: the 0.0, ±1.0 and -0.0 doubles as well as the
+cache pointers) or to the RO-data layout is invisible on x86-64 too.
 
 **Coverage is only as good as the corpus.** An emitter path no test reaches
 will not appear in the dump. Notably, every function in the default corpus has

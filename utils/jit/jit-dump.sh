@@ -124,6 +124,29 @@ trap 'rm -f "$TMP"' EXIT
 #    bakes in runtime pointers that ASLR moves every run.
 #  - Drop the RO_DATA contents, whose layout shifts with the above.
 #  - Normalize any remaining wide hex literal to ADDR.
+#
+# x86-64 needs less of this than arm64, not more. loadBits64InGp() there is
+# an unconditional `mov reg, imm64` (see JitEmitter.h) -- there is no
+# isCheapConst() split and no RO-data fallback for GP constants, so the
+# mechanism that makes two arm64 runs of the *same* binary diverge is simply
+# absent for those loads. What still varies run to run is only the immediate
+# itself (runtime/heap pointers moved by ASLR: call targets, `runtimeModule`,
+# `codeBlock_`, property-cache addresses, ...), and every one of those prints
+# as >= 8 hex digits (confirmed against a real x86 dump: two-run self-diffs
+# over test/jit/*.js and test/jit/x86-64/*.js are 100% lines of the form
+# `mov reg, 0x<8+ hex digits>`, nothing shorter). The existing trailing
+# `s/0x[0-9A-Fa-f]{8,}/ADDR/g` rule already collapses all of them; small hex
+# immediates that use the same `mov reg, 0x..` shape (type tags, packed
+# kind/size headers, bytecode-IP deltas) stay verbatim on purpose because
+# they are not ASLR-dependent and a real change to them should show up as a
+# diff. No x86-specific "mov reg, 0x... -> CONST reg" rule is added: it would
+# be redundant with the trailing rule for everything that actually varies.
+#
+# x86 does still spill values (doubles, property-cache pointers) to a
+# RO_DATA section, addressed as `[RO_DATA]` / `[RO_DATA+N]` with asmjit's own
+# `.dq 0x...` listing at the end of the function -- the syntactic analogue of
+# arm64's `.xword`. The reference sites carry no embedded hex (the label and
+# offset are stable), so only the listing needs dropping.
 canonicalize() {
   if [ "$RAW" -eq 1 ]; then
     cat
@@ -135,6 +158,7 @@ canonicalize() {
       -e 's/^( *)ldr (d[0-9]+), \[RO_DATA(, [0-9]+)?\]$/\1CONST \2/' \
       -e '/JIT total memory usage/d' \
       -e '/^\.xword /d' \
+      -e '/^\.dq /d' \
       -e '/^\/\/ Bytecode start$/d' \
       -e '/^\/\/ RuntimeModule$/d' \
       -e 's/0x[0-9A-Fa-f]{8,}/ADDR/g' \
