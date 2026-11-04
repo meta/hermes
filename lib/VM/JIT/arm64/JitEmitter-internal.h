@@ -59,7 +59,7 @@ inline void emit_sh_ljs_tag_is_object(
     a64::Assembler &a,
     const a64::GpX &xTagReg) {
   static_assert(
-      (int16_t)HVTag_Object == (int16_t)(-1) && "HV_TagObject must be -1");
+      (int16_t)HVTag_Object == (int16_t)(-1), "HVTag_Object must be -1");
   a.cmn(xTagReg, -HVTag_Object);
 }
 
@@ -70,8 +70,7 @@ inline void emit_sh_ljs_tag_is_object(
 inline void emit_sh_ljs_tag_is_string(
     a64::Assembler &a,
     const a64::GpX &xTagReg) {
-  static_assert(
-      (int16_t)HVTag_Str == (int16_t)(-3) && "HV_TagObject must be -1");
+  static_assert((int16_t)HVTag_Str == (int16_t)(-3), "HVTag_Str must be -3");
   a.cmn(xTagReg, -HVTag_Str);
 }
 
@@ -179,7 +178,7 @@ inline void emit_sh_ljs_is_bigint(
     const a64::GpX &xInputReg) {
   // Get the tag bits by right shifting.
   static_assert(
-      (int16_t)HVTag_BigInt == (int16_t)(-2) && "HVTag_BigInt must be -2");
+      (int16_t)HVTag_BigInt == (int16_t)(-2), "HVTag_BigInt must be -2");
   a.asr(xTempReg, xInputReg, kHV_NumDataBits);
   a.cmn(xTempReg, -HVTag_BigInt);
 }
@@ -195,7 +194,7 @@ inline void emit_sh_ljs_is_empty(
     const a64::GpX &xInputReg) {
   // Get the tag bits by right shifting.
   static_assert(
-      (int16_t)HVETag_Empty == (int16_t)(-14) && "HVETag_Empty must be -14");
+      (int16_t)HVETag_Empty == (int16_t)(-14), "HVETag_Empty must be -14");
   a.asr(xTempReg, xInputReg, kHV_NumDataBits - 1);
   a.cmn(xTempReg, -HVETag_Empty);
 }
@@ -211,7 +210,7 @@ inline void emit_sh_ljs_is_null(
     const a64::GpX &xInputReg) {
   // Get the tag bits by right shifting.
   static_assert(
-      (int16_t)HVETag_Null == (int16_t)(-11) && "HVETag_Null must be -11");
+      (int16_t)HVETag_Null == (int16_t)(-11), "HVETag_Null must be -11");
   a.asr(xTempReg, xInputReg, kHV_NumDataBits - 1);
   a.cmn(xTempReg, -HVETag_Null);
 }
@@ -227,7 +226,7 @@ inline void emit_sh_ljs_is_bool(
     const a64::GpX &xInputReg) {
   // Get the tag bits by right shifting.
   static_assert(
-      (int16_t)HVETag_Bool == (int16_t)(-10) && "HVETag_Bool must be -10");
+      (int16_t)HVETag_Bool == (int16_t)(-10), "HVETag_Bool must be -10");
   a.asr(xTempReg, xInputReg, kHV_NumDataBits - 1);
   a.cmn(xTempReg, -HVETag_Bool);
 }
@@ -246,7 +245,7 @@ inline void emit_sh_ljs_is_undefined(
       HERMESVALUE_VERSION == 2,
       "HVETag_Undefined must be at kHV_NumDataBits - 1");
   static_assert(
-      (int16_t)HVETag_Undefined == (int16_t)(-12) &&
+      (int16_t)HVETag_Undefined == (int16_t)(-12),
       "HVETag_Undefined must be -12");
   a.asr(xTempReg, xInputReg, kHV_NumDataBits - 1);
   a.cmn(xTempReg, -HVETag_Undefined);
@@ -265,7 +264,7 @@ inline void emit_sh_ljs_is_symbol(
   static_assert(
       HERMESVALUE_VERSION == 2, "HVETag_Symbol must be at kHV_NumDataBits - 1");
   static_assert(
-      (int16_t)HVETag_Symbol == (int16_t)(-9) && "HVETag_Symbol must be -9");
+      (int16_t)HVETag_Symbol == (int16_t)(-9), "HVETag_Symbol must be -9");
   a.asr(xTempReg, xInputReg, kHV_NumDataBits - 1);
   a.cmn(xTempReg, -HVETag_Symbol);
 }
@@ -278,7 +277,7 @@ inline void emit_sh_ljs_bool(a64::Assembler &a, const a64::GpX inOut) {
   // a shifted 16 bit value. We can exploit this to use movk to set the tag.
   static_assert(HERMESVALUE_VERSION == 2);
   static_assert(
-      (llvh::isShiftedUInt<16, kHV_NumDataBits>(baseBool.raw)) &&
+      (llvh::isShiftedUInt<16, kHV_NumDataBits>(baseBool.raw)),
       "Boolean tag must be 16 bits.");
   a.lsl(inOut, inOut, kHV_BoolBitIdx);
   // Add the bool tag.
@@ -293,7 +292,7 @@ emit_sh_ljs_bool_const(a64::Assembler &a, const a64::GpX &out, bool val) {
   // a shifted 16 bit value. We can exploit this to use movk to set the tag.
   static_assert(HERMESVALUE_VERSION == 2);
   static_assert(
-      (llvh::isShiftedUInt<16, kHV_NumDataBits>(baseBool.raw)) &&
+      (llvh::isShiftedUInt<16, kHV_NumDataBits>(baseBool.raw)),
       "Boolean tag must be 16 bits.");
   if (val) {
     // Put 1 at the value and add the bool tag.

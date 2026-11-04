@@ -103,7 +103,7 @@ inline void emit_sh_ljs_tag_is_object(
     x86::Assembler &a,
     const x86::Gp &tagReg) {
   static_assert(
-      (int16_t)HVTag_Object == (int16_t)(-1) && "HV_TagObject must be -1");
+      (int16_t)HVTag_Object == (int16_t)(-1), "HVTag_Object must be -1");
   a.cmp(tagReg, asmjit::Imm(HVTag_Object));
 }
 
@@ -113,10 +113,7 @@ inline void emit_sh_ljs_tag_is_object(
 inline void emit_sh_ljs_tag_is_string(
     x86::Assembler &a,
     const x86::Gp &tagReg) {
-  // x86-64: the message is deliberately not arm64's. Its copy of this
-  // assert says "HV_TagObject must be -1", copied from the object helper
-  // above and never updated; the condition here is about HVTag_Str.
-  static_assert((int16_t)HVTag_Str == (int16_t)(-3) && "HVTag_Str must be -3");
+  static_assert((int16_t)HVTag_Str == (int16_t)(-3), "HVTag_Str must be -3");
   a.cmp(tagReg, asmjit::Imm(HVTag_Str));
 }
 
@@ -156,7 +153,7 @@ inline void emit_sh_ljs_is_bigint(
     const x86::Gp &tempReg,
     const x86::Gp &inputReg) {
   static_assert(
-      (int16_t)HVTag_BigInt == (int16_t)(-2) && "HVTag_BigInt must be -2");
+      (int16_t)HVTag_BigInt == (int16_t)(-2), "HVTag_BigInt must be -2");
   emit_sh_ljs_get_tag(a, tempReg, inputReg);
   a.cmp(tempReg, asmjit::Imm(HVTag_BigInt));
 }
@@ -176,7 +173,7 @@ inline void emit_sh_ljs_is_symbol(
   static_assert(
       HERMESVALUE_VERSION == 2, "HVETag_Symbol must be at kHV_NumDataBits - 1");
   static_assert(
-      (int16_t)HVETag_Symbol == (int16_t)(-9) && "HVETag_Symbol must be -9");
+      (int16_t)HVETag_Symbol == (int16_t)(-9), "HVETag_Symbol must be -9");
   if (tempReg != inputReg)
     a.mov(tempReg, inputReg);
   a.sar(tempReg, kHV_NumDataBits - 1);
@@ -289,7 +286,7 @@ inline void emit_sh_ljs_is_empty(
     const x86::Gp &inputReg) {
   // Get the ETag bits by right shifting one bit further than the tag.
   static_assert(
-      (int16_t)HVETag_Empty == (int16_t)(-14) && "HVETag_Empty must be -14");
+      (int16_t)HVETag_Empty == (int16_t)(-14), "HVETag_Empty must be -14");
   if (tempReg != inputReg)
     a.mov(tempReg, inputReg);
   a.sar(tempReg, kHV_NumDataBits - 1);
@@ -310,7 +307,7 @@ inline void emit_sh_ljs_is_null(
     const x86::Gp &inputReg) {
   // Get the ETag bits by right shifting one bit further than the tag.
   static_assert(
-      (int16_t)HVETag_Null == (int16_t)(-11) && "HVETag_Null must be -11");
+      (int16_t)HVETag_Null == (int16_t)(-11), "HVETag_Null must be -11");
   if (tempReg != inputReg)
     a.mov(tempReg, inputReg);
   a.sar(tempReg, kHV_NumDataBits - 1);
@@ -682,7 +679,7 @@ inline void emit_sh_ljs_is_bool(
   // compare against the sign-extended ETag constant directly (imm32 is
   // sign-extended on x86, so there is no arm64-style cmn-with-negation).
   static_assert(
-      (int16_t)HVETag_Bool == (int16_t)(-10) && "HVETag_Bool must be -10");
+      (int16_t)HVETag_Bool == (int16_t)(-10), "HVETag_Bool must be -10");
   if (tempReg != inputReg)
     a.mov(tempReg, inputReg);
   a.sar(tempReg, kHV_NumDataBits - 1);
@@ -824,7 +821,7 @@ inline void emit_sh_ljs_bool(
   static constexpr SHLegacyValue baseBool = HermesValue::encodeBoolValue(false);
   static_assert(HERMESVALUE_VERSION == 2);
   static_assert(
-      (llvh::isShiftedUInt<16, kHV_NumDataBits>(baseBool.raw)) &&
+      (llvh::isShiftedUInt<16, kHV_NumDataBits>(baseBool.raw)),
       "Boolean tag must be 16 bits.");
   assert(tempReg != inOut && "temp register must differ from the input");
   a.shl(inOut, kHV_BoolBitIdx);
