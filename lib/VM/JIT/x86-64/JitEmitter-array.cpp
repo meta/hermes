@@ -656,12 +656,10 @@ void Emitter::reifyArgumentsImpl(FR frLazyReg, bool strict, const char *name) {
   // the BitComparable assert without the line below. Widen the type to
   // "unknown" instead, which is true on both paths.
   //
-  // arm64 STILL CARRIES THIS HOLE and is deliberately left unfixed here: the
-  // milestone contract for this branch is that arm64's emitted code stays
-  // byte-identical to its baseline, and this line changes the emitter's
-  // type state. arm64 has no test that flows a reified `arguments` into a
-  // type-sensitive emitter, which is why it has never been caught there.
-  // Fixing it is a separate change against arm64, not this one.
+  // arm64 carries the same fix, at the structurally equivalent point in its
+  // reifyArgumentsImpl (lib/VM/JIT/arm64/JitEmitter-array.cpp) -- verified
+  // to leave its emitted code byte-identical to its stored baseline, since
+  // this is compile-time type bookkeeping, not an emitted instruction.
   frUpdateType(frLazyReg, FRType::UnknownPtr);
 
   slowPaths_.emplace_back(

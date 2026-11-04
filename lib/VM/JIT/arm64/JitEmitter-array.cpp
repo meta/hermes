@@ -569,6 +569,18 @@ void Emitter::reifyArgumentsImpl(FR frLazyReg, bool strict, const char *name) {
   // Fast path: do nothing.
   a.bind(contLab);
 
+  // frLazyReg is an in/out operand: whichever path was taken, it holds the
+  // Arguments OBJECT from here on. Its recorded type usually says otherwise
+  // -- ISel initializes the lazy register with LoadConstUndefined, whose
+  // emitter records FRType::OtherNonPtr, and neither path above writes the
+  // register in emitted code, so nothing else clears that. A stale
+  // "non-pointer" claim then propagates through Mov and licenses fast paths
+  // that are only valid for non-pointers -- strictEqualImpl's raw-bit tier
+  // is the one that showed up. Widen the type to "unknown" instead, which
+  // is true on both paths. Mirrors x86-64's fix in
+  // JitEmitter-array.cpp's reifyArgumentsImpl.
+  frUpdateType(frLazyReg, FRType::UnknownPtr);
+
   slowPaths_.emplace_back(
       slowPathLab,
       contLab,

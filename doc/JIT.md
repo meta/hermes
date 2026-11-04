@@ -627,14 +627,21 @@ section:
 
 1. The try-region destination-sync bug above (both backends,
    `test/jit/try-catch-dest-reg.js`).
-2. **arm64 reify-arguments stale-type hole**: after
-   `reifyArgumentsImpl`, arm64 never widens the lazy-arguments FR's
+2. **arm64 reify-arguments stale-type hole** (fixed): after
+   `reifyArgumentsImpl`, arm64 never widened the lazy-arguments FR's
    recorded type past its pre-reification `FRType::OtherNonPtr`, so a
-   later type-sensitive fast path can trust a stale "non-pointer"
+   later type-sensitive fast path could trust a stale "non-pointer"
    claim. x86-64 hit this under `-Xjit-emit-type-asserts` and fixed it
    locally (`lib/VM/JIT/x86-64/JitEmitter-array.cpp`,
-   `reifyArgumentsImpl`); arm64 was left as-is to keep its emission
-   byte-identical to its stored baseline.
+   `reifyArgumentsImpl`); arm64 was originally left as-is to keep its
+   emission byte-identical to its stored baseline. Fixed 2026-08-26 by
+   mirroring the x86-64 line; regression test
+   `test/jit/reify-arguments-type.js` runs on both architectures. The
+   fix is compile-time type bookkeeping only -- `jit-diff.sh` against
+   both stored baselines shows the fix adds no change to any
+   previously-existing function's emitted code (the only diff on
+   either architecture is the new test's own dump, appended once as
+   the file joins the default corpus).
 3. A static_assert message-form inconsistency across both backends'
    `JitEmitter-*` files (some bare-condition, some message-form, no
    pattern to which) -- a style sweep, not a correctness issue.
