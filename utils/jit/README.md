@@ -67,6 +67,17 @@ refactor makes short. Small hex immediates that use the same `mov reg,
 deliberately left verbatim: they are not ASLR-dependent, so a real change to
 them should show up as a diff.
 
+That only holds under 8 hex digits, though. The trailing `ADDR` rule
+matches on width, not on origin, so a `mov reg, imm64` whose immediate
+happens to print at 8+ hex digits — a 64-bit NaN-boxing tag mask, or an
+IEEE 754 double's bit pattern loaded via `loadBits64InGp` — is collapsed
+to `ADDR` exactly like a real ASLR-moved pointer. A changed tag mask or
+double constant is therefore invisible in the instruction line; it
+surfaces only as a diff in that line's comment (if the emitter comments
+the constant), which `--comments-ok` explicitly suppresses. There is no
+rule that distinguishes "wide because ASLR" from "wide because it is a
+genuine 64-bit constant" — see "Limitations" below.
+
 x86-64 does still spill values (doubles, property-cache pointers) to a
 RO_DATA section, addressed from code as `[RO_DATA]` / `[RO_DATA+N]` (a
 stable label + offset, no embedded hex) with asmjit's own `.dq 0x...`
@@ -158,6 +169,12 @@ narrower — `loadBits64InGp` has no split to hide — but the `.dq` RO-data
 listing is dropped outright, so a change to an RO-data constant
 (`uint64Const`/`roConst64`: the 0.0, ±1.0 and -0.0 doubles as well as the
 cache pointers) or to the RO-data layout is invisible on x86-64 too.
+The trailing `ADDR` rule is also width-only, not origin-aware: any x86-64
+`mov reg, imm64` whose immediate is 8+ hex digits — a tag mask, a double's
+bit pattern, any other genuine 64-bit constant, not just an ASLR-moved
+pointer — is collapsed the same as a real pointer, so a change to one of
+those is invisible on the instruction line and shows up only as a
+comment-line diff (which `--comments-ok` suppresses).
 
 **Coverage is only as good as the corpus.** An emitter path no test reaches
 will not appear in the dump. Notably, every function in the default corpus has

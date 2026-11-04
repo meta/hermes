@@ -142,6 +142,14 @@ trap 'rm -f "$TMP"' EXIT
 # diff. No x86-specific "mov reg, 0x... -> CONST reg" rule is added: it would
 # be redundant with the trailing rule for everything that actually varies.
 #
+# Caveat: the trailing ADDR rule matches on digit width, not on origin, so
+# it also collapses any mov reg, imm64 whose immediate happens to print at
+# 8+ hex digits for a non-ASLR reason -- a 64-bit tag mask, an IEEE 754
+# double's bit pattern -- exactly like a real pointer. A changed constant
+# of that kind is invisible on the instruction line; it surfaces only as a
+# comment-line diff, which --comments-ok suppresses. See
+# utils/jit/README.md ("Limitations") for the full explanation.
+#
 # x86 does still spill values (doubles, property-cache pointers) to a
 # RO_DATA section, addressed as `[RO_DATA]` / `[RO_DATA+N]` with asmjit's own
 # `.dq 0x...` listing at the end of the function -- the syntactic analogue of

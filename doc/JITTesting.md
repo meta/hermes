@@ -6,13 +6,13 @@ tools). It exists because milestone 6 added a fifth build configuration
 (release) and the porting work is otherwise done: what is left to record
 is not more architecture, but the exact commands a CI job (or a human
 reproducing one) would run, and what each run actually proves. Written
-2026-08-25 against `x86-jit` @ `5ec9dcd89`.
+2026-08-25 against `x86-jit` @ `ac23e74b4`.
 
 ## The five configurations
 
 | # | Config | Build dir | Notes |
 |---|---|---|---|
-| 1 | arm64, qemu-user | `cmake-build-arm64` | Cross-compiled, run under `qemu-aarch64-static`; the only way to execute the JIT without arm64 hardware. See `aarch64/README.md`. |
+| 1 | arm64, qemu-user (HV64 only) | `cmake-build-arm64` | Cross-compiled, run under `qemu-aarch64-static`; the only way to execute the JIT without arm64 hardware. See `aarch64/README.md`. No HV32/BOXED arm64 build exists in this matrix. |
 | 2 | x86-64, HV64, ASan+Debug | `cmake-build-x86jit` | The default/reference x86-64 dev build. |
 | 3 | x86-64, HV32 (`HEAP_HV_PREFER32`), ASan+Debug | `cmake-build-x86jit-hv32` | Compressed pointers + boxed doubles + contiguous heap. |
 | 4 | x86-64, BOXED (`HEAP_HV_BOXED`), ASan+Debug | `cmake-build-x86jit-boxed` | Boxed doubles only, no pointer compression. |
@@ -64,9 +64,9 @@ cmake -B cmake-build-x86jit-rel -G Ninja -DCMAKE_BUILD_TYPE=Release \
 
 Build each with `cmake --build <dir> --target hermes -j "$(nproc)"` (or
 `check-hermes`, which builds `hermes` as a dependency — see below).
-Configs 2-5 always use clang per this repo's convention (`CLAUDE.md`,
-"Always build with Clang"); config 1's compiler comes from the aarch64
-toolchain file. No config other than 1 needs `HERMES_UNICODE_LITE` or
+Configs 2-5 always use clang, to match the toolchain used throughout
+this port's builds and gates; config 1's compiler comes from the
+aarch64 toolchain file. No config other than 1 needs `HERMES_UNICODE_LITE` or
 `IMPORT_HOST_COMPILERS` — those are cross-compilation-only concerns.
 
 ## Gates: what each test command proves
@@ -81,6 +81,17 @@ the per-config table below can just list which ones apply.
   (`large_literal_obj.js`, `!slow_debug`). On arm64 the same directory
   yields 46 pass / 1 `XFAIL` / 23 unsupported (the 22 `x86-64/`-only
   files plus the same `!slow_debug` skip).
+
+  That 68/1/1 is for configs 2-4 (ASan+Debug, where `slow_debug` and
+  `debug_options` are both `ON`). Config 5 (Release) also lands on
+  68/1/1, but it is a numerical coincidence over a *different*
+  membership: `slow_debug` and `debug_options` both flip with build
+  type (the `slow_debug`/`debug_options` lit params in `CMakeLists.txt`,
+  `IF:$<CONFIG:Debug>`), so under
+  Release `large_literal_obj.js` (`!slow_debug`) runs instead of being
+  skipped, and `getbyid-fast.js` (`REQUIRES: debug_options`) becomes
+  the one unsupported test instead — see "Release-build validation"
+  below.
 - **G2 — full `check-hermes`**: the whole lit suite plus unit tests plus
   NAPI, with the JIT compiled in but not forced on (`test/jit` is still
   the only directory that forces it). Confirms the JIT-enabled build
@@ -97,7 +108,7 @@ the per-config table below can just list which ones apply.
   differential over every `test/hermes/*.js`, plain `hermes` vs.
   `-Xjit=force`, same binary — broader-corpus correctness evidence than
   G1/G4 alone. Run and reported per-file in the milestone-5 gate
-  (`doc/JIT.md`, "x86-64 porting notes"); not re-run per milestone-6 task
+  (`doc/JIT.md`, "The x86-64 backend"); not re-run per milestone-6 task
   since no emitter code changed.
 - **G6 — perf sanity** (Release only, new this milestone): timed
   interpreter-vs-`-Xjit=force` on representative hot loops. Not a
@@ -141,7 +152,7 @@ test folding most of G1/G4 into one script (see `aarch64/README.md`).
 | 2. x86-64 HV64 ASan | yes (68/1/1) | yes (4332 tests: 4174 pass / 7 xfail / 151 unsupported) | yes (own baseline) | yes | yes (480/497) | n/a (ASan skews timings) |
 | 3. x86-64 HV32 ASan | yes (68/1/1) | not run separately (G1 + G4 + G5 are the gate for this config; G2 is HV64's job) | n/a (only HV64 has a stored baseline — the emitted code differs by design across modes, see `doc/JIT.md`) | yes | yes (479/497 — one file crosses the sweep's 10s timeout under this mode's extra decode) | n/a |
 | 4. x86-64 BOXED ASan | yes (68/1/1) | not run separately | n/a | yes | yes (480/497) | n/a |
-| 5. x86-64 Release | yes (68/1/1) | not run (not requested; G1 is the release-specific gate — see below) | not run this task (no release baseline captured; G3's byte-identical-refactor workflow is a dev-loop tool for the ASan tree, not a release CI gate) | yes | not run (no emitter change to re-verify; G4 already covers behavior) | **yes — new this milestone, see below** |
+| 5. x86-64 Release | yes (68/1/1, `getbyid-fast.js` unsupported instead of `large_literal_obj.js` — see G1 above) | not run (not requested; G1 is the release-specific gate — see below) | not run this task (no release baseline captured; G3's byte-identical-refactor workflow is a dev-loop tool for the ASan tree, not a release CI gate) | yes | not run (no emitter change to re-verify; G4 already covers behavior) | **yes — new this milestone, see below** |
 
 Why G2 is HV64-only: it is a whole-repository regression check
 unrelated to heap-value-mode-specific code paths; running it three times
@@ -176,6 +187,15 @@ is captured or expected: the workflow is a dev-loop tool for verifying a
 refactor didn't change codegen, which is only useful against the tree
 you're actively editing (the ASan+Debug ones).
 
+Baselines roll forward when the test corpus grows, not only when an
+intentional emitter change is made; a roll is valid only when the diff
+against the prior baseline is a pure addition (new `===== file.js =====`
+section(s) only, zero removed lines, nothing changed inside an existing
+function) — the arm64 baseline was rolled on exactly this basis when
+`test/jit/try-catch-dest-reg.js` joined the corpus (milestone 6 final
+insurance: `+948/-0`, one new file section, re-verified against the old
+baseline before replacing it).
+
 ## Release-build validation (first NDEBUG x86-64 run)
 
 Every prior x86-64 build in this port has been ASan+Debug. `NDEBUG`
@@ -199,7 +219,14 @@ LIT_FILTER="jit/" check-hermes, cmake-build-x86jit-rel:
   Unsupported Tests  : 1
 ```
 
-Matches the ASan-tree numbers exactly (68/1/1) — no NDEBUG-only failure.
+Matches the ASan-tree numbers exactly (68/1/1), but not the same
+membership: `slow_debug` and `debug_options` both flip with build type
+(the lit params in `CMakeLists.txt`), so `large_literal_obj.js`
+(`!slow_debug`)
+runs here and `getbyid-fast.js` (`REQUIRES: debug_options`) is the
+unsupported test instead. `getbyid-fast.js` was therefore **not**
+exercised, let alone validated, under NDEBUG by this run — no
+NDEBUG-only failure among the tests that did run.
 
 G4, all three differential variants against `aarch64/jit-stress.js`,
 byte-identical in every case (interpreter vs. `-Xjit=force
@@ -272,6 +299,6 @@ xmm-globals question, thunk-vs-inline-call reconsideration) is explicitly
 future work per the spec.
 
 The perf scripts used are not checked into the tree (they aren't tests —
-no assertions, just timing); reconstructing them from the descriptions
-above is straightforward, or see the milestone-6 task-3 report for the
-exact source.
+no assertions, just timing) and are not committed anywhere in this
+repo; the three workload descriptions above (a/b/c) are the full record
+of what they do, and reconstructing them is straightforward from that.
