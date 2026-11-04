@@ -587,6 +587,52 @@ golden-dump capture and `jit-diff.sh`-based regression checking for
 x86-64, a CI recipe that runs the three-mode matrix on every change, and
 a first perf sanity pass. Counter support (`-Xjit-emit-counters`,
 NumCall/NumCallSlow) already works and needs no further milestone-6 work.
+
+**x86-64 dump baseline and the byte-identical-refactor workflow.**
+`utils/jit/jit-dump.sh` / `jit-diff.sh` now cover x86-64 with no
+architecture flag: the canonicalizer's rules are keyed on the disassembly
+syntax each backend emits (arm64's `mov x.., 0x..` / `ldr .., [RO_DATA]` /
+`.xword`; x86-64's `.dq`), so both sets coexist in the same script. x86-64
+turned out to need *fewer* new rules than expected. Its `loadBits64InGp`
+(`lib/VM/JIT/x86-64/JitEmitter.h`) is an unconditional `mov reg, imm64` --
+no `isCheapConst()` split, no RO-data fallback for GP constants -- so the
+thing that makes two arm64 runs of the *same* binary diverge doesn't exist
+on this backend. What still varies with ASLR (call targets, `runtimeModule`,
+`codeBlock_`, property-cache addresses) always prints as `mov reg, 0x<8+
+hex digits>`, confirmed against a real dump by diffing two raw runs over
+`test/jit/*.js` and `test/jit/x86-64/*.js`: every differing line matches
+that shape, none shorter. The pre-existing trailing `s/0x[0-9A-Fa-f]{8,}/
+ADDR/g` rule already collapsed all of them; the only addition was
+`/^\.dq /d`, dropping the RO_DATA payload listing exactly as `/^\.xword /d`
+does on arm64 (the `[RO_DATA]`/`[RO_DATA+N]` references in code carry no
+embedded hex, so only the listing needed it).
+
+The workflow mirrors arm64's exactly:
+
+```sh
+cmake --build cmake-build-x86jit --target hermes
+cp cmake-build-x86jit/bin/hermes /tmp/hermes-x86-before
+# ... make an emitter change ...
+cmake --build cmake-build-x86jit --target hermes
+utils/jit/jit-diff.sh /tmp/hermes-x86-before cmake-build-x86jit/bin/hermes
+```
+
+`cmake-build-x86jit/jit-baseline.dump` is the x86-64 analogue of arm64's
+`cmake-build-arm64/jit-baseline.dump` (both untracked build artifacts,
+recaptured with `jit-dump.sh -o ... bin/hermes` after an intentional
+change). Two runs of an unchanged x86-64 binary produce byte-identical
+canonicalized dumps, same as arm64; verified over both the default
+`test/jit/*.js` corpus and the `test/jit/x86-64/*.js` corpus, and the
+`jit-diff.sh` prove-can-fail check (a one-instruction operand-order swap
+in `mulN`'s fast path, `vmulsd(res, dl, dr)` -> `vmulsd(res, dr, dl)` --
+value-transparent under IEEE 754 commutativity, so it cannot itself hang or
+misbehave at runtime, but the differently-encoded instruction shows up
+cleanly in `jit-diff.sh` as 62 changed lines, `RESULT: INSTRUCTIONS
+CHANGED`) confirms the tool still catches a real emitter change on this
+backend. arm64 is unaffected: the extended script still produces
+byte-identical arm64 self-compares, and `mulN`'s arm64 body was never
+touched.
+
 To build:
 
   cmake -B cmake-build-x86jit -G Ninja -DCMAKE_BUILD_TYPE=Debug \
