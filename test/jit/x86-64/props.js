@@ -7,9 +7,9 @@
 
 // RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
 // RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force %s > %t.jit0 && diff %t.int0 %t.jit0
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
-// RUN: %hermes -fno-inline %s > %t.intn && %hermes -fno-inline -Xjit -Xjit-threshold=2 %s > %t.warm && diff %t.intn %t.warm
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
+// RUN: %hermes -fno-inline %s > %t.intn && %hermes -fno-inline -Xjit -Xjit-threshold=2 -Xjit-crash-on-error %s > %t.warm && diff %t.intn %t.warm
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // RUN: %hermes -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // RUN: %hermes -Xjit=force -Xjit-emit-counters %s 2>&1 >/dev/null | %FileCheck --check-prefix=COUNT %s
@@ -31,11 +31,11 @@
 // (NumCall) and takes the slow call path (NumCallSlow), which it does here
 // because a compiled function now reaches `print` through the global object.
 //
-// The two -O differential RUN lines carry -Xjit-crash-on-error, because at
-// -O nothing in this file declines. The -O0 ones cannot: the implicit
-// derived constructor still contains a ThrowIfEmpty there (see the note by
-// its pins below), which waits for the exceptions milestone. Move
-// -Xjit-crash-on-error onto them once it lands.
+// Every differential RUN line carries -Xjit-crash-on-error, because nothing
+// in this file declines in any of the five modes. The -O0 ones could not
+// until the exceptions milestone: the implicit derived constructor contains
+// a ThrowIfEmpty, which declined there. It compiles now, and the CHECK0 set
+// below pins it.
 //
 // GLOBALS. Globals themselves are covered here -- `bump` reads and writes a
 // module-level `var` and `report` reaches `print` through the global object,
@@ -344,16 +344,18 @@ report("counter", counter);
 // CHECK0-NEXT: counter 5
 
 print(callWho(new Derived()));
-// The implicit derived constructor compiles at -O but not at -O0, where it
-// still contains ThrowIfEmpty for the TDZ check on the base class binding.
-// The two 'who' methods and the call site compile in both modes; 21 is
-// Derived's, the one holding the LoadParentNoTraps.
+// The implicit derived constructor contains a ThrowIfEmpty for the TDZ check
+// on the base class binding, which is why it used to compile at -O but not
+// at -O0. Both modes compile it now. The two 'who' methods and the call site
+// compile in both modes; 21 is Derived's, the one holding the
+// LoadParentNoTraps.
 // CHECK: JIT successfully compiled FunctionID 20, 'Derived'
 // CHECK: JIT successfully compiled FunctionID 18, 'Base'
 // CHECK: JIT successfully compiled FunctionID 15, 'callWho'
 // CHECK: JIT successfully compiled FunctionID 21, 'who'
 // CHECK: JIT successfully compiled FunctionID 19, 'who'
 // CHECK-NEXT: 15
+// CHECK0: JIT successfully compiled FunctionID 20, 'Derived'
 // CHECK0: JIT successfully compiled FunctionID 18, 'Base'
 // CHECK0: JIT successfully compiled FunctionID 15, 'callWho'
 // CHECK0: JIT successfully compiled FunctionID 21, 'who'

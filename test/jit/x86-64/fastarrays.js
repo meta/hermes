@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes -typed -fno-inline %s > %t.int && %hermes -typed -fno-inline -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes -typed -fno-inline %s > %t.int && %hermes -typed -fno-inline -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
-// RUN: %hermes -typed -fno-inline -O0 %s > %t.int0 && %hermes -typed -fno-inline -O0 -Xjit=force %s > %t.jit0 && diff %t.int0 %t.jit0
-// RUN: %hermes -typed -fno-inline -O0 %s > %t.int0 && %hermes -typed -fno-inline -O0 -Xjit=force -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
+// RUN: %hermes -typed -fno-inline %s > %t.int && %hermes -typed -fno-inline -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes -typed -fno-inline %s > %t.int && %hermes -typed -fno-inline -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes -typed -fno-inline -O0 %s > %t.int0 && %hermes -typed -fno-inline -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
+// RUN: %hermes -typed -fno-inline -O0 %s > %t.int0 && %hermes -typed -fno-inline -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
 // RUN: %hermes -typed -fno-inline -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // RUN: %hermes -typed -fno-inline -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // REQUIRES: jit
@@ -27,15 +27,22 @@
 // -fno-inline is what keeps the functions below separate. Without it the
 // optimizer inlines all of them into the module's top-level function, which
 // still compiles and still runs every opcode, but leaves nothing to pin per
-// emitter and no way to put a try/catch anywhere without the whole module
-// declining on catchInst. With it, each function is compiled and pinned on
-// its own, and only the two catch helpers decline.
+// emitter. With it, each function is compiled and pinned on its own.
 //
 // An out-of-bounds FastArrayLoad throws, unlike an ordinary array's
-// undefined, so the index cases go through catchLd, which the JIT declines
-// (catchInst is a later milestone). The load itself still happens in
-// compiled code inside ld -- the interpreter frame that catches the throw is
-// catchLd's, one level up.
+// undefined, so the index cases go through catchLd. Every function here now
+// compiles, including the catch helpers -- catchInst landed with the
+// exceptions milestone -- which is why the four differential RUN lines carry
+// -Xjit-crash-on-error. In catchLd the load happens one frame down, inside
+// `ld`, so the throw crosses a compiled frame boundary.
+//
+// `tryLoad` is the case where the load is INSIDE the try region itself, so
+// fastArrayLoad's isInTry() branch runs: it syncs the frame registers to the
+// memory frame without freeing them, because the catch handler may read them
+// again after the longjmp. tryLoad's handler does exactly that -- it uses
+// both `a` and `i` -- so a missing sync shows up as a wrong answer. Before
+// the exceptions milestone that branch was unreachable, since a function
+// with an exception table declined.
 //
 // The index cases are what exercise emit_double_is_uint32, whose x86 form
 // differs from arm64's fcvtzu (see its comment in JitEmitter-internal.h):
@@ -108,6 +115,16 @@ function catchSt(a: Array<number>, i: number, v: number): any {
     return "ok";
   } catch (e) {
     return "oob";
+  }
+}
+
+// The load itself is inside the try, and the handler reads both `a` and `i`
+// back out of the frame after the longjmp.
+function tryLoad(a: Array<number>, i: number, j: number): number {
+  try {
+    return a[i] + a[j];
+  } catch (e) {
+    return a.length * 100 + i;
   }
 }
 
@@ -184,6 +201,8 @@ print(len(c), ld(c, 0), ld(c, 2), ld(c, 3), ld(c, 1002));
 
 // In bounds, including the last element and the -0 case.
 print(catchLd(q, 0), catchLd(q, 2), catchLd(q, -0));
+// CHECK: JIT successfully compiled FunctionID {{[0-9]+}}, 'catchLd'
+// CHECK0: JIT successfully compiled FunctionID {{[0-9]+}}, 'catchLd'
 // CHECK: 20 60 20
 // CHECK0: 20 60 20
 // The bounds-check boundary and everything that is not a uint32 index.
@@ -201,11 +220,21 @@ print(catchLd(q, NaN), catchLd(q, Infinity), catchLd(q, -Infinity));
 // same index shapes must give the same answers.
 print(
   catchSt(q, 0, 1), catchSt(q, 3, 1), catchSt(q, 2.5, 1), catchSt(q, -1, 1));
+// CHECK: JIT successfully compiled FunctionID {{[0-9]+}}, 'catchSt'
+// CHECK0: JIT successfully compiled FunctionID {{[0-9]+}}, 'catchSt'
 // CHECK: ok oob oob oob
 // CHECK0: ok oob oob oob
 print(ld(q, 0));
 // CHECK-NEXT: 1
 // CHECK0-NEXT: 1
+
+// In bounds, then each of the two loads out of bounds in turn. The handler's
+// answer is a.length * 100 + i, so it depends on both frame registers.
+print(tryLoad(q, 0, 2), tryLoad(q, 5, 2), tryLoad(q, 0, 7));
+// CHECK: JIT successfully compiled FunctionID {{[0-9]+}}, 'tryLoad'
+// CHECK0: JIT successfully compiled FunctionID {{[0-9]+}}, 'tryLoad'
+// CHECK-NEXT: 61 305 300
+// CHECK0-NEXT: 61 305 300
 
 print(churn(30000));
 // CHECK: JIT successfully compiled FunctionID {{[0-9]+}}, 'churn'

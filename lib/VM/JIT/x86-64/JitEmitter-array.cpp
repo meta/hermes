@@ -174,11 +174,13 @@ void Emitter::fastArrayLoad(FR frRes, FR frArr, FR frIdx) {
   // their canonical locations and frees nothing, so hwArr, hwIdx and the temps
   // above stay valid across it.
   //
-  // isInTry() is unreachable at runtime today: it is only true inside a try
-  // region, and any function with an exception table still declines in
-  // leave() (its emitter contains a Catch instruction, which declines). This
-  // is a deliberate sync-WITHOUT-free, kept in sync with the same call made
-  // for the same reason in arm64/JitEmitter-control.cpp:113-120
+  // isInTry() is live since the exceptions milestone: a function with an
+  // exception table now compiles, so a fast array load inside a try region
+  // reaches this. See fastarrays.js's `tryLoad`, which loads inside a try and
+  // reads the array registers again from the catch handler.
+  //
+  // This is a deliberate sync-WITHOUT-free, kept in sync with the same call
+  // made for the same reason in JitEmitter-control.cpp
   // (throwIfThisInitialized's isInTry() sync, citing this function's #else
   // path as its own precedent).
   if (isInTry())
