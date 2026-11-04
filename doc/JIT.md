@@ -47,6 +47,7 @@ The machine-code emitter is [asmjit](https://asmjit.com) (vendored in
 | `lib/VM/JIT/DiscoverBB.cpp` | Scans bytecode to find basic-block boundaries (branch targets, fallthroughs after branches, Catch, switch tables, exception handler targets). Arch-independent. |
 | `lib/VM/JIT/RuntimeOffsets.h` | `offsetof` constants for fields the emitted code touches directly (Runtime, StackOverflowGuard, CodeBlock, JSFunction, HiddenClass, IdentifierTable, Hades young-gen fields...). Arch-independent. |
 | `lib/VM/JIT/PerfJitDump.cpp` | Linux `perf` jitdump support. Arch-independent. |
+| `doc/JITTesting.md` | The CI-shaped build/test matrix for all five JIT configs (arm64-qemu, x86-64 HV64/HV32/BOXED ASan+Debug, x86-64 Release), the dump-baseline workflow summary, the release-build validation writeup, and the perf sanity table. Companion to this file and `utils/jit/README.md`. |
 
 ### Tiering / when compilation happens
 
@@ -755,6 +756,30 @@ call-emitting milestone must preserve it.
   allocator. Decide this before the temp allocator's register set is fixed.
 - **IP materialization** (`getBytecodeIP`) and pc-relative RO data (`adr`)
   become RIP-relative `lea`.
+
+**CI recipes, release-build validation and perf sanity (milestone 6,
+Task 3).** A fifth build configuration joins the four above:
+`cmake-build-x86jit-rel` (Release, clang, `HERMESVM_ALLOW_JIT=2`, no
+ASan) — the first non-ASan, non-Debug x86-64 build exercised in this
+port, and therefore the first run where `NDEBUG` strips every assert
+(including ones with potential side effects, e.g. the rspDelta
+bookkeeping counter and the per-instruction invariant checks). It builds
+clean and passes both standing gates with no NDEBUG-only divergence:
+`LIT_FILTER="jit/"` matches the ASan trees exactly (68 pass / 1 XFAIL /
+1 unsupported), and the `aarch64/jit-stress.js` differential is
+byte-identical to the interpreter in all three variants (`-Xjit=force`,
+plus `-Xjit-emit-type-asserts`, and `-O0`), with all 31 functions
+compiling and zero declines per `-Xdump-jitcode=2`. A first perf sanity
+pass on this Release build times interpreter vs. `-Xjit=force` on a hot
+numeric loop, a scaled-up `stress.js`-shaped workload, and a
+property/IC-heavy loop: the JIT wins on all three (1.45x-2.25x),
+clearing the spec's "must not lose to the interpreter on hot loops" bar
+with no tuning attempted.
+**Full commands, the complete CI-shaped matrix for all five configs
+(exact configure+test invocations, which gates each carries, the
+dump-baseline workflow for both architectures, and the full perf table)
+are in `doc/JITTesting.md`** — that document is the CI/perf companion to
+this architecture writeup.
 
 ## Appendix: findings from the 2026-08-15 review
 
