@@ -490,30 +490,88 @@ JIT host — see the Config.h row in the source layout table.
 
 ## x86-64 porting notes
 
-The x86-64 backend (`lib/VM/JIT/x86-64/`) compiles arithmetic, comparisons,
-branches, bit operations, type assertions, young-gen allocation, environments,
-closures, and calls. Milestone 3 adds young-gen inline allocation (bump-alloc
-with overflow slow path, pulled forward from the spec's milestone 4 because
-environments allocate inline), environment creation and field access (get/load/
-store all forms), closures with captured-environment fast paths, class and
-generator object creation (initialization only), and the full call family
-(Call/Call1-4, CallBuiltin under -fstatic-builtins, Construct/CallWithNewTarget
-(Long), CallRequire) with JIT-to-JIT direct-call fast path; recursive and
-higher-order JS now runs in machine code. Opcode coverage includes LoadParam/
-LoadConst*/Mov/Ret (M1), Add/Sub/Mul/Div/Mod with N variants, Inc/Dec/Negate,
-ToNumber/ToNumeric, all comparisons, all branches, BitAnd/Or/Xor, shifts,
-BitNot, ToInt32/ToUint32, type asserts. Tests live at test/jit/x86-64/ (9 total:
-skeleton, arith, cmp, loops, bitops, type-asserts, closures, calls, callbuiltin);
-test/jit itself is still gated to arm64 (test/jit/lit.local.cfg) during
-bring-up, so the main JIT suite does not exercise this backend yet.
--Xjit-emit-counters works (NumCall/NumCallSlow). Still declining: property
-access, object/array/string literals and ops, typeof/instanceof/in, switches,
-exceptions/try, iterator resume, for-in, arguments, globals. To build:
+Milestone 4 status: The x86-64 backend fully compiles object and array
+literals via inline heap buffers, the three-tier property inline-cache
+architecture with HiddenClass lazy-ID pinning (object specialization,
+parent specialization, generic tier), globals (now compiling), and the
+fast-array family under -typed, in all three heap-value modes (HV64,
+HV32, BOXED; see the build matrix below). Approximate coverage: ~270 of
+497 sweep files compile at least one function. All three modes run the
+same test/jit/x86-64 suite (15 tests); the matrix is gated via separate
+CMake trees, and hvmodes.js exercises conditional code paths.
+
+Milestone 3 adds arithmetic, comparisons, branches, bit operations, type
+assertions, young-gen bump allocation, environments, closures, calls
+(Call/Call1-4, Construct, CallWithNewTarget, CallBuiltin, CallRequire)
+with JIT-to-JIT fast path, class and generator initialization. Opcode
+coverage: LoadParam/LoadConst*/Mov/Ret, Add/Sub/Mul/Div/Mod (N variants),
+Inc/Dec/Negate, ToNumber/ToNumeric, all comparisons/branches, BitAnd/Or/
+Xor/shifts/BitNot, ToInt32/ToUint32, type asserts, environment and
+function field access.
+
+Still declining (milestone 5+): exceptions/try, switches, iterators,
+arguments, for-in, strings (AddS, AddEmptyString, LoadConstString,
+LoadConstBigInt, CreateRegExp), typeof (TypeOf, TypeOfIs, JmpTypeOfIs,
+JmpBuiltinIs), generator resume (body compiles; no GeneratorResume here),
+eval, debugger, ToPropertyKey, ProfilePoint, Unreachable. Counter:
+-Xjit-emit-counters (NumCall/NumCallSlow) works. test/jit gated to arm64
+during bring-up. To build:
 
   cmake -B cmake-build-x86jit -G Ninja -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
     -DHERMES_ENABLE_ADDRESS_SANITIZER=ON \
     -DCMAKE_CXX_FLAGS="-O1" -DCMAKE_C_FLAGS="-O1" -DHERMESVM_ALLOW_JIT=2
+
+**The heap-value-mode build matrix.** The recipe above is
+`HEAP_HV_MODE=HEAP_HV_64`, in which every compressed-pointer and
+boxed-double branch of the emitter compiles to nothing. Two further trees
+compile those branches, and both must be built and run for any change
+that touches heap value width. The rule is not a fixed helper list: it
+is any code that computes a heap slot offset or a heap-value width,
+since `sizeof(SHGCSmallHermesValue)` changes across modes and so does
+that arithmetic's result. That covers the obvious decode/encode helpers
+-- `emit_load_cp`/`emit_store_cp`/`emit_sh_cp_{en,de}code*`,
+`Emit_sh_shv_decode`, `emit_shv_string`, the `newObjectWithBuffer`
+inline-versus-slow choice, `fastArrayLength`/`fastArrayLoad` -- and, just
+as much, sites that only look like plain address arithmetic: the
+property IC's slot addressing (`GetByIdImpl::emitLoadFromSlot`, the
+generic tier's shift/bias, `getOwnBySlotIdx`), the object-literal buffer
+visitor, and `emit_load_shv`/`emit_store_shv`/`loadSmallHermesValueInGpX`.
+Treat the names above as examples of the rule, not the list to check
+against.
+
+(Deliberate backend drift: x86-64 carries two Class-D type-assert sites,
+in `fastArrayLength`/`fastArrayLoad`, that arm64 lacks; this is
+design-sanctioned for now, to be reconciled deliberately later.)
+
+Build and run both:
+
+  cmake -B cmake-build-x86jit-hv32 -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+    -DHERMES_ENABLE_ADDRESS_SANITIZER=ON \
+    -DCMAKE_CXX_FLAGS="-O1" -DCMAKE_C_FLAGS="-O1" \
+    -DHERMESVM_ALLOW_JIT=2 -DHERMESVM_HEAP_HV_MODE=HEAP_HV_PREFER32
+
+  cmake -B cmake-build-x86jit-boxed -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+    -DHERMES_ENABLE_ADDRESS_SANITIZER=ON \
+    -DCMAKE_CXX_FLAGS="-O1" -DCMAKE_C_FLAGS="-O1" \
+    -DHERMESVM_ALLOW_JIT=2 -DHERMESVM_HEAP_HV_MODE=HEAP_HV_BOXED
+
+On x86-64, `HEAP_HV_PREFER32` defines `HERMESVM_COMPRESSED_POINTERS`,
+`HERMESVM_BOXED_DOUBLES` and `HERMESVM_CONTIGUOUS_HEAP` together (the JIT
+`#error`s on compressed pointers without a contiguous heap, so the iOS
+segment-table encoding is out of scope for this backend), while
+`HEAP_HV_BOXED` defines only `HERMESVM_BOXED_DOUBLES` and therefore
+isolates the boxed-double decode from pointer compression. All three modes
+run the same `test/jit/x86-64` suite; `test/jit/x86-64/hvmodes.js` exists
+for the matrix and is the one test whose emitted code differs deliberately
+in all three, covering every SmallHermesValue tag through the GetById
+decode, the nullable compressed-pointer decode via `super`, and the single
+place where the emitter picks a different code SHAPE per mode rather than a
+different encoding of one shape -- a literal double that `canInlineDouble`
+rejects sends `newObjectWithBuffer` to `newObjectWithBufferSlow`, which is
+unreachable in HV64.
 
 **Free-after-call invariant (read before adding call emitters).** On
 x86-64, every temp-eligible register is caller-saved: all 8 GP temps

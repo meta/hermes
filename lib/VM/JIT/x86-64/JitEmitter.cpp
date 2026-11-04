@@ -117,6 +117,10 @@ JITCompiledFunctionPtr Emitter::addToRuntime(asmjit::JitRuntime &jr) {
 
 #ifndef NDEBUG
 void Emitter::assertPostInstructionInvariants() {
+  // x86-64: no instruction may leave rsp transiently lowered across its own
+  // boundary -- see the rspDelta_ contract on callImpl().
+  assert(rspDelta_ == 0 && "rsp delta not restored at instruction boundary");
+
   for (const auto &frState : frameRegs_)
     assert(!frState.regIsDirty && "Frame register is dirty");
 
@@ -523,6 +527,11 @@ void Emitter::leave(llvh::ArrayRef<const asmjit::Label *> exceptionHandlers) {
   // register.
   a.mov(x86::rax, x86::rbx);
 
+  // x86-64: rsp must not still be transiently lowered for stack arguments
+  // when the epilogue starts unwinding it -- see the rspDelta_ contract on
+  // callImpl().
+  assert(rspDelta_ == 0 && "rsp delta not restored before epilogue");
+
   // Restore the stack in the exact reverse of the prologue.
   if (uint32_t stackSize = getStackSize())
     a.add(x86::rsp, stackSize);
@@ -603,6 +612,10 @@ void Emitter::callRuntimeWithSavedIP(void *fn, const char *name) {
 }
 
 void Emitter::callRuntime(void *fn, const char *name) {
+  // x86-64: every runtime call, whether reached directly or through
+  // callRuntimeWithSavedIP(), funnels through here, so a single check
+  // covers the "rspDelta_ contract" for both -- see callImpl().
+  assert(rspDelta_ % 16 == 0 && "rsp not 16-byte aligned at call emission");
   comment("// call %s", name);
   loadBits64InGp(xScratch, (uint64_t)fn, name);
   a.call(xScratch);

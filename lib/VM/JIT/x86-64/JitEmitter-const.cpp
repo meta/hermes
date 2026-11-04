@@ -66,8 +66,14 @@ void Emitter::loadConstStringInGpX(SymbolID id, const x86::Gp &out) {
                    RuntimeOffsets::identifierTableLookupEntrySize) +
       RuntimeOffsets::identifierTableLookupEntryStrPrim;
   // x86-64: arm64 needs a register-offset fallback here; a disp32 spans the
-  // whole lookup vector, so the load is unconditional.
-  assert(offset <= (size_t)INT32_MAX && "entry offset must fit a disp32");
+  // whole lookup vector in practice, so the load is unconditional -- but
+  // only in practice. SymbolID's index is 28 bits (SymbolID::NUM_BITS == 29,
+  // minus the not-uniqued tag bit), and LookupEntry is 16 bytes, so the
+  // theoretical maximum offset is (2^28 - 1) * 16 ~= 4.29GB, which exceeds
+  // INT32_MAX (~2.147GB) well before it exceeds the lookup vector's own
+  // representable size. Decline rather than silently truncate the disp32.
+  if (LLVM_UNLIKELY(offset > (size_t)INT32_MAX))
+    unsupported("const string offset");
   a.mov(out, x86::qword_ptr(out, (int32_t)offset));
 }
 

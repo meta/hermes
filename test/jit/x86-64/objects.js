@@ -214,7 +214,10 @@ function churnSmall(iters) {
 var eo = empty();
 // CHECK: JIT successfully compiled FunctionID 1, 'empty'
 // CHECK0: JIT successfully compiled FunctionID 1, 'empty'
-print(typeof eo, Object.keys(eo).length, Object.getPrototypeOf(eo) === Object.prototype);
+print(
+    typeof eo,
+    Object.keys(eo).length,
+    Object.getPrototypeOf(eo) === Object.prototype);
 // CHECK: object 0 true
 // CHECK0: object 0 true
 
@@ -246,7 +249,10 @@ var a1 = shapeA(), b1 = shapeB(), c1 = shapeC();
 // CHECK: JIT successfully compiled FunctionID 6, 'shapeA'
 // CHECK: JIT successfully compiled FunctionID 7, 'shapeB'
 // CHECK: JIT successfully compiled FunctionID 8, 'shapeC'
-print(Object.keys(a1).join(","), Object.keys(b1).join(","), Object.keys(c1).join(","));
+print(
+    Object.keys(a1).join(","),
+    Object.keys(b1).join(","),
+    Object.keys(c1).join(","));
 // CHECK: x y,x x,y,z
 print(a1.x, b1.x, b1.y, c1.x, c1.y, c1.z);
 // CHECK-NEXT: 1 2 1 1 2 3

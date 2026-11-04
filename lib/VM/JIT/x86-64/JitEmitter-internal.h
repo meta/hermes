@@ -210,8 +210,9 @@ inline void emit_sh_ljs_string(x86::Assembler &a, const x86::Gp &inOut) {
 ///
 /// x86-64: in the boxed-doubles configuration the tag is a small constant
 /// that fits a sign-extended imm32, so the `or` takes no scratch register.
-/// That branch is not compiled on x86-64 yet -- see
-/// emit_sh_cp_decode_non_null().
+/// That branch is compiled and executed by both boxed builds
+/// (HEAP_HV_PREFER32 and HEAP_HV_BOXED); it is what tags the string values
+/// an object-literal buffer writes. See emit_sh_cp_decode_non_null().
 inline void emit_shv_string(x86::Assembler &a, const x86::Gp &inOut) {
 #ifdef HERMESVM_BOXED_DOUBLES
   static_assert(
@@ -246,10 +247,13 @@ inline void emit_sh_ljs_is_null(
 /// Given a compressed pointer in \p inOut that is known to be non-null,
 /// decompress it and place the result in \p inOut.
 ///
-/// x86-64: the compressed-pointer branch below is transcribed from arm64 for
-/// parity, but no x86-64 build configuration compiles it yet -- this backend
-/// is only built for HEAP_HV_64. The HV32 build matrix arrives with a later
-/// milestone, and this branch gets its first compile and test there.
+/// x86-64: the compressed-pointer branch below is transcribed from arm64.
+/// It is compiled and executed by the HEAP_HV_PREFER32 build, which is the
+/// only x86-64 configuration that defines HERMESVM_COMPRESSED_POINTERS --
+/// HEAP_HV_BOXED sets only HERMESVM_BOXED_DOUBLES, so the branch is inert
+/// there just as it is in HEAP_HV_64. This is the reference note for the
+/// cp helpers below: each of them is live in HV32 and inert in the other
+/// two builds. See doc/JIT.md's heap-value-mode build matrix.
 ///
 /// x86-64: `add` also writes EFLAGS, where arm64's three-operand `add` does
 /// not touch flags at all, so a caller must not hold live flags across this
@@ -273,8 +277,9 @@ inline void emit_sh_cp_decode_non_null(
 /// an lea precisely because lea does not write EFLAGS, which lets the `test`
 /// that reads the original value sit before it and still control the cmov.
 ///
-/// See emit_sh_cp_decode_non_null() -- the branch below is not compiled on
-/// x86-64 yet, so \p zeroTemp is unused in the HV64 build.
+/// See emit_sh_cp_decode_non_null() -- the branch below is live in the HV32
+/// build, so \p zeroTemp is used there and unused in the HV64 and BOXED
+/// builds. Its caller is loadParentNoTraps, which `super.m()` emits.
 inline void emit_sh_cp_decode(
     x86::Assembler &a,
     const x86::Gp &inOut,
@@ -296,8 +301,12 @@ inline void emit_sh_cp_decode(
 /// x86-64: arm64's three-operand `add` becomes an `lea`, which computes the
 /// same sum into a third register and, unlike `add`, writes no EFLAGS.
 ///
-/// See emit_sh_cp_decode_non_null() -- the branch below is not compiled on
-/// x86-64 yet, so \p mayBeRes is unused in the HV64 build.
+/// See emit_sh_cp_decode_non_null() -- the narrow branch below is live in
+/// the HV32 build, so \p mayBeRes is used there and unused in the HV64 and
+/// BOXED builds. Its only caller is the GetById object-specialization tier,
+/// which is emitted only once a call site's cache has warmed up; under
+/// -Xjit=force nothing warms, so props.js's threshold-mode SPEC RUN lines
+/// are the only coverage this helper has. Do not delete them.
 [[nodiscard]] inline const x86::Gp &emit_sh_cp_decode_non_null_preserve_input(
     x86::Assembler &a,
     [[maybe_unused]] const x86::Gp &mayBeRes,
@@ -318,7 +327,7 @@ inline void emit_sh_cp_decode(
 /// place the result in \p inOut.
 ///
 /// x86-64: see emit_sh_cp_decode_non_null() -- the compressed-pointer branch
-/// is not compiled on x86-64 yet.
+/// is live in the HV32 build and inert in the other two.
 ///
 /// x86-64: `sub` also writes EFLAGS, where arm64's three-operand `sub` does
 /// not touch flags at all, so a caller must not hold live flags across this
@@ -337,7 +346,8 @@ inline void emit_sh_cp_encode_non_null(
 /// theirs with the size-less x86::ptr(), so each branch stamps the width it
 /// needs onto a copy. The 32-bit load zero-extends into the full register,
 /// which is what makes the narrow branch a decompressible value.
-/// See emit_sh_cp_decode_non_null() -- that branch is not compiled yet.
+/// See emit_sh_cp_decode_non_null() -- the narrow branch is live in the HV32
+/// build and inert in the other two.
 ///
 /// x86-64: unlike its neighbors above, `mov` is flag-clean, so this narrow
 /// branch leaves no EFLAGS divergence for a caller to worry about.
