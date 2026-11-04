@@ -600,6 +600,24 @@ void Emitter::emitIncrementCounter(JitCounter counter) {
           xScratch, (int32_t)((unsigned)counter * sizeof(uint64_t))));
 }
 
+void Emitter::emitIncrementSlowCallKindCounter() {
+  if (!emitCounters_)
+    return;
+  // The callee's CellKind is live in rax (placed by callImpl's fast
+  // path and consumed by the slow path's jitCallArray index below).
+  // Count it in the per-kind histogram that follows the named counters.
+  // Like emitIncrementCounter, this clobbers xScratch and EFLAGS; the
+  // slow-path head has no live flags, and xScratch is reloaded by the
+  // jitCallArray sequence afterwards.
+  a.mov(xScratch, x86::qword_ptr(xRuntime, RuntimeOffsets::runtimeJitCounters));
+  a.inc(
+      x86::qword_ptr(
+          xScratch,
+          x86::rax,
+          3,
+          (int32_t)((unsigned)JitCounter::_Last * sizeof(uint64_t))));
+}
+
 void Emitter::callRuntimeWithSavedIP(void *fn, const char *name) {
   // Save the current IP in the runtime.
   getBytecodeIP(xScratch);

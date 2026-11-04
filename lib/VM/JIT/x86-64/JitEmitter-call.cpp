@@ -374,6 +374,7 @@ void Emitter::callImpl(FR frRes, FR frCallee) {
             "// Slow path: CallImpl r%u, r%u", frRes.index(), frCallee.index());
         em.a.bind(sp.slowPathLab);
         em.emitIncrementCounter(JitCounter::NumCallSlow);
+        em.emitIncrementSlowCallKindCounter();
         // x86-64: a scaled-index memory operand has no absolute-address
         // form, so the table's base is materialized into xScratch first.
         // eax still contains the callee CellKind from the fast path.

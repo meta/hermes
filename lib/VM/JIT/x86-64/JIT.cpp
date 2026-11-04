@@ -42,6 +42,15 @@ void JITContext::dumpCounters(llvh::raw_ostream &os) {
   };
   for (unsigned i = 0; i < (unsigned)JitCounter::_Last; ++i)
     os << kCounterNames[i] << ": " << counters_[i] << "\n";
+
+  // Slow-call-by-callee-kind histogram, see the counters_ layout comment
+  // in JIT.h. Only print the kinds that were actually observed.
+  for (unsigned k = 0; k < kNumCellKinds; ++k) {
+    uint64_t count = counters_[(unsigned)JitCounter::_Last + k];
+    if (count != 0)
+      os << "NumCallSlow[" << cellKindStr((CellKind)k) << "]: " << count
+         << "\n";
+  }
 }
 
 void JITContext::markRoots(

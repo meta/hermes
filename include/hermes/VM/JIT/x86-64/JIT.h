@@ -9,6 +9,7 @@
 #define HERMES_VM_JIT_X86_64_JIT_H
 
 #include "hermes/ADT/TransparentOwningPtr.h"
+#include "hermes/VM/CellKind.h"
 #include "hermes/VM/CodeBlock.h"
 #include "hermes/VM/JIT/JitCounters.h"
 #include "hermes/VM/JIT/PerfJitDump.h"
@@ -146,7 +147,7 @@ class JITContext {
         (emitCounters || !counters_.get()) && "Can't disable enabled counters");
     if (emitCounters && !counters_.get()) {
       counters_.reset((uint64_t *)checkedCalloc(
-          (unsigned)JitCounter::_Last, sizeof(uint64_t)));
+          (unsigned)JitCounter::_Last + kNumCellKinds, sizeof(uint64_t)));
     }
   }
 
@@ -203,7 +204,12 @@ class JITContext {
   /// Lowered based on the loop depth before deciding whether to JIT.
   uint32_t defaultExecThreshold_ = 1 << 5;
 
-  /// Array of counters for use by the emitted code.
+  /// Array of counters for use by the emitted code. Laid out as the named
+  /// counters from JIT_COUNTERS (indexed by JitCounter) first, immediately
+  /// followed by kNumCellKinds slots holding the slow-call-by-callee-kind
+  /// histogram: slot `(unsigned)JitCounter::_Last + (unsigned)kind` counts
+  /// how many slow calls (see JitCounter::NumCallSlow) had a callee of that
+  /// CellKind.
   TransparentOwningPtr<uint64_t, llvh::FreeDeleter> counters_;
 };
 

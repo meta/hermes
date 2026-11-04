@@ -1357,6 +1357,14 @@ class Emitter {
   /// Clobbers xScratch and EFLAGS; call it only where both are dead.
   void emitIncrementCounter(JitCounter counter);
 
+  /// If counters are enabled, emit code to increment the slot of the
+  /// slow-call-by-callee-kind histogram (see the counters_ layout comment
+  /// in JIT.h) that corresponds to the callee's CellKind, which must be
+  /// live in rax at the point this is called (callImpl's slow path leaves
+  /// it there). Clobbers xScratch and EFLAGS; call it only where both are
+  /// dead and rax still holds the CellKind.
+  void emitIncrementSlowCallKindCounter();
+
   /// Set up the call frame and perform the call. The caller should have
   /// already populated the arg count and new target registers.
   /// \param frRes is the frame register that will contain the result.
