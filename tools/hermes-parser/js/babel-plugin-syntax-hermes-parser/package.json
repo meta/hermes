@@ -6,7 +6,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git@github.com:facebook/hermes.git"
+    "url": "git+https://github.com/facebook/hermes.git",
+    "directory": "tools/hermes-parser/js/babel-plugin-syntax-hermes-parser"
+  },
+  "homepage": "https://github.com/facebook/hermes/tree/main/tools/hermes-parser/js/babel-plugin-syntax-hermes-parser#readme",
+  "bugs": {
+    "url": "https://github.com/facebook/hermes/issues"
   },
   "dependencies": {
     "hermes-parser": "0.26.0"
