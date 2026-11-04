@@ -807,6 +807,7 @@ if(HERMES_ENABLE_TEST_SUITE)
     exception_on_oom_enabled=${HERMESVM_EXCEPTION_ON_OOM}
     profiler=${HERMES_PROFILER_MODE_IN_LIT_TEST}
     gc=${HERMESVM_GCKIND}
+    heap_hv_mode=${HERMESVM_HEAP_HV_MODE}
     ubsan=${HERMES_ENABLE_UNDEFINED_BEHAVIOR_SANITIZER}
     asan=${HERMES_ENABLE_ADDRESS_SANITIZER}
     coverage=${coverage_directory}

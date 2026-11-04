@@ -113,6 +113,9 @@ class AlignedHeapSegment {
    private:
     friend class FixedSizeHeapSegment;
     friend class AlignedHeapSegment;
+    /// The JIT emits the card-dirty store inline; RuntimeOffsets derives the
+    /// offsets and constants it bakes in from the members below.
+    friend struct RuntimeOffsets;
 
     enum class CardStatus : char { Clean = 0, Dirty = 1 };
 

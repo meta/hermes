@@ -73,6 +73,87 @@ struct RuntimeOffsets {
       offsetof(Runtime, heap_.youngGen_.effectiveEnd_);
   static constexpr uint32_t runtimeHadesOGMarkingBarriers =
       offsetof(Runtime, heap_.ogMarkingBarriers_);
+
+  /// \name Inline write barrier ("safe store") geometry.
+  ///
+  /// These describe the GC state the JIT reads inline in order to decide
+  /// whether a heap store needs no barrier at all, needs only a card to be
+  /// dirtied, or must go to the runtime helper. Together they are a
+  /// maintenance contract with HadesGC: each is either derived with offsetof()
+  /// below or pinned by a static_assert, so a change on the GC side breaks the
+  /// build rather than the emitted code. See Emitter::emitSafeStoreOrSlow().
+  /// @{
+
+  /// The start of the young generation segment. Unlike the two YG fields
+  /// above, this one can change identity and not just value:
+  /// HadesGC::setYoungGen swaps in a whole different segment, so the emitted
+  /// code loads it rather than baking it in.
+  static constexpr uint32_t runtimeHadesYGStart =
+      offsetof(Runtime, heap_.youngGen_.lowLim_);
+
+  /// The start address of the segment currently being compacted, or
+  /// kHadesNoCompactee when there is none.
+  /// HadesGC::CompacteeState::contains() compares against exactly this field.
+  static constexpr uint32_t runtimeHadesCompacteeStart =
+      offsetof(Runtime, heap_.compactee_.start);
+
+  /// The value runtimeHadesCompacteeStart holds when no compaction is in
+  /// progress. Deliberately a non-null value that cannot be a segment start,
+  /// which is what makes the inline "no compactee" test a plain compare.
+  static constexpr uintptr_t kHadesNoCompactee =
+      HadesGC::CompacteeState::kInvalidCompacteeStart;
+
+  using SegmentContents = AlignedHeapSegment::Contents;
+
+  /// Size and alignment of a heap segment unit. A pointer into a unit-sized
+  /// segment is turned into its segment start by masking off the low
+  /// kSegmentUnitSize-1 bits.
+  static constexpr size_t kSegmentUnitSize =
+      AlignedHeapSegment::kSegmentUnitSize;
+  static_assert(
+      kSegmentUnitSize && (kSegmentUnitSize & (kSegmentUnitSize - 1)) == 0,
+      "segment unit size must be a power of two");
+
+  /// Offset within a segment of the inline card status array. The emitted
+  /// card-dirty store indexes off the segment start directly, so this must
+  /// be 0.
+  static constexpr uint32_t segmentInlineCards =
+      offsetof(SegmentContents, inlineCardsArray_);
+  static_assert(
+      segmentInlineCards == 0,
+      "the inline cards array must start at segment offset 0");
+
+  /// log2 of the number of heap bytes covered by one card.
+  static constexpr uint32_t kLogCardSize = SegmentContents::kLogCardSize;
+  static_assert(kLogCardSize == 9, "512-byte cards");
+
+  /// The card status byte value meaning "dirty".
+  static constexpr uint8_t kCardDirty =
+      (uint8_t)SegmentContents::CardStatus::Dirty;
+  static_assert(kCardDirty == 1, "CardStatus::Dirty must be 1");
+
+  /// Offset within a segment of its size, expressed as a multiple of
+  /// kSegmentUnitSize. The inline card-dirty store is only valid in a segment
+  /// whose size is exactly one unit, because only then does
+  /// Contents::prefixHeader_.cards_ point at inlineCardsArray_ (see the
+  /// Contents constructor); a larger, "jumbo" segment holds its card array
+  /// out of line and its cells are barriered through
+  /// dirtyCardForAddressInLargeObj() instead.
+  static constexpr uint32_t segmentShiftedSize =
+      offsetof(SegmentContents, prefixHeader_.segmentInfo_.shiftedSegmentSize);
+  static_assert(
+      sizeof(SHSegmentInfo::shiftedSegmentSize) == 2,
+      "shiftedSegmentSize is compared as a 16-bit value");
+
+  /// Every card index the emitted store can produce falls inside the
+  /// allocation region, which starts well past the prefix of the card array
+  /// that is repurposed to hold SHSegmentInfo and the out-of-line cards
+  /// pointer.
+  static_assert(
+      (AlignedHeapSegment::kOffsetOfAllocRegion >> kLogCardSize) >=
+          SegmentContents::kFirstUsedIndex,
+      "a dirtied card must never land in the repurposed card table prefix");
+  /// @}
 #endif
 
 #ifndef NDEBUG

@@ -769,6 +769,82 @@ void Emitter::getByIndex(FR frRes, FR frSource, uint32_t key) {
   frUpdatedWithHW(frRes, hwRes);
 }
 
+#if HERMES_JIT_INLINE_SAFE_STORE
+void Emitter::emitPutByIdInlineTier(
+    FR frTarget,
+    FR frValue,
+    uint16_t clazzID,
+    SlotIndex slot,
+    const asmjit::Label &helperLab) {
+  comment("// Put to object specialization");
+
+  // Both operands are already synced to the frame by the caller, so any temp
+  // holding another FR is dead weight here.
+  freeAllFRTempExcept(frTarget);
+
+  // We need the target and the value in GP registers.
+  HWReg hwTarget = getOrAllocFRInGpX(frTarget, true);
+  HWReg hwValue = getOrAllocFRInGpX(frValue, true);
+
+  // As in GetByIdImpl::emitFastPath(), the allocs and frees below emit no
+  // code at all: they only decide which registers this sequence may use,
+  // based on what we know about the live ranges. Once every register is
+  // recorded, all of them are marked free, which is what leaves the helper
+  // path below with no temp registered as an FR location.
+  HWReg hwLoc = allocTempGpX();
+  HWReg hwTemp1 = allocTempGpX();
+  HWReg hwTemp2 = allocTempGpX();
+  const x86::Gp target = hwTarget.gpq();
+  const x86::Gp value = hwValue.gpq();
+  const x86::Gp loc = hwLoc.gpq();
+  const x86::Gp temp1 = hwTemp1.gpq();
+  const x86::Gp temp2 = hwTemp2.gpq();
+  freeReg(hwLoc);
+  freeReg(hwTemp1);
+  freeReg(hwTemp2);
+  freeFRTemp(frTarget);
+  freeFRTemp(frValue);
+
+  // Code generation starts here.
+
+  // Is the target an object?
+  emit_sh_ljs_is_object(a, temp1, target);
+  a.jne(helperLab);
+  // loc is the pointer to the object.
+  emit_sh_ljs_get_pointer(a, loc, target);
+
+  // temp1 is the hidden class.
+  emit_load_cp(a, temp1, x86::ptr(loc, offsetof(SHJSObject, clazz)));
+  emit_sh_cp_decode_non_null(a, temp1);
+  // temp1 = hc->lazyJITId, a zero-extending 16-bit load.
+  a.movzx(
+      temp1.r32(), x86::word_ptr(temp1, RuntimeOffsets::hiddenClassLazyJITId));
+  a.cmp(temp1.r32(), asmjit::Imm(clazzID));
+  a.jne(helperLab);
+
+  // The class matches, so the object has the cached slot as a plain own data
+  // property -- the same conclusion _jit_put_by_id draws from the same
+  // comparison. Turn loc into the address of that slot; the arithmetic is
+  // GetByIdImpl::emitLoadFromSlot()'s, one step short of the load.
+  size_t ofs;
+  if (slot < HERMESVM_DIRECT_PROPERTY_SLOTS) {
+    ofs = offsetof(SHJSObjectAndDirectProps, directProps) +
+        (size_t)slot * sizeof(SHGCSmallHermesValue);
+  } else {
+    emit_load_cp(a, loc, x86::ptr(loc, offsetof(SHJSObject, propStorage)));
+    emit_sh_cp_decode_non_null(a, loc);
+    ofs = offsetof(SHArrayStorageSmall, storage) +
+        (size_t)(slot - HERMESVM_DIRECT_PROPERTY_SLOTS) *
+            sizeof(SHGCSmallHermesValue);
+  }
+  assert(ofs <= (size_t)INT32_MAX && "slot offset must fit a disp32");
+  a.lea(loc, x86::ptr(loc, (int32_t)ofs));
+
+  // Store, if the write barrier for it is a no-op or a card-dirty.
+  emitSafeStoreOrSlow(loc, value, temp1, temp2, helperLab);
+}
+#endif // HERMES_JIT_INLINE_SAFE_STORE
+
 void Emitter::putByIdImpl(
     FR frTarget,
     SHSymbolID symID,
@@ -796,9 +872,51 @@ void Emitter::putByIdImpl(
           JSObject::maxYoungGenAllocationPropCount(),
       "dictionary objects must be allocated in a single segment in young gen");
 
+#if HERMES_JIT_INLINE_SAFE_STORE
+  // Decide, at compile time, whether an inline tier goes ahead of the helper
+  // call. It does when the site's write cache already recorded a hidden
+  // class, i.e. when this site has run interpreted and hit -- which is what
+  // makes the guard below likely to succeed. A cold cache (every site under
+  // -Xjit=force) emits the helper call alone, exactly as before.
+  //
+  // The cached class is the class of the object for a write to an EXISTING
+  // property, so class equality alone proves the slot, and that is precisely
+  // the conclusion _jit_put_by_id's own fast path draws. strictMode and
+  // tryProp do not enter into it: they only matter when the property is
+  // missing or unwritable, which the class match rules out. They are still
+  // passed to the helper, which handles every other case.
+  uint16_t clazzID = 0;
+  SlotIndex slot = 0;
+  if (cacheIdx != hbc::PROPERTY_CACHING_DISABLED) {
+    WritePropertyCacheEntry *cacheEntry =
+        codeBlock_->getWriteCacheEntry(cacheIdx);
+    slot = cacheEntry->getSlot();
+    // NOTE: initHCLazyIDMayAlloc() is a GC safepoint -- it may create or grow
+    // the usedHCs ArrayStorage -- so the class pointer it is handed must not
+    // be used afterwards. Only the returned id is, and a non-zero id means
+    // the class is pinned in usedHCs and will outlive this compiled function.
+    clazzID = initHCLazyIDMayAlloc(
+        cacheEntry->clazz.get(runtime_, runtime_.getHeap()));
+  }
+  asmjit::Label helperLab;
+  asmjit::Label contLab;
+#endif
+
   syncAllFRTempExcept({});
   syncToFrame(frTarget);
   syncToFrame(frValue);
+
+#if HERMES_JIT_INLINE_SAFE_STORE
+  if (clazzID) {
+    helperLab = a.newLabel();
+    contLab = a.newLabel();
+    emitPutByIdInlineTier(frTarget, frValue, clazzID, slot, helperLab);
+    // Falling out of the inline tier means the store is done.
+    a.jmp(contLab);
+    a.bind(helperLab);
+  }
+#endif
+
   freeAllFRTempExcept({});
 
   a.mov(x86::rdi, xRuntime);
@@ -837,6 +955,11 @@ void Emitter::putByIdImpl(
   a.add(x86::rsp, asmjit::Imm(16));
 #ifndef NDEBUG
   rspDelta_ -= 16;
+#endif
+
+#if HERMES_JIT_INLINE_SAFE_STORE
+  if (contLab.isValid())
+    a.bind(contLab);
 #endif
 }
 

@@ -368,5 +368,120 @@ asmjit::Error OurLogger::_log(const char *data, size_t size) noexcept {
 }
 #endif
 
+#if HERMES_JIT_INLINE_SAFE_STORE
+void Emitter::emitSafeStoreOrSlow(
+    const x86::Gp &loc,
+    const x86::Gp &value,
+    const x86::Gp &t1,
+    const x86::Gp &t2,
+    const asmjit::Label &slowLab) {
+  assert(t1 != loc && t1 != value && "t1 must not alias loc or value");
+  assert(t2 != loc && t2 != value && "t2 must not alias loc or value");
+  assert(t1 != t2 && "the two temporaries must differ");
+  // The single store below writes the whole slot. In this build state a
+  // SmallHermesValue is a HermesValue, which is what lets a value the
+  // emitters carry in a GP register be stored without any re-encoding; that
+  // is exactly what HERMES_JIT_INLINE_SAFE_STORE selects for.
+  static_assert(
+      sizeof(SmallHermesValue) == sizeof(HermesValue),
+      "the inline store writes a 64-bit HermesValue");
+
+  comment("// Inline store with barrier predicate");
+
+  asmjit::Label youngTargetLab = a.newLabel();
+  asmjit::Label doneLab = a.newLabel();
+
+  // The mask that turns a pointer into the start of its segment. It is
+  // negative, so it reaches the emitted instruction as a sign-extended imm32.
+  static_assert(
+      RuntimeOffsets::kSegmentUnitSize <= ((size_t)1 << 31),
+      "the segment mask must fit a sign-extended imm32");
+  constexpr int64_t kSegmentMask =
+      ~(int64_t)(RuntimeOffsets::kSegmentUnitSize - 1);
+
+  // t1 = the start of the segment containing the slot.
+  a.mov(t1, loc);
+  a.and_(t1, asmjit::Imm(kSegmentMask));
+
+  // HadesGC::writeBarrier() step (1): a slot in the young generation never
+  // needs a barrier of any kind. RuntimeOffsets::runtimeHadesYGStart is
+  // loaded rather than baked in because setYoungGen() can swap the segment.
+  a.cmp(t1, x86::qword_ptr(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
+  a.je(youngTargetLab);
+
+  // Step (2): if the OG marking barriers are on, the snapshot barrier must
+  // read the slot's OLD value, so the store cannot happen here. Testing this
+  // before storing anything is what makes that ordering hold by
+  // construction. RuntimeOffsets::runtimeHadesOGMarkingBarriers.
+  a.cmp(
+      x86::byte_ptr(xRuntime, RuntimeOffsets::runtimeHadesOGMarkingBarriers),
+      asmjit::Imm(0));
+  a.jne(slowLab);
+
+  // Step (3), first half: relocationWriteBarrier() also dirties a card for a
+  // newly created pointer into the segment being compacted. Rather than
+  // replicate that, decline whenever a compaction is in progress at all.
+  // RuntimeOffsets::runtimeHadesCompacteeStart / kHadesNoCompactee.
+  static_assert(
+      RuntimeOffsets::kHadesNoCompactee <= (uintptr_t)INT32_MAX,
+      "the no-compactee sentinel must fit an imm32");
+  a.cmp(
+      x86::qword_ptr(xRuntime, RuntimeOffsets::runtimeHadesCompacteeStart),
+      asmjit::Imm((int32_t)RuntimeOffsets::kHadesNoCompactee));
+  a.jne(slowLab);
+
+  // The card-dirty store at the bottom writes the segment's INLINE card
+  // status array, which only exists in a segment exactly one unit long; a
+  // jumbo segment keeps its card array out of line and is barriered through
+  // AlignedHeapSegment::dirtyCardForAddressInLargeObj(). Declining here is
+  // what makes the card math valid.
+  //
+  // It is NOT, on its own, what makes this safe for an arbitrary address:
+  // this load only reads SHSegmentInfo when `loc` is inside the first unit
+  // of its segment, which is the precondition documented on the declaration.
+  // A jumbo segment is unit-ALIGNED but several units long, so for a `loc`
+  // further in, `loc & ~(unit-1)` names a later unit and the word below is
+  // object payload. Callers bound `loc`: PutById through
+  // WritePropertyCacheEntry::kMaxSlot, array stores through a storage-size
+  // gate. RuntimeOffsets::segmentShiftedSize.
+  a.cmp(x86::word_ptr(t1, RuntimeOffsets::segmentShiftedSize), asmjit::Imm(1));
+  a.jne(slowLab);
+
+  // The barrier is now known to be at most a card-dirty. Store.
+  a.mov(x86::qword_ptr(loc), value);
+
+  // relocationWriteBarrier() is only reached for a pointer value.
+  emit_sh_ljs_get_tag(a, t2, value);
+  emit_sh_ljs_tag_is_pointer(a, t2);
+  a.jb(doneLab);
+
+  // t2 = the start of the segment containing the pointed-to cell. Only an
+  // old-to-young pointer needs a card; old-to-old does not, and the compactee
+  // cases were declined above.
+  emit_sh_ljs_get_pointer(a, t2, value);
+  a.and_(t2, asmjit::Imm(kSegmentMask));
+  a.cmp(t2, x86::qword_ptr(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
+  a.jne(doneLab);
+
+  // FixedSizeHeapSegment::dirtyCardForAddress(loc), inline:
+  //   segLoc[(loc - segLoc) >> kLogCardSize] = CardStatus::Dirty
+  // The card array base is the segment start itself, since
+  // RuntimeOffsets::segmentInlineCards is 0. The runtime writes this byte
+  // with a relaxed atomic store, which on x86 is this same instruction.
+  a.mov(t2, loc);
+  a.sub(t2, t1);
+  a.shr(t2, asmjit::Imm(RuntimeOffsets::kLogCardSize));
+  a.mov(
+      x86::byte_ptr(t1, t2, 0, (int32_t)RuntimeOffsets::segmentInlineCards),
+      asmjit::Imm(RuntimeOffsets::kCardDirty));
+  a.jmp(doneLab);
+
+  a.bind(youngTargetLab);
+  a.mov(x86::qword_ptr(loc), value);
+
+  a.bind(doneLab);
+}
+#endif // HERMES_JIT_INLINE_SAFE_STORE
+
 } // namespace hermes::vm::x86_64
 #endif // HERMESVM_JIT_X86_64
