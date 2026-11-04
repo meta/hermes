@@ -107,7 +107,9 @@ val configureBuildForHermes by
       dependsOn("prepareLintJarForPublish")
       dependsOn("generatePomFileForReleasePublication")
       workingDir(hermesDir)
-      inputs.dir(hermesDir)
+      // Exclude Gradle state (its lock files are unreadable while held on Windows) and build
+      // outputs, including this task's own.
+      inputs.files(fileTree(hermesDir).exclude("**/.gradle/**", "**/build/**"))
       outputs.files(hermesBuildOutputFileTree)
       var cmakeCommandLine = windowsAwareCommandLine(
           cmakeBinaryPath,
