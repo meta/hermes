@@ -189,6 +189,16 @@ void Emitter::syncToFrame(FR fr) {
 }
 
 void Emitter::syncAllFRTempExcept(FR exceptFR) {
+  // Inside a try region, excluding the destination is unsound: if the
+  // instruction throws instead of writing its destination, the catch
+  // handler reads the destination's frame slot, and register
+  // allocation may have coalesced a live variable's phi with that
+  // destination (see test/jit/try-catch-dest-reg.js). Sync everything
+  // so the frame is correct along the exceptional edge. Costs one
+  // extra store per throwing instruction, only in functions with try.
+  if (exceptFR.isValid() && isInTry())
+    exceptFR = FR();
+
   for (unsigned i = 0, e = frameRegs_.size(); i < e; ++i) {
     auto &state = frameRegs_[i];
     FR fr{i};
