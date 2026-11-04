@@ -173,6 +173,14 @@ void Emitter::fastArrayLoad(FR frRes, FR frArr, FR frIdx) {
   // Syncing earlier is otherwise immaterial: it only writes registers back to
   // their canonical locations and frees nothing, so hwArr, hwIdx and the temps
   // above stay valid across it.
+  //
+  // isInTry() is unreachable at runtime today: it is only true inside a try
+  // region, and any function with an exception table still declines in
+  // leave() (its emitter contains a Catch instruction, which declines). This
+  // is a deliberate sync-WITHOUT-free, kept in sync with the same call made
+  // for the same reason in arm64/JitEmitter-control.cpp:113-120
+  // (throwIfThisInitialized's isInTry() sync, citing this function's #else
+  // path as its own precedent).
   if (isInTry())
     syncAllFRTempExcept(frRes != frArr && frRes != frIdx ? frRes : FR());
 

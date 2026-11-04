@@ -815,7 +815,13 @@ void Emitter::putByIdImpl(
   // the call addresses the frame through rsp -- loadFrameAddr() uses xFrame,
   // and callRuntimeWithSavedIP() only touches xScratch and xRuntime.
   a.push(asmjit::Imm(tryProp));
+#ifndef NDEBUG
+  rspDelta_ += 8;
+#endif
   a.push(asmjit::Imm(strictMode));
+#ifndef NDEBUG
+  rspDelta_ += 8;
+#endif
   EMIT_RUNTIME_CALL(
       *this,
       void (*)(
@@ -829,6 +835,9 @@ void Emitter::putByIdImpl(
           bool tryProp),
       _jit_put_by_id);
   a.add(x86::rsp, asmjit::Imm(16));
+#ifndef NDEBUG
+  rspDelta_ -= 16;
+#endif
 }
 
 void Emitter::defineOwnById(
