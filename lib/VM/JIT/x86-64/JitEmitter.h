@@ -1052,11 +1052,27 @@ class Emitter {
       RuntimeModule *runtimeModule,
       uint32_t functionID);
 
-  void getArgumentsPropByValLoose(FR frRes, FR frIndex, FR frLazyReg);
-  void getArgumentsPropByValStrict(FR frRes, FR frIndex, FR frLazyReg);
+#define DECL_GET_ARGUMENTS_PROP_BY_VAL(methodName, commentStr, shFn) \
+  void methodName(FR frRes, FR frIndex, FR frLazyReg) {              \
+    getArgumentsPropByValImpl(                                       \
+        frRes, frIndex, frLazyReg, commentStr, shFn, #shFn);         \
+  }
 
-  void reifyArgumentsLoose(FR frLazyReg);
-  void reifyArgumentsStrict(FR frLazyReg);
+  DECL_GET_ARGUMENTS_PROP_BY_VAL(
+      getArgumentsPropByValLoose,
+      "GetArgumentsPropByValLoose",
+      _sh_ljs_get_arguments_prop_by_val_loose);
+  DECL_GET_ARGUMENTS_PROP_BY_VAL(
+      getArgumentsPropByValStrict,
+      "GetArgumentsPropByValStrict",
+      _sh_ljs_get_arguments_prop_by_val_strict);
+
+  void reifyArgumentsLoose(FR frLazyReg) {
+    reifyArgumentsImpl(frLazyReg, false, "ReifyArgumentsLoose");
+  }
+  void reifyArgumentsStrict(FR frLazyReg) {
+    reifyArgumentsImpl(frLazyReg, true, "ReifyArgumentsStrict");
+  }
 
   void getArgumentsLength(FR frRes, FR frLazyReg);
 
@@ -1518,6 +1534,20 @@ class Emitter {
       uint8_t cacheIdx,
       bool strictMode,
       bool tryProp);
+
+  void getArgumentsPropByValImpl(
+      FR frRes,
+      FR frIndex,
+      FR frLazyReg,
+      const char *name,
+      SHLegacyValue (*shImpl)(
+          SHRuntime *shr,
+          SHLegacyValue *frame,
+          SHLegacyValue *idx,
+          SHLegacyValue *lazyReg),
+      const char *shImplName);
+
+  void reifyArgumentsImpl(FR frLazyReg, bool strict, const char *name);
 
   void throwIfEmptyUndefinedImpl(FR frRes, FR frInput, bool empty);
 

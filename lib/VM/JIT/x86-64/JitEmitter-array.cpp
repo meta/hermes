@@ -312,5 +312,385 @@ void Emitter::fastArrayAppend(FR frArr, FR frOther) {
       _sh_fastarray_append);
 }
 
+void Emitter::getArgumentsLength(FR frRes, FR frLazyReg) {
+  comment("// GetArgumentsLength r%u, r%u", frRes.index(), frLazyReg.index());
+
+  asmjit::Label slowPathLab = newSlowPathLabel();
+  asmjit::Label contLab = newContLabel();
+
+  syncAllFRTempExcept(frRes != frLazyReg ? frRes : FR());
+  syncToFrame(frLazyReg);
+
+  HWReg hwLazyReg = getOrAllocFRInGpX(frLazyReg, true);
+  HWReg hwTemp = allocTempGpX();
+  freeAllFRTempExcept({});
+  freeReg(hwTemp);
+  // Avoid an extra mov by using the temp register for the result if possible.
+  HWReg hwRes = getOrAllocFRInVecD(frRes, false);
+  frUpdatedWithHW(frRes, hwRes);
+
+  // If the lazy register holds an object, `arguments` has already been
+  // reified and the length has to be read off that object.
+  emit_sh_ljs_is_object(a, hwTemp.gpq(), hwLazyReg.gpq());
+  a.je(slowPathLab);
+
+  // Fast path: if it's not an object, read from the frame.
+  static_assert(
+      HERMESVALUE_VERSION == 2,
+      "NativeUint32 is stored as the lower 32 bits of the raw HermesValue");
+  // x86-64: arm64 needs ldur for the negative frame offset; every x86 memory
+  // operand carries a signed 32-bit displacement, so this is a plain mov.
+  // The 32-bit load zero-extends, which is what makes the unsigned
+  // conversion below exact.
+  a.mov(
+      hwTemp.gpq().r32(),
+      x86::dword_ptr(
+          xFrame,
+          (int)StackFrameLayout::ArgCount * (int)sizeof(SHLegacyValue)));
+
+  // Encode the uint32_t as a double (making it a HermesValue).
+  // x86-64: stands in for arm64's ucvtf of a W register; see
+  // emit_int32_to_double(), which clobbers hwTemp -- dead here.
+  emit_int32_to_double(a, hwRes.xmm(), hwTemp.gpq(), /* isUnsigned */ true);
+
+  a.bind(contLab);
+
+  slowPaths_.emplace_back(
+      slowPathLab,
+      contLab,
+      emittingIP,
+      [frRes, frLazyReg, hwRes](Emitter &em, SlowPath &sp) {
+        em.comment(
+            "// Slow path: GetArgumentsLength r%u, r%u",
+            frRes.index(),
+            frLazyReg.index());
+        em.a.bind(sp.slowPathLab);
+        em.a.mov(x86::rdi, xRuntime);
+        em.a.mov(x86::rsi, xFrame);
+        em.loadFrameAddr(x86::rdx, frLazyReg);
+        EMIT_RUNTIME_CALL(
+            em,
+            SHLegacyValue (*)(SHRuntime *, SHLegacyValue *, SHLegacyValue *),
+            _sh_ljs_get_arguments_length);
+        em.movHWFromHW<false>(hwRes, HWReg::gpX(0));
+        em.a.jmp(sp.contLab);
+      });
+}
+
+void Emitter::iteratorBegin(FR frRes, FR frSource) {
+  comment("// IteratorBegin r%u, r%u", frRes.index(), frSource.index());
+
+  syncAllFRTempExcept(frRes != frSource ? frRes : FR());
+  syncToFrame(frSource);
+  freeAllFRTempExcept({});
+
+  a.mov(x86::rdi, xRuntime);
+  loadFrameAddr(x86::rsi, frSource);
+  EMIT_RUNTIME_CALL(
+      *this,
+      SHLegacyValue (*)(SHRuntime *, SHLegacyValue *),
+      _sh_ljs_iterator_begin_rjs);
+
+  // frSource is an in/out parameter: the handler overwrites it with the
+  // iteration index for the fast-array path, or leaves the iterator there.
+  syncFrameOutParam(frSource);
+
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<false>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
+}
+
+void Emitter::iteratorNext(FR frRes, FR frIteratorOrIdx, FR frSourceOrNext) {
+  comment(
+      "// IteratorNext r%u, r%u, r%u",
+      frRes.index(),
+      frIteratorOrIdx.index(),
+      frSourceOrNext.index());
+
+  syncAllFRTempExcept(
+      frRes != frIteratorOrIdx && frRes != frSourceOrNext ? frRes : FR());
+  syncToFrame(frIteratorOrIdx);
+  syncToFrame(frSourceOrNext);
+  freeAllFRTempExcept({});
+
+  a.mov(x86::rdi, xRuntime);
+  loadFrameAddr(x86::rsi, frIteratorOrIdx);
+  loadFrameAddr(x86::rdx, frSourceOrNext);
+  EMIT_RUNTIME_CALL(
+      *this,
+      SHLegacyValue (*)(SHRuntime *, SHLegacyValue *, const SHLegacyValue *),
+      _sh_ljs_iterator_next_rjs);
+
+  // The index is bumped in place on the fast-array path.
+  syncFrameOutParam(frIteratorOrIdx);
+
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<false>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
+}
+
+void Emitter::iteratorClose(FR frIteratorOrIdx, bool ignoreExceptions) {
+  comment(
+      "// IteratorClose r%u, %u", frIteratorOrIdx.index(), ignoreExceptions);
+
+  syncAllFRTempExcept({});
+  syncToFrame(frIteratorOrIdx);
+  freeAllFRTempExcept({});
+
+  a.mov(x86::rdi, xRuntime);
+  loadFrameAddr(x86::rsi, frIteratorOrIdx);
+  a.mov(x86::edx, asmjit::Imm(ignoreExceptions));
+  EMIT_RUNTIME_CALL(
+      *this,
+      void (*)(SHRuntime *, const SHLegacyValue *, bool),
+      _sh_ljs_iterator_close_rjs);
+}
+
+void Emitter::getPNameList(FR frRes, FR frObj, FR frIdx, FR frSize) {
+  comment(
+      "// GetPNameList r%u, r%u, r%u, r%u",
+      frRes.index(),
+      frObj.index(),
+      frIdx.index(),
+      frSize.index());
+  syncAllFRTempExcept({});
+  // We have to sync frObj to the frame since it is an in/out parameter.
+  syncToFrame(frObj);
+  // No need to sync frIdx and frSize since they are just out parameters.
+  freeAllFRTempExcept({});
+  a.mov(x86::rdi, xRuntime);
+  loadFrameAddr(x86::rsi, frObj);
+  loadFrameAddr(x86::rdx, frIdx);
+  loadFrameAddr(x86::rcx, frSize);
+  EMIT_RUNTIME_CALL(
+      *this,
+      SHLegacyValue (*)(
+          SHRuntime *, SHLegacyValue *, SHLegacyValue *, SHLegacyValue *),
+      _sh_ljs_get_pname_list_rjs);
+
+  // Ensure that the out params have their frame location marked as up-to-date,
+  // and any global register is updated.
+  syncFrameOutParam(frObj);
+  syncFrameOutParam(frIdx);
+  syncFrameOutParam(frSize);
+
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<false>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
+}
+
+void Emitter::getNextPName(
+    FR frRes,
+    FR frProps,
+    FR frObj,
+    FR frIdx,
+    FR frSize) {
+  comment(
+      "// GetNextPName r%u, r%u, r%u, r%u, r%u",
+      frRes.index(),
+      frProps.index(),
+      frObj.index(),
+      frIdx.index(),
+      frSize.index());
+
+  syncAllFRTempExcept({});
+  syncToFrame(frProps);
+  syncToFrame(frObj);
+  syncToFrame(frIdx);
+  syncToFrame(frSize);
+  freeAllFRTempExcept({});
+  a.mov(x86::rdi, xRuntime);
+  loadFrameAddr(x86::rsi, frProps);
+  loadFrameAddr(x86::rdx, frObj);
+  loadFrameAddr(x86::rcx, frIdx);
+  loadFrameAddr(x86::r8, frSize);
+  EMIT_RUNTIME_CALL(
+      *this,
+      SHLegacyValue (*)(
+          SHRuntime *,
+          SHLegacyValue *,
+          SHLegacyValue *,
+          SHLegacyValue *,
+          SHLegacyValue *),
+      _sh_ljs_get_next_pname_rjs);
+
+  // Ensure that the updated frame location is sync'd back to any global reg.
+  syncFrameOutParam(frIdx);
+
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<false>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
+}
+
+void Emitter::getArgumentsPropByValImpl(
+    FR frRes,
+    FR frIndex,
+    FR frLazyReg,
+    const char *name,
+    SHLegacyValue (*shImpl)(
+        SHRuntime *shr,
+        SHLegacyValue *frame,
+        SHLegacyValue *idx,
+        SHLegacyValue *lazyReg),
+    const char *shImplName) {
+  comment(
+      "// %s r%u, r%u, r%u",
+      name,
+      frRes.index(),
+      frIndex.index(),
+      frLazyReg.index());
+
+  asmjit::Label slowPathLab = newSlowPathLabel();
+  asmjit::Label contLab = newContLabel();
+
+  syncAllFRTempExcept(frRes != frIndex && frRes != frLazyReg ? frRes : FR());
+  syncToFrame(frIndex);
+  syncToFrame(frLazyReg);
+  HWReg hwLazyReg = getOrAllocFRInGpX(frLazyReg, true);
+  HWReg hwIndex = getOrAllocFRInVecD(frIndex, true);
+  HWReg hwTempIndex = allocTempGpX();
+  HWReg hwTempArgCount = allocTempGpX();
+  HWReg hwTempVecD = allocTempVecD();
+  freeAllFRTempExcept({});
+  freeReg(hwTempIndex);
+  freeReg(hwTempArgCount);
+  freeReg(hwTempVecD);
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
+
+  // If lazyReg is an object, `arguments` has been reified and the read has to
+  // go through the object; go to slow path.
+  emit_sh_ljs_is_object(a, hwTempIndex.gpq(), hwLazyReg.gpq());
+  a.je(slowPathLab);
+
+  // If index is not an array index, go to slow path.
+  emit_double_is_int(a, hwTempIndex.gpq(), hwTempVecD.xmm(), hwIndex.xmm());
+  // x86-64: arm64's single b.ne. vucomisd reports an unordered compare as
+  // EQUAL, so a NaN index would fall through into the bounds check with the
+  // converted value INT64_MIN -- which the unsigned compare below happens to
+  // reject anyway, but only by accident. The jp states the intent and keeps
+  // this consistent with every other emit_double_is_* caller; see that
+  // helper's contract.
+  a.jne(slowPathLab);
+  a.jp(slowPathLab);
+
+  // If index >= arg count or index < 0, go to slow path.
+  // Use an unsigned comparison to handle the negative index case: the
+  // conversion above sign-extends, so a negative index is a huge unsigned.
+  a.mov(
+      hwTempArgCount.gpq().r32(),
+      x86::dword_ptr(
+          xFrame,
+          (int)StackFrameLayout::ArgCount * (int)sizeof(SHLegacyValue)));
+  a.cmp(hwTempIndex.gpq(), hwTempArgCount.gpq());
+  a.jae(slowPathLab);
+
+  // Load the argument from the stack. We want framePtr[FirstArg - index].
+  //
+  // x86-64: arm64 computes (FirstArg - index) into a register and uses a
+  // scaled register offset with an SXTW. x86 addressing has no negative
+  // scale, so the index is negated instead and FirstArg's byte offset becomes
+  // the operand's displacement: xFrame + (-index)*8 + FirstArg*8. The negate
+  // is exact in 64 bits because the comparison above has already established
+  // 0 <= index < argCount, i.e. that the value fits in 32 bits.
+  a.neg(hwTempIndex.gpq());
+  movHWFromMem(
+      hwRes,
+      x86::qword_ptr(
+          xFrame,
+          hwTempIndex.gpq(),
+          3,
+          (int)StackFrameLayout::FirstArg * (int)sizeof(SHLegacyValue)));
+
+  a.bind(contLab);
+
+  slowPaths_.emplace_back(
+      slowPathLab,
+      contLab,
+      emittingIP,
+      [name, frIndex, frLazyReg, hwRes, shImpl, shImplName](
+          Emitter &em, SlowPath &sp) {
+        em.comment("// Slow path: %s r%u", name, frIndex.index());
+        em.a.bind(sp.slowPathLab);
+        em.a.mov(x86::rdi, xRuntime);
+        em.a.mov(x86::rsi, xFrame);
+        em.loadFrameAddr(x86::rdx, frIndex);
+        em.loadFrameAddr(x86::rcx, frLazyReg);
+        em.callRuntimeWithSavedIP((void *)shImpl, shImplName);
+        em.movHWFromHW<false>(hwRes, HWReg::gpX(0));
+        em.a.jmp(sp.contLab);
+      });
+}
+
+void Emitter::reifyArgumentsImpl(FR frLazyReg, bool strict, const char *name) {
+  comment("// %s r%u", name, frLazyReg.index());
+
+  asmjit::Label slowPathLab = newSlowPathLabel();
+  asmjit::Label contLab = newContLabel();
+
+  syncAllFRTempExcept({});
+  syncToFrame(frLazyReg);
+
+  HWReg hwLazyReg = getOrAllocFRInGpX(frLazyReg, true);
+  HWReg hwTemp = allocTempGpX();
+  freeAllFRTempExcept({});
+  freeReg(hwTemp);
+
+  emit_sh_ljs_is_object(a, hwTemp.gpq(), hwLazyReg.gpq());
+  // If the lazyReg is not an object, it needs to be reified, go to slow path.
+  a.jne(slowPathLab);
+
+  // Fast path: do nothing.
+  a.bind(contLab);
+
+  // x86-64 DELTA, and not a cosmetic one. frLazyReg is an in/out operand:
+  // whichever path was taken, it holds the Arguments OBJECT from here on.
+  // Its recorded type usually says otherwise -- ISel initializes the lazy
+  // register with LoadConstUndefined, whose emitter records
+  // FRType::OtherNonPtr, and neither arm64's version of this function nor
+  // this one writes the register in emitted code, so nothing else clears
+  // that. A stale "non-pointer" claim then propagates through Mov and licenses
+  // fast paths that are only valid for non-pointers -- strictEqualImpl's
+  // raw-bit tier is the one that showed up. This backend emits type asserts
+  // (-Xjit-emit-type-asserts), which caught it: args.js's `reifyTwice` fails
+  // the BitComparable assert without the line below. Widen the type to
+  // "unknown" instead, which is true on both paths.
+  //
+  // arm64 STILL CARRIES THIS HOLE and is deliberately left unfixed here: the
+  // milestone contract for this branch is that arm64's emitted code stays
+  // byte-identical to its baseline, and this line changes the emitter's
+  // type state. arm64 has no test that flows a reified `arguments` into a
+  // type-sensitive emitter, which is why it has never been caught there.
+  // Fixing it is a separate change against arm64, not this one.
+  frUpdateType(frLazyReg, FRType::UnknownPtr);
+
+  slowPaths_.emplace_back(
+      slowPathLab,
+      contLab,
+      emittingIP,
+      [name,
+       frLazyReg,
+       strict,
+       hwGlobalReg = frameRegs_[frLazyReg.index()].globalReg](
+          Emitter &em, SlowPath &sp) {
+        em.comment("// Slow path: %s r%u", name, frLazyReg.index());
+        em.a.bind(sp.slowPathLab);
+        em.a.mov(x86::rdi, xRuntime);
+        em.a.mov(x86::rsi, xFrame);
+        em.loadFrameAddr(x86::rdx, frLazyReg);
+        em.callRuntimeWithSavedIP(
+            strict ? (void *)_sh_ljs_reify_arguments_strict
+                   : (void *)_sh_ljs_reify_arguments_loose,
+            strict ? "_sh_ljs_reify_arguments_strict"
+                   : "_sh_ljs_reify_arguments_loose");
+        // Slow path modifies the frame so we need to sync it if there's a
+        // global reg.
+        if (hwGlobalReg.isValid()) {
+          em._loadFrame(hwGlobalReg, frLazyReg);
+        }
+        em.a.jmp(sp.contLab);
+      });
+}
+
 } // namespace hermes::vm::x86_64
 #endif // HERMESVM_JIT_X86_64

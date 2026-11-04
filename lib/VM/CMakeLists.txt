@@ -186,7 +186,6 @@ if (HERMESVM_ALLOW_JIT)
           JIT/x86-64/JitEmitter-array.cpp
           JIT/x86-64/JitEmitter-arith.cpp
           JIT/x86-64/JitEmitter-control.cpp
-          JIT/x86-64/JitEmitter-stubs.cpp
           JIT/x86-64/JIT.cpp
           JIT/JitHandlers.cpp JIT/JitHandlers.h
           JIT/JitCompiler.cpp JIT/JitCurArch.h
