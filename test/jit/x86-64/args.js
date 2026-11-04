@@ -148,9 +148,10 @@ function noArgs() {
 // strictEqualImpl's raw-bit tier, and that tier is exactly what the stale
 // FRType::OtherNonPtr claim on the lazy-arguments register used to license
 // incorrectly (see the fix in reifyArgumentsImpl's frUpdateType call in
-// JitEmitter-array.cpp). This is the only regression test that flows a
-// reified `arguments` into a type-sensitive emitter, and that miscompile is
-// still live on arm64 (see the comment at that frUpdateType call site).
+// JitEmitter-array.cpp). arm64 carries the same fix now, at the
+// structurally equivalent point in its own reifyArgumentsImpl; see
+// test/jit/reify-arguments-type.js for the shared regression test that
+// runs on both architectures.
 // Replacing `a === b` with something like a.length comparison would still
 // pass but would silently delete this coverage -- keep the === here.
 function reifyTwice() {
