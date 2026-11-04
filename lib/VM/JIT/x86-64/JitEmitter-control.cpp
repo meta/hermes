@@ -74,6 +74,379 @@ void Emitter::jmp(const asmjit::Label &target) {
   a.jmp(target);
 }
 
+void Emitter::jmpTypeOfIs(
+    const asmjit::Label &target,
+    FR frInput,
+    TypeOfIsTypes origTypes) {
+  comment("// jTypeOfIs r%u, %u", frInput.index(), origTypes.getRaw());
+
+  TypeOfIsTypes invertedTypes = origTypes.invert();
+
+  // Do this always because it's the end of a basic block.
+  // The freeAllFRTempExcept calls are within fast paths because we may want to
+  // use FR temps to syncToFrame(frInput) in the call path, and we know at JIT
+  // time whether we'll emit the call path.
+  syncAllFRTempExcept({});
+
+  HWReg hwInput = getOrAllocFRInGpX(frInput, true);
+  HWReg hwTemp = allocTempGpX();
+  freeReg(hwTemp);
+  freeAllFRTempExcept({});
+
+  x86::Gp xInput = hwInput.gpq();
+  x86::Gp xTemp = hwTemp.gpq();
+  assert(xTemp != xInput && "the tag temp must differ from the input");
+
+  // Try and see if inverting will result in fewer checks.
+  // If so, flip it and set invert=true.
+  bool invert = false;
+  TypeOfIsTypes typesToCheck = origTypes;
+  if (invertedTypes.count() < origTypes.count()) {
+    invert = true;
+    typesToCheck = invertedTypes;
+  }
+
+  // Nothing left to check means the answer does not depend on the input: an
+  // empty origTypes matches nothing, so falling through is already right,
+  // while an all-bits origTypes inverts to empty and matches everything, so
+  // the branch is unconditional. None of the checks below are emitted.
+  if (typesToCheck.count() == 0 && invert)
+    a.jmp(target);
+
+  // doneLab goes at the end of the instruction if there's multiple bits to
+  // check, allowing short-circuiting the remaining checks if one of the
+  // TypeOfIsTypes bits matches the kind of the input.
+  // Use numRemainingTypes to track how many bits are left to check.
+  asmjit::Label doneLab = a.newLabel();
+  size_t numRemainingTypes = typesToCheck.count();
+
+  // Checks are done as follows:
+  // * If not inverted, just go to the target if the tag matches the bit,
+  //   else fallthrough to the next case (if any).
+  // * If inverted and there's multiple bits remaining,
+  //   if the tag matches the bit, short circuit to doneLab and we've
+  //   finished executing the instruction (no need to check the other bits).
+  // * If inverted and there's only one bit remaining,
+  //   then if the tag does NOT match the bit, go to the target
+  //   immediately.
+  //
+  // In this way, single-bit checks (both inverted and not) are fast,
+  // and multiple-bit checks are correct.
+  // It's possible more complexity can optimize this further if needed, but this
+  // is not a bad start.
+
+  /// Emit the simple check for a match.
+  /// If we're not inverted, branch to the target based on cond.
+  /// If we're inverted:
+  ///   If there's bits remaining to check, branch to doneLab if the tag matches
+  ///   because we can short circuit the rest of the checks.
+  ///   If there's no bits remaining to check, branch to the target if the tag
+  ///   does NOT match the bit.
+  /// \param cond the condition code, which if true, indicates a tag match.
+  auto emitCondCheck = [this, invert, &numRemainingTypes, &target, &doneLab](
+                           x86::CondCode cond) {
+    if (!invert)
+      a.j(cond, target);
+    else if (numRemainingTypes > 0)
+      a.j(cond, doneLab);
+    else
+      a.j(x86::negateCond(cond), target);
+  };
+
+  // x86-64: every tag helper below is a compare (or a shift plus a compare)
+  // that leaves the answer in EFLAGS, exactly as on arm64, so the order of
+  // check and branch is the same; any reorder that put another flag-writing
+  // instruction between them would break.
+  if (typesToCheck.hasUndefined()) {
+    --numRemainingTypes;
+    emit_sh_ljs_is_undefined(a, xTemp, xInput);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasSymbol()) {
+    --numRemainingTypes;
+    emit_sh_ljs_is_symbol(a, xTemp, xInput);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasString()) {
+    --numRemainingTypes;
+    emit_sh_ljs_is_string(a, xTemp, xInput);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasBoolean()) {
+    --numRemainingTypes;
+    emit_sh_ljs_is_bool(a, xTemp, xInput);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasNull()) {
+    --numRemainingTypes;
+    emit_sh_ljs_is_null(a, xTemp, xInput);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasBigint()) {
+    --numRemainingTypes;
+    emit_sh_ljs_is_bigint(a, xTemp, xInput);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasNumber()) {
+    --numRemainingTypes;
+    // x86-64: arm64 materializes the double limit and compares against it
+    // inline; that is exactly emit_sh_ljs_is_double(), which takes its
+    // operands the other way round (input first, then the temp it clobbers).
+    static_assert(
+        HERMESVALUE_VERSION == 2,
+        "HVTag_First must be the first after double limit");
+    emit_sh_ljs_is_double(a, xInput, xTemp);
+    emitCondCheck(x86::CondCode::kB);
+  }
+  // TODO: Special-case if both hasObject() and hasFunction() are set,
+  // because we no longer would need to check the CellKind.
+  if (typesToCheck.hasObject()) {
+    --numRemainingTypes;
+    asmjit::Label objectDoneLab = a.newLabel();
+    emit_sh_ljs_is_object(a, xTemp, xInput);
+    if (!invert)
+      a.jne(objectDoneLab);
+    else if (numRemainingTypes > 0)
+      a.jne(objectDoneLab);
+    else
+      a.jne(target);
+    emit_sh_ljs_get_pointer(a, xTemp, xInput);
+    emit_gccell_get_kind(a, xTemp, xTemp);
+    emit_cellkind_in_range(
+        a,
+        xTemp,
+        xTemp,
+        CellKind::CallableKind_first,
+        CellKind::CallableKind_last);
+    emitCondCheck(x86::CondCode::kA);
+    a.bind(objectDoneLab);
+  }
+  if (typesToCheck.hasFunction()) {
+    --numRemainingTypes;
+    asmjit::Label functionDoneLab = a.newLabel();
+    emit_sh_ljs_is_object(a, xTemp, xInput);
+    if (!invert)
+      a.jne(functionDoneLab);
+    else if (numRemainingTypes > 0)
+      a.jne(functionDoneLab);
+    else
+      a.jne(target);
+    emit_sh_ljs_get_pointer(a, xTemp, xInput);
+    emit_gccell_get_kind(a, xTemp, xTemp);
+    emit_cellkind_in_range(
+        a,
+        xTemp,
+        xTemp,
+        CellKind::CallableKind_first,
+        CellKind::CallableKind_last);
+    emitCondCheck(x86::CondCode::kBE);
+    a.bind(functionDoneLab);
+  }
+
+  assert(numRemainingTypes == 0 && "missed a type");
+
+  // Put doneLab after, so we skip the branch if we directly branch to doneLab
+  // from above.
+  a.bind(doneLab);
+}
+
+void Emitter::typeOfIs(FR frRes, FR frInput, TypeOfIsTypes origTypes) {
+  comment(
+      "// typeOfIs r%u, r%u, %u",
+      frRes.index(),
+      frInput.index(),
+      origTypes.getRaw());
+
+  // Store the input in hwInputTemp for the duration of the instruction.
+  // Needed because it's possible frRes == frInput, and we want to write to
+  // frRes at the top of the instruction.
+  HWReg hwInputTemp;
+  if (frRes == frInput) {
+    hwInputTemp = allocTempGpX();
+    movHWFromFR(hwInputTemp, frInput);
+  } else {
+    hwInputTemp = getOrAllocFRInGpX(frInput, true);
+  }
+  HWReg hwTemp = allocTempGpX();
+  HWReg hwRes = getOrAllocFRInGpX(frRes, false);
+  frUpdatedWithHW(frRes, hwRes);
+  freeReg(hwTemp);
+  if (frRes == frInput) {
+    freeReg(hwInputTemp);
+  }
+
+  x86::Gp xInputTemp = hwInputTemp.gpq();
+  x86::Gp xTemp = hwTemp.gpq();
+  x86::Gp xRes = hwRes.gpq();
+  // hwTemp is still allocated when hwRes is, so the two cannot alias. Both
+  // emit_sh_ljs_is_undefined() and emit_sh_ljs_bool() rely on that.
+  assert(xTemp != xInputTemp && "the tag temp must differ from the input");
+  assert(xTemp != xRes && "the tag temp must differ from the result");
+
+  TypeOfIsTypes invertedTypes = origTypes.invert();
+
+  // Try and see if inverting will result in fewer checks.
+  // If so, flip it and set invert=true.
+  bool invert = false;
+  TypeOfIsTypes typesToCheck = origTypes;
+  if (invertedTypes.count() < origTypes.count()) {
+    invert = true;
+    typesToCheck = invertedTypes;
+  }
+
+  // Nothing left to check means the answer does not depend on the input: an
+  // empty origTypes matches nothing, and an all-bits origTypes inverts to
+  // empty and matches everything. Either way the result is the same constant
+  // the individual cases produce when no tag can match, and none of the checks
+  // below are emitted.
+  if (typesToCheck.count() == 0)
+    a.mov(xRes.r32(), asmjit::Imm(invert ? 1 : 0));
+
+  // matchLab goes directly to the end of the instruction if there are multiple
+  // bits to check, allowing short-circuiting the remaining checks if one of the
+  // TypeOfIsTypes bits matches the kind of the input.
+  // If there's only one bit to check, we don't put extra code the end - none of
+  // the other cases will be emitted.
+  asmjit::Label matchLab{};
+  if (typesToCheck.count() > 1)
+    matchLab = a.newLabel();
+
+  // First, initialize xRes if necessary:
+  // * If there are multiple bits set, initialize it to the value we would
+  //   produce on a match. This is false if inverted and true otherwise.
+  // * If there's only one bit set, leave it uninitialized, since we will
+  //   overwrite the value in the individual cases with setcc.
+  //
+  // Checks are done as follows:
+  // * If there are multiple bits set, then matchLab is valid,
+  //   so if the tag matches the bit, branch to matchLab.
+  //   If the tag doesn't match, then fall through to the next check.
+  // * If there's only one bit set, then matchLab is NOT valid,
+  //   so emit setcc with the appropriate condition code and we're done.
+  //
+  // In this way, single-bit checks (both inverted and not) are fast,
+  // and multiple-bit checks are correct.
+
+  /// Emit the simple check for a match.
+  /// If there's multiple bits to check, this will branch based on \p cond
+  /// to matchLab if the tag matches.
+  /// If there's only one bit to check, this will emit a setcc with the
+  /// appropriate condition code (and we're done).
+  /// \param cond the condition code, which if true, indicates a tag match.
+  ///
+  /// x86-64: arm64's cset writes 0 or 1 into the whole 64-bit register. x86's
+  /// setcc writes only a byte, so the zero-extension is explicit -- which is
+  /// also what leaves the high bits clear for emit_sh_ljs_bool() below.
+  auto emitCondCheck = [this, invert, &xRes, &matchLab](x86::CondCode cond) {
+    if (matchLab.isValid()) {
+      a.j(cond, matchLab);
+    } else {
+      a.set(!invert ? cond : x86::negateCond(cond), xRes.r8());
+      a.movzx(xRes.r32(), xRes.r8());
+    }
+  };
+
+  // As described above, if there are multiple cases, initialize it to the value
+  // it should have on a successful match.
+  //
+  // x86-64: `mov` writes no EFLAGS -- unlike the `xor` that would otherwise be
+  // the idiomatic way to produce a zero -- which is what lets the two
+  // initializing movs inside the object and function cases below sit between a
+  // tag comparison and the branch that reads it, exactly as on arm64. Any
+  // reorder or substitution there is a bug.
+  if (matchLab.isValid())
+    a.mov(xRes.r32(), asmjit::Imm(invert ? 0 : 1));
+
+  if (typesToCheck.hasUndefined()) {
+    emit_sh_ljs_is_undefined(a, xTemp, xInputTemp);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasSymbol()) {
+    emit_sh_ljs_is_symbol(a, xTemp, xInputTemp);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasString()) {
+    emit_sh_ljs_is_string(a, xTemp, xInputTemp);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasBoolean()) {
+    emit_sh_ljs_is_bool(a, xTemp, xInputTemp);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasBigint()) {
+    emit_sh_ljs_is_bigint(a, xTemp, xInputTemp);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasNull()) {
+    emit_sh_ljs_is_null(a, xTemp, xInputTemp);
+    emitCondCheck(x86::CondCode::kE);
+  }
+  if (typesToCheck.hasNumber()) {
+    static_assert(
+        HERMESVALUE_VERSION == 2,
+        "HVTag_First must be the first after double limit");
+    emit_sh_ljs_is_double(a, xInputTemp, xTemp);
+    emitCondCheck(x86::CondCode::kB);
+  }
+  if (typesToCheck.hasObject()) {
+    asmjit::Label objectDoneLab = a.newLabel();
+    emit_sh_ljs_is_object(a, xTemp, xInputTemp);
+    if (matchLab.isValid()) {
+      // If the tag did NOT match, we can't run anything else in this case.
+      // We must branch, jne and proceed to try matching any other cases.
+      a.jne(objectDoneLab);
+    } else {
+      // No more tags to check. Decide the result here and go to the end.
+      a.mov(xRes.r32(), asmjit::Imm(invert ? 1 : 0));
+      a.jne(objectDoneLab);
+    }
+    emit_sh_ljs_get_pointer(a, xTemp, xInputTemp);
+    emit_gccell_get_kind(a, xTemp, xTemp);
+    emit_cellkind_in_range(
+        a,
+        xTemp,
+        xTemp,
+        CellKind::CallableKind_first,
+        CellKind::CallableKind_last);
+    emitCondCheck(x86::CondCode::kA);
+    a.bind(objectDoneLab);
+  }
+  if (typesToCheck.hasFunction()) {
+    asmjit::Label functionDoneLab = a.newLabel();
+    emit_sh_ljs_is_object(a, xTemp, xInputTemp);
+    if (matchLab.isValid()) {
+      // If the tag did NOT match, we can't run anything else in this case.
+      // We must branch, jne and proceed to try matching any other cases.
+      a.jne(functionDoneLab);
+    } else {
+      // No more tags to check. Decide the result here and go to the end.
+      a.mov(xRes.r32(), asmjit::Imm(invert ? 1 : 0));
+      a.jne(functionDoneLab);
+    }
+    emit_sh_ljs_get_pointer(a, xTemp, xInputTemp);
+    emit_gccell_get_kind(a, xTemp, xTemp);
+    emit_cellkind_in_range(
+        a,
+        xTemp,
+        xTemp,
+        CellKind::CallableKind_first,
+        CellKind::CallableKind_last);
+    emitCondCheck(x86::CondCode::kBE);
+    a.bind(functionDoneLab);
+  }
+
+  if (matchLab.isValid()) {
+    // We failed to match, so flip the result
+    a.xor_(xRes.r32(), asmjit::Imm(1));
+    // We initialize xRes to the "match value", so there is nothing to do on a
+    // match.
+    a.bind(matchLab);
+  }
+
+  // xRes contains either 0 or 1 at this point, turn it into a bool HermesValue.
+  emit_sh_ljs_bool(a, xRes, xTemp);
+}
+
 void Emitter::jmpUndefined(const asmjit::Label &target, FR frInput) {
   comment("// JmpUndefined r%u", frInput.index());
 
@@ -97,6 +470,40 @@ void Emitter::jmpUndefined(const asmjit::Label &target, FR frInput) {
   a.je(target);
 
   freeReg(hwTmpTag);
+}
+
+void Emitter::jmpBuiltinIs(
+    bool invert,
+    const asmjit::Label &target,
+    uint8_t builtinIndex,
+    FR frInput) {
+  comment(
+      "// JmpBuiltinIs%s r%u, %u",
+      invert ? "Not" : "",
+      frInput.index(),
+      builtinIndex);
+
+  // Do this always, since this could be the end of the BB.
+  syncAllFRTempExcept({});
+  HWReg hwInput = getOrAllocFRInGpX(frInput, true);
+  HWReg hwBuiltin = allocTempGpX();
+  freeReg(hwBuiltin);
+  freeAllFRTempExcept({});
+
+  // Load builtin pointer.
+  emit_load_builtin_closure(a, hwBuiltin.gpq(), builtinIndex);
+
+  // Encode an object HermesValue. x86-64: this clobbers EFLAGS (see
+  // emit_sh_ljs_object), which is why it must precede the compare below and
+  // not the other way round.
+  emit_sh_ljs_object(a, hwBuiltin.gpq());
+
+  // Compare the builtin pointer with the input, branch.
+  a.cmp(hwBuiltin.gpq(), hwInput.gpq());
+  if (!invert)
+    a.je(target);
+  else
+    a.jne(target);
 }
 
 void Emitter::jCond(

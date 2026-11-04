@@ -132,6 +132,57 @@ inline void emit_sh_ljs_is_object(
   emit_sh_ljs_tag_is_object(a, tempReg);
 }
 
+/// Emit code to check whether the input reg is a string, using the specified
+/// temp register. The input reg is not modified unless it is the same as the
+/// temp, which is allowed.
+/// CPU flags are updated as result. je on success.
+inline void emit_sh_ljs_is_string(
+    x86::Assembler &a,
+    const x86::Gp &tempReg,
+    const x86::Gp &inputReg) {
+  emit_sh_ljs_get_tag(a, tempReg, inputReg);
+  emit_sh_ljs_tag_is_string(a, tempReg);
+}
+
+/// Emit code to check whether the input reg is a bigint, using the specified
+/// temp register. The input reg is not modified unless it is the same as the
+/// temp, which is allowed.
+/// CPU flags are updated as result. je on success.
+///
+/// x86-64: as everywhere in this file, arm64's cmn-with-negation is a plain
+/// cmp here, because an x86 imm32 is sign-extended.
+inline void emit_sh_ljs_is_bigint(
+    x86::Assembler &a,
+    const x86::Gp &tempReg,
+    const x86::Gp &inputReg) {
+  static_assert(
+      (int16_t)HVTag_BigInt == (int16_t)(-2) && "HVTag_BigInt must be -2");
+  emit_sh_ljs_get_tag(a, tempReg, inputReg);
+  a.cmp(tempReg, asmjit::Imm(HVTag_BigInt));
+}
+
+/// Emit code to check whether the input reg is a symbol, using the specified
+/// temp register. The input reg is not modified unless it is the same as the
+/// temp, which is allowed.
+/// CPU flags are updated as result. je on success.
+///
+/// x86-64: shaped exactly like emit_sh_ljs_is_bool() -- the ETag is read by
+/// shifting one bit further than the tag, and the two-operand shift needs a
+/// copy when the registers differ.
+inline void emit_sh_ljs_is_symbol(
+    x86::Assembler &a,
+    const x86::Gp &tempReg,
+    const x86::Gp &inputReg) {
+  static_assert(
+      HERMESVALUE_VERSION == 2, "HVETag_Symbol must be at kHV_NumDataBits - 1");
+  static_assert(
+      (int16_t)HVETag_Symbol == (int16_t)(-9) && "HVETag_Symbol must be -9");
+  if (tempReg != inputReg)
+    a.mov(tempReg, inputReg);
+  a.sar(tempReg, kHV_NumDataBits - 1);
+  a.cmp(tempReg, asmjit::Imm(HVETag_Symbol));
+}
+
 /// Extract the pointer out of the HermesValue in \p in into \p out.
 ///
 /// x86-64: kHV_DataMask does not fit in a sign-extended imm32 and this

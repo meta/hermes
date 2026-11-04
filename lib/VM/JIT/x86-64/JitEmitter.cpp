@@ -844,6 +844,45 @@ void Emitter::emitTypeAssertFailTail() {
       _jit_type_assert_failed);
 }
 
+void Emitter::unreachable() {
+  EMIT_RUNTIME_CALL(*this, void (*)(), _sh_unreachable);
+}
+
+void Emitter::profilePoint(uint16_t pointIndex) {
+  comment("// ProfilePoint %u", pointIndex);
+#ifdef HERMESVM_PROFILER_BB
+  syncAllFRTempExcept({});
+  freeAllFRTempExcept({});
+  a.mov(x86::rdi, xRuntime);
+  a.mov(x86::esi, asmjit::Imm(pointIndex));
+  EMIT_RUNTIME_CALL(
+      *this,
+      void (*)(SHRuntime *, uint16_t),
+      _interpreter_register_bb_execution);
+#else
+  // No-op if profiling is not enabled.
+#endif
+}
+
+void Emitter::directEval(FR frRes, FR frText, bool strictCaller) {
+  comment("// DirectEval r%u, r%u", frRes.index(), frText.index());
+  syncAllFRTempExcept({});
+  syncToFrame(frText);
+  freeAllFRTempExcept({});
+
+  a.mov(x86::rdi, xRuntime);
+  loadFrameAddr(x86::rsi, frText);
+  a.mov(x86::edx, asmjit::Imm(strictCaller));
+  EMIT_RUNTIME_CALL(
+      *this,
+      HermesValue (*)(Runtime &, PinnedHermesValue *, bool),
+      _jit_direct_eval);
+
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<true>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
+}
+
 void Emitter::mov(FR frRes, FR frInput, bool logComment) {
   // Sometimes mov() is used by other instructions, so logging is optional.
   if (logComment)
@@ -938,6 +977,39 @@ void Emitter::declareGlobalVar(SHSymbolID symID) {
   a.mov(x86::esi, asmjit::Imm(symID));
   EMIT_RUNTIME_CALL(
       *this, void (*)(SHRuntime *, SHSymbolID), _sh_ljs_declare_global_var);
+}
+
+void Emitter::debugger() {
+  comment("// Debugger");
+  // x86-64: int3 is the breakpoint trap, standing in for arm64's brk #0.
+  if (dumpJitCode_ & DumpJitCode::BRK)
+    a.int3();
+}
+
+void Emitter::createRegExp(
+    FR frRes,
+    SHSymbolID patternID,
+    SHSymbolID flagsID,
+    uint32_t regexpID) {
+  comment("// CreateRegExp r%u, %u, %u", frRes.index(), patternID, flagsID);
+
+  syncAllFRTempExcept(frRes);
+  freeAllFRTempExcept({});
+
+  a.mov(x86::rdi, xRuntime);
+  loadBits64InGp(x86::rsi, (uint64_t)codeBlock_, "CodeBlock");
+  a.mov(x86::edx, asmjit::Imm(patternID));
+  a.mov(x86::ecx, asmjit::Imm(flagsID));
+  a.mov(x86::r8d, asmjit::Imm(regexpID));
+  EMIT_RUNTIME_CALL(
+      *this,
+      SHLegacyValue (*)(
+          SHRuntime *, SHCodeBlock *, uint32_t, uint32_t, uint32_t),
+      _interpreter_create_regexp);
+
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<false>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
 }
 
 asmjit::Label Emitter::newPrefLabel(const char *pref, size_t index) {

@@ -7,6 +7,7 @@
 
 #include "hermes/VM/JIT/Config.h"
 #if HERMESVM_JIT_X86_64
+#include "../JitHandlers.h"
 #include "JitEmitter-internal.h"
 #include "JitEmitter.h"
 
@@ -91,6 +92,50 @@ void Emitter::loadConstBits64(
 
   loadBits64InGp(hwRes.gpq(), bits, name);
   frUpdatedWithHW(frRes, hwRes, type);
+}
+
+void Emitter::loadConstString(
+    FR frRes,
+    RuntimeModule *runtimeModule,
+    uint32_t stringID) {
+  comment("// LoadConstString r%u, stringID %u", frRes.index(), stringID);
+
+  Runtime &runtime = runtimeModule->getRuntime();
+  SymbolID symID = runtimeModule->getSymbolIDFromStringIDMayAllocate(stringID);
+  [[maybe_unused]] StringPrimitive *strPrim =
+      runtime.getStringPrimFromSymbolID(symID);
+  assert(strPrim && "must be allocated");
+
+  HWReg hwRes = getOrAllocFRInGpX(frRes, false);
+  frUpdatedWithHW(frRes, hwRes, FRType::Pointer);
+
+  // x86-64: arm64 allocates a scratch register here for the register-offset
+  // fallback its loadConstStringInGpX() may need. The x86 helper above takes
+  // no scratch (see its disp32 note), so nothing is allocated here.
+  loadConstStringInGpX(symID, hwRes.gpq());
+  emit_sh_ljs_string(a, hwRes.gpq());
+}
+
+void Emitter::loadConstBigInt(
+    FR frRes,
+    RuntimeModule *runtimeModule,
+    uint32_t bigIntID) {
+  comment("// LoadConstBigInt r%u, bigIntID %u", frRes.index(), bigIntID);
+
+  syncAllFRTempExcept(frRes);
+  freeAllFRTempExcept({});
+
+  a.mov(x86::rdi, xRuntime);
+  loadBits64InGp(x86::rsi, (uint64_t)runtimeModule, "RuntimeModule");
+  a.mov(x86::edx, asmjit::Imm(bigIntID));
+  EMIT_RUNTIME_CALL(
+      *this,
+      SHLegacyValue (*)(SHRuntime *, SHRuntimeModule *, uint32_t),
+      _sh_ljs_get_bytecode_bigint);
+
+  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  movHWFromHW<true>(hwRes, HWReg::gpX(0));
+  frUpdatedWithHW(frRes, hwRes);
 }
 
 } // namespace hermes::vm::x86_64
