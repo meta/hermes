@@ -5,15 +5,17 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
 
 // Comparisons: Less/LessEq/Greater/GreaterEq/Eq/Neq, StrictEq/StrictNeq and
 // Not. The first RUN line is the real check -- the same program run by the
-// interpreter and by the JIT must print the same thing. The second RUN line
-// only makes sure the functions under test were in fact compiled, so the
-// differential cannot degrade into comparing the interpreter against itself.
+// interpreter and by the JIT must print the same thing, and carries
+// -Xjit-crash-on-error since nothing here declines (measured). The second
+// RUN line only makes sure the functions under test were in fact compiled,
+// so the differential cannot degrade into comparing the interpreter against
+// itself.
 //
 // Straight-line bodies only: these produce comparison *values*. Conditional
 // branches on comparisons are exercised by loops.js.

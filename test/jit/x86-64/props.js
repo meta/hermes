@@ -65,26 +65,33 @@
 // compiling it, so the caches still warm, and the SPEC lines below still
 // match. DO NOT convert this RUN line to -Xjit=force.
 //
-// NOT covered, and why:
+// NOT exercised BY THIS FILE, and why -- as of milestone 5 none of these
+// decline anymore (verified by hand: super[k] read/write, private fields and
+// methods, computed-key getter/setter definitions and array-literal defines
+// all compile and match the interpreter). This file simply does not happen
+// to construct those shapes; each entry says where, if anywhere, it is
+// covered:
 //  - Property names as string values. `o["x"]`, `delete o.x` and `"x" in o`
-//    needed LoadConstString, which declined when this file was written, so
-//    every by-val site here takes its key from a parameter. That is still
-//    how this file is written -- it is what makes the by-val opcodes rather
-//    than the by-id ones fire -- but the gap itself is closed: strings.js
-//    covers the const-key forms of all three.
+//    needed LoadConstString; every by-val site here still takes its key
+//    from a parameter, which is what makes the by-val opcodes rather than
+//    the by-id ones fire. strings.js covers the const-key forms of all
+//    three.
 //  - getByValWithReceiver / putByValWithReceiver: emitted for `super[k]`
-//    and assignment through it, which needs a computed key; the shapes that
-//    produce them here also produce opcodes that still decline.
+//    and assignment through it, which needs a computed key. Not covered by
+//    any lit test; checked by hand to compile and match under -Xjit=force.
 //  - Private names (addOwnPrivateBySym and friends) and
-//    defineOwnGetterSetterByVal: emitted from class bodies, which decline on
-//    other opcodes. They are ported as plain runtime calls.
-//  - defineOwnInDenseArray / defineOwnByIndex: array-literal opcodes, which
-//    arrive with the array task.
+//    defineOwnGetterSetterByVal: emitted from class bodies. Not covered by
+//    any lit test; checked by hand to compile and match, including a
+//    private method call and a computed-key accessor pair, under
+//    -Xjit=force.
+//  - defineOwnInDenseArray / defineOwnByIndex: array-literal opcodes,
+//    covered by arrays.js.
 //  - getOwnBySlotIdx: emitted only for PrLoadInst, which comes from typed
 //    (Flow) class IRGen, so it is not reachable from plain JS at all --
-//    the same situation as typedLoadParent. putOwnBySlotIdx IS reachable
-//    and is covered by `nested` below, but only at -O; at -O0 a literal
-//    lowers to NewObject plus DefineOwnById instead.
+//    the same situation as typedLoadParent, and unrelated to what compiles
+//    or declines. putOwnBySlotIdx IS reachable and is covered by `nested`
+//    below, but only at -O; at -O0 a literal lowers to NewObject plus
+//    DefineOwnById instead.
 
 // A constructor that stores into `this`. Its body is PutByIdLoose twice,
 // which is what objects.js could not compile.

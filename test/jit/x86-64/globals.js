@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force %s > %t.jit && diff %t.int %t.jit
-// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force %s > %t.jit0 && diff %t.int0 %t.jit0
-// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
+// RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
+// RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // RUN: %hermes -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // REQUIRES: jit
@@ -25,11 +25,14 @@
 // below pin `JIT successfully compiled FunctionID 0, 'global'` at both -O
 // and -O0, so that gap is now closed and cannot silently reopen.
 //
-// The file is deliberately written without a single string constant, in the
-// top-level code and everywhere else: LoadConstString still declines, and
-// one string literal anywhere in the top level is enough to make `global`
-// decline again for an unrelated reason. That is also why props.js, which
-// needs string keys, cannot carry this pin. Nothing else is restricted --
+// The file is deliberately written without a single string constant (the
+// "use strict" directive prologue is stripped at parse time and emits no
+// LoadConstString), in the top-level code and everywhere else. LoadConstString
+// compiles now, so a string literal would no longer make `global` decline --
+// but keeping this file string-free still isolates the globals pin from
+// string coverage, which is what lets props.js, which needs string keys for
+// its by-val forms, carry its own separate coverage without disturbing this
+// one. Nothing else is restricted --
 // the module-level `var`s below are read, written, read-modify-written and
 // captured, and the last one is the target of a global function call.
 

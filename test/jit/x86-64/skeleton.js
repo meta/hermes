@@ -8,10 +8,14 @@
 // RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
 
-// The first functions the x86-64 backend compiles natively: prologue,
+// The first functions the x86-64 backend compiled natively: prologue,
 // epilogue, the FR register file, and the LoadConst*/LoadParam/Mov/Ret
-// emitters. Everything else still declines and runs in the interpreter, so
-// each function's compile status is checked alongside its output.
+// emitters. That was true when this file was the entire backend; as of
+// milestone 5 the backend reaches arm64's full opcode surface (only
+// AsyncBreakCheck stays permanently unsupported, in code shared with arm64),
+// so nothing here declines for lack of coverage any more. This file is kept
+// as a minimal regression check on the original emitters, with each
+// function's compile status still checked alongside its output.
 
 function ret42() {
   return 42;

@@ -684,7 +684,15 @@ void Emitter::reifyArgumentsImpl(FR frLazyReg, bool strict, const char *name) {
             strict ? "_sh_ljs_reify_arguments_strict"
                    : "_sh_ljs_reify_arguments_loose");
         // Slow path modifies the frame so we need to sync it if there's a
-        // global reg.
+        // global reg. This branch is dead on x86-64: a lazy-arguments FR can
+        // never be assigned Number/NonPtr class, so a global register is
+        // never allocated for it and hwGlobalReg.isValid() is always false.
+        // It is kept only for textual parity with arm64, where the same
+        // branch is inherited unchanged; if it ever did run here it would
+        // bypass recordFRWriteForAssert.
+        assert(
+            !hwGlobalReg.isValid() &&
+            "lazy arguments FR can never have a global register");
         if (hwGlobalReg.isValid()) {
           em._loadFrame(hwGlobalReg, frLazyReg);
         }
