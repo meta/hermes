@@ -3520,7 +3520,9 @@ class FlowChecker::ExprVisitor {
     }
     name = llvh::cast<ESTree::IdentifierNode>(func->_id)->_name;
     funcType = outer_.flowContext_.findNodeType(func);
-    assert(funcType && "function expression type must be set");
+    // Unset for generic function expressions, which were already reported.
+    if (!funcType)
+      return;
     if (!llvh::isa<TypedFunctionType>(funcType->info)) {
       outer_.sm_.error(
           arg->getSourceRange(),
@@ -3563,7 +3565,13 @@ class FlowChecker::ExprVisitor {
       return;
 
     for (auto &node : func->_params) {
-      auto *param = llvh::cast<ESTree::IdentifierNode>(&node);
+      auto *param = llvh::dyn_cast<ESTree::IdentifierNode>(&node);
+      if (!param || param->_optional) {
+        outer_.sm_.error(
+            node.getSourceRange(),
+            "ft: extern_c requires simple identifier parameters");
+        return;
+      }
       if (!param->_typeAnnotation) {
         outer_.sm_.error(
             param->getSourceRange(),
@@ -3727,7 +3735,8 @@ class FlowChecker::ExprVisitor {
       // The dyn_cast could perhaps be a cast, but just to be safe.
       auto *prop = llvh::dyn_cast<ESTree::PropertyNode>(&n);
       if (!prop || prop->_kind != outer_.kw_.identInit || prop->_computed ||
-          prop->_method || prop->_shorthand) {
+          prop->_method || prop->_shorthand ||
+          !llvh::isa<ESTree::IdentifierNode>(prop->_key)) {
         outer_.sm_.error(
             n.getSourceRange(), "ft: extern_c: unsupported property format");
         return llvh::None;
