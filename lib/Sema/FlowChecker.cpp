@@ -2844,8 +2844,9 @@ Type *FlowChecker::parseFunctionType(
     // but it must be the same type as the given type.
     if (thisParamType &&
         !thisParamType->info->equals(paramsRef.front().type->info)) {
+      // The type may be shared and have no node, so use the param.
       sm_.error(
-          paramsRef.front().type->node->getSourceRange(),
+          params.front().getSourceRange(),
           "ft: incompatible 'this' type annotation");
     }
 
