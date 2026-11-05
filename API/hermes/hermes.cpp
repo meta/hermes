@@ -65,6 +65,7 @@
 #include <limits>
 #include <list>
 #include <mutex>
+#include <optional>
 #include <system_error>
 #include <unordered_map>
 
@@ -195,26 +196,45 @@ struct UUIDInfo : llvh::DenseMapInfo<jsi::UUID> {
 };
 
 #ifdef JSI_UNSTABLE
+/// The jsi::NativeState of serialized objects, keyed by object ID.
+using NativeStateMap =
+    std::unordered_map<uint32_t, std::shared_ptr<jsi::NativeState>>;
+
 /// HermesSerialized represents a jsi::Serialized object produced by the Hermes
 /// runtime. HermesSerialized is hidden from users, who should remain unaware of
 /// the serialized type. However, it provides the implementation of the
 /// `getPrivate` function that allows Hermes runtimes to obtain the
-/// vm::SerializedValue object that actually holds the serialized data.
+/// HermesSerialized object that actually holds the serialized data.
 class HermesSerialized final : public jsi::Serialized {
  public:
   vm::SerializedValue serialized_;
 
-  HermesSerialized(vm::SerializedValue &serializedValue)
-      : serialized_(std::move(serializedValue)) {}
+  /// The jsi::NativeState of the serialized objects, keyed by object ID. It is
+  /// only filled by serializeBound and serializeBoundWithTransfer, and it is
+  /// attached to the deserialized objects with the same object ID.
+  NativeStateMap nativeStates_;
+
+  HermesSerialized(
+      vm::SerializedValue &serializedValue,
+      NativeStateMap nativeStates = {})
+      : serialized_(std::move(serializedValue)),
+        nativeStates_(std::move(nativeStates)) {}
 
   static const void *getHermesSerializedSecret() {
     static const uint8_t hidden = 0;
     return &hidden;
   }
 
+  /// \return \p serialized as a HermesSerialized, or nullptr if it was not
+  /// produced by a Hermes runtime.
+  static HermesSerialized *fromSerialized(jsi::Serialized &serialized) {
+    return static_cast<HermesSerialized *>(
+        serialized.getPrivate(getHermesSerializedSecret()));
+  }
+
   void *getPrivate(const void *secretAddr) override {
     if (secretAddr == getHermesSerializedSecret()) {
-      return &serialized_;
+      return this;
     }
     return nullptr;
   }
@@ -764,11 +784,53 @@ class HermesRuntimeImpl final : public HermesRuntime,
   jsi::Array deserializeWithTransfer(
       std::unique_ptr<jsi::Serialized> &serialized) override;
 
+  std::shared_ptr<jsi::Serialized> serializeBound(
+      const jsi::Value &value) override;
+  std::unique_ptr<jsi::Serialized> serializeBoundWithTransfer(
+      const jsi::Value &value,
+      const jsi::Array &transferList) override;
+
   const vm::SerializedValue *getHermesSerializedValue(
       const jsi::Serialized &serialized) const override;
   const std::shared_ptr<jsi::Serialized> makeSerialized(
       vm::SerializedValue &value) const override;
+
+  /// Serialize \p value with the structured clone algorithm, calling
+  /// \p onObject for every serialized object if it is set.
+  vm::SerializedValue serializeValue(
+      const jsi::Value &value,
+      vm::SerializedObjectCallback onObject);
+
+  /// Serialize \p value with the structured clone algorithm, transferring the
+  /// values in \p transferList and calling \p onObject for every serialized
+  /// object if it is set.
+  vm::SerializedValue serializeValueWithTransfer(
+      const jsi::Value &value,
+      const jsi::Array &transferList,
+      vm::SerializedObjectCallback onObject);
+
+  /// \return a callback for the VM serializer that adds to \p nativeStates
+  /// the object ID and the jsi::NativeState of every serialized object that
+  /// carries a jsi::NativeState.
+  auto collectNativeStates(NativeStateMap &nativeStates);
+
+  /// \return a callback for the VM deserializer that attaches every native
+  /// state in \p nativeStates to the deserialized object with the same object
+  /// ID.
+  auto attachNativeStates(const NativeStateMap &nativeStates);
 #endif
+
+  /// \return the jsi::NativeState attached to \p h, or std::nullopt if \p h
+  /// has none. The returned state may be nullptr, because a JSI user can
+  /// attach a null native state.
+  std::optional<std::shared_ptr<jsi::NativeState>> findNativeState(
+      vm::Handle<vm::JSObject> h);
+
+  /// Attach \p state to \p h, replacing any native state \p h already has.
+  /// \p h must not be a Proxy or a HostObject.
+  vm::CallResult<bool> defineNativeState(
+      vm::Handle<vm::JSObject> h,
+      std::shared_ptr<jsi::NativeState> state);
 
   void setEventLoopControl(IEventLoopControl *eventLoopControl) override;
   IEventLoopControl *getEventLoopControl() override;
@@ -1735,15 +1797,37 @@ jsi::ICast *HermesRuntimeImpl::castInterface(const jsi::UUID &interfaceUUID) {
 }
 
 #ifdef JSI_UNSTABLE
+auto HermesRuntimeImpl::collectNativeStates(NativeStateMap &nativeStates) {
+  return [this, &nativeStates](uint32_t id, vm::Handle<vm::JSObject> obj) {
+    if (auto state = findNativeState(obj)) {
+      nativeStates.emplace(id, std::move(*state));
+    }
+    return vm::ExecutionStatus::RETURNED;
+  };
+}
+
+auto HermesRuntimeImpl::attachNativeStates(const NativeStateMap &nativeStates) {
+  return [this, &nativeStates](uint32_t id, vm::Handle<vm::JSObject> obj) {
+    auto it = nativeStates.find(id);
+    if (it == nativeStates.end()) {
+      return vm::ExecutionStatus::RETURNED;
+    }
+    vm::GCScopeMarkerRAII marker{runtime_};
+    auto res = defineNativeState(obj, it->second);
+    if (LLVM_UNLIKELY(res == vm::ExecutionStatus::EXCEPTION)) {
+      return vm::ExecutionStatus::EXCEPTION;
+    }
+    if (LLVM_UNLIKELY(!*res)) {
+      return runtime_.raiseError("Failed to attach native state");
+    }
+    return vm::ExecutionStatus::RETURNED;
+  };
+}
+
 std::shared_ptr<jsi::Serialized> HermesRuntimeImpl::serialize(
     const jsi::Value &value) {
-  ExecutionScopeRAII scopeRAII(mutatorScope);
-  vm::GCScope gcScope(runtime_);
-  vm::PinnedHermesValue numberStorage;
-  auto serializedRes =
-      vm::serialize_RJS(runtime_, vmHandleFromValue(value, &numberStorage));
-  checkStatus(serializedRes.getStatus());
-  return std::make_shared<HermesSerialized>(*serializedRes);
+  vm::SerializedValue serialized = serializeValue(value, {});
+  return std::make_shared<HermesSerialized>(serialized);
 }
 
 jsi::Value HermesRuntimeImpl::deserialize(
@@ -1753,17 +1837,20 @@ jsi::Value HermesRuntimeImpl::deserialize(
     throw jsi::JSINativeException("serialized cannot be null");
   }
 
-  void *privateSerialized =
-      serialized->getPrivate(HermesSerialized::getHermesSerializedSecret());
-  if (LLVM_UNLIKELY(!privateSerialized)) {
+  auto *hermesSerialized = HermesSerialized::fromSerialized(*serialized);
+  if (LLVM_UNLIKELY(!hermesSerialized)) {
     throw jsi::JSINativeException(
         "Cannot deserialize non-Hermes serialized objects");
   }
 
   vm::GCScope gcScope(runtime_);
-  auto serializedValue =
-      reinterpret_cast<vm::SerializedValue *>(privateSerialized);
-  auto deserializedRes = vm::deserialize(runtime_, *serializedValue);
+  const auto &nativeStates = hermesSerialized->nativeStates_;
+  auto deserializedRes = nativeStates.empty()
+      ? vm::deserialize(runtime_, hermesSerialized->serialized_)
+      : vm::deserialize(
+            runtime_,
+            hermesSerialized->serialized_,
+            attachNativeStates(nativeStates));
   checkStatus(deserializedRes.getStatus());
   return valueFromHermesValue(*deserializedRes);
 }
@@ -1771,19 +1858,9 @@ jsi::Value HermesRuntimeImpl::deserialize(
 std::unique_ptr<jsi::Serialized> HermesRuntimeImpl::serializeWithTransfer(
     const jsi::Value &value,
     const jsi::Array &transferList) {
-  ExecutionScopeRAII scopeRAII(mutatorScope);
-  if (LLVM_UNLIKELY(!vm::vmisa<vm::JSArray>(phv(transferList)))) {
-    throw jsi::JSINativeException("Transfer array must not be a Proxy.");
-  }
-  vm::GCScope gcScope(runtime_);
-  vm::PinnedHermesValue numberStorage;
-
-  auto arrHandle = vm::Handle<vm::JSArray>::vmcast(&phv(transferList));
-  auto serializedRes = vm::serializeWithTransfer_RJS(
-      runtime_, vmHandleFromValue(value, &numberStorage), arrHandle);
-  checkStatus(serializedRes.getStatus());
-
-  return std::make_unique<HermesSerialized>(*serializedRes);
+  vm::SerializedValue serialized =
+      serializeValueWithTransfer(value, transferList, {});
+  return std::make_unique<HermesSerialized>(serialized);
 }
 
 jsi::Array HermesRuntimeImpl::deserializeWithTransfer(
@@ -1793,40 +1870,87 @@ jsi::Array HermesRuntimeImpl::deserializeWithTransfer(
     throw jsi::JSINativeException("serialized cannot be null");
   }
 
-  void *privateSerialized =
-      serialized->getPrivate(HermesSerialized::getHermesSerializedSecret());
-  if (LLVM_UNLIKELY(!privateSerialized)) {
+  auto *hermesSerialized = HermesSerialized::fromSerialized(*serialized);
+  if (LLVM_UNLIKELY(!hermesSerialized)) {
     throw jsi::JSINativeException(
         "Cannot deserialize non-Hermes serialized objects");
   }
 
   vm::GCScope gcScope(runtime_);
-  auto *serializedValue =
-      reinterpret_cast<vm::SerializedValue *>(privateSerialized);
-  auto deserializedRes =
-      vm::deserializeWithTransfer(runtime_, *serializedValue);
+  const auto &nativeStates = hermesSerialized->nativeStates_;
+  auto deserializedRes = nativeStates.empty()
+      ? vm::deserializeWithTransfer(runtime_, hermesSerialized->serialized_)
+      : vm::deserializeWithTransfer(
+            runtime_,
+            hermesSerialized->serialized_,
+            attachNativeStates(nativeStates));
   serialized.reset();
   checkStatus(deserializedRes.getStatus());
 
   return add<jsi::Array>(deserializedRes->getHermesValue());
 }
 
+std::shared_ptr<jsi::Serialized> HermesRuntimeImpl::serializeBound(
+    const jsi::Value &value) {
+  NativeStateMap nativeStates;
+  vm::SerializedValue serialized =
+      serializeValue(value, collectNativeStates(nativeStates));
+  return std::make_shared<HermesSerialized>(
+      serialized, std::move(nativeStates));
+}
+
+std::unique_ptr<jsi::Serialized> HermesRuntimeImpl::serializeBoundWithTransfer(
+    const jsi::Value &value,
+    const jsi::Array &transferList) {
+  NativeStateMap nativeStates;
+  vm::SerializedValue serialized = serializeValueWithTransfer(
+      value, transferList, collectNativeStates(nativeStates));
+  return std::make_unique<HermesSerialized>(
+      serialized, std::move(nativeStates));
+}
+
+vm::SerializedValue HermesRuntimeImpl::serializeValue(
+    const jsi::Value &value,
+    vm::SerializedObjectCallback onObject) {
+  ExecutionScopeRAII scopeRAII(mutatorScope);
+  vm::GCScope gcScope(runtime_);
+  vm::PinnedHermesValue numberStorage;
+  auto serializedRes = vm::serialize_RJS(
+      runtime_, vmHandleFromValue(value, &numberStorage), onObject);
+  checkStatus(serializedRes.getStatus());
+  return std::move(*serializedRes);
+}
+
+vm::SerializedValue HermesRuntimeImpl::serializeValueWithTransfer(
+    const jsi::Value &value,
+    const jsi::Array &transferList,
+    vm::SerializedObjectCallback onObject) {
+  ExecutionScopeRAII scopeRAII(mutatorScope);
+  if (LLVM_UNLIKELY(!vm::vmisa<vm::JSArray>(phv(transferList)))) {
+    throw jsi::JSINativeException("Transfer array must not be a Proxy.");
+  }
+  vm::GCScope gcScope(runtime_);
+  vm::PinnedHermesValue numberStorage;
+
+  auto arrHandle = vm::Handle<vm::JSArray>::vmcast(&phv(transferList));
+  auto serializedRes = vm::serializeWithTransfer_RJS(
+      runtime_, vmHandleFromValue(value, &numberStorage), arrHandle, onObject);
+  checkStatus(serializedRes.getStatus());
+  return std::move(*serializedRes);
+}
+
 const vm::SerializedValue *HermesRuntimeImpl::getHermesSerializedValue(
     const jsi::Serialized &serialized) const {
-  const void *secret = HermesSerialized::getHermesSerializedSecret();
-  void *privateSerialized =
-      const_cast<jsi::Serialized *>(&serialized)->getPrivate(secret);
-
-  const vm::SerializedValue *serializedValue =
-      reinterpret_cast<vm::SerializedValue *>(privateSerialized);
-
-  return serializedValue;
+  auto *hermesSerialized = HermesSerialized::fromSerialized(
+      const_cast<jsi::Serialized &>(serialized));
+  return hermesSerialized ? &hermesSerialized->serialized_ : nullptr;
 }
 
 const std::shared_ptr<jsi::Serialized> HermesRuntimeImpl::makeSerialized(
     ::hermes::vm::SerializedValue &value) const {
   return std::make_unique<HermesSerialized>(value);
 }
+
 #endif
 
 void HermesRuntimeImpl::setEventLoopControl(
@@ -2713,11 +2837,6 @@ void HermesRuntimeImpl::setNativeState(
     const jsi::Object &obj,
     std::shared_ptr<jsi::NativeState> state) {
   ExecutionScopeRAII scopeRAII(mutatorScope);
-  struct : public vm::Locals {
-    vm::PinnedValue<vm::NativeState> ns;
-  } lv;
-  vm::LocalsRAII lraii(runtime_, &lv);
-
   vm::GCScope gcScope(runtime_);
   auto h = handle(obj);
   if (h->isProxyObject(runtime_)) {
@@ -2725,26 +2844,40 @@ void HermesRuntimeImpl::setNativeState(
   } else if (h->isHostObject(runtime_)) {
     throw jsi::JSINativeException("native state unsupported on HostObject");
   }
+  auto res = defineNativeState(h, std::move(state));
+  checkStatus(res.getStatus());
+  if (!*res) {
+    throw jsi::JSINativeException(
+        "failed to define internal native state property");
+  }
+}
+
+vm::CallResult<bool> HermesRuntimeImpl::defineNativeState(
+    vm::Handle<vm::JSObject> h,
+    std::shared_ptr<jsi::NativeState> state) {
+  assert(
+      !h->isProxyObject(runtime_) && !h->isHostObject(runtime_) &&
+      "native state unsupported on Proxy and HostObject");
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::NativeState> ns;
+  } lv;
+  vm::LocalsRAII lraii(runtime_, &lv);
+
   // Allocate a NativeStateBox on the C++ heap and use it as context of
   // NativeState. The box also carries a reference to the runtime so the
   // Release callback can queue destruction to the finalizer thread.
   auto *nativeStateCtx = new NativeStateContext{std::move(state), *this};
   lv.ns = vm::NativeState::create(
       runtime_, nativeStateCtx, NativeStateContext::finalize);
-  auto res = vm::JSObject::defineOwnProperty(
+  // NB: If setting the property failed, then the NativeState cell will soon
+  // be unreachable, and when it's later finalized, the shared_ptr will be
+  // deleted.
+  return vm::JSObject::defineOwnProperty(
       h,
       runtime_,
       vm::Predefined::getSymbolID(vm::Predefined::InternalPropertyNativeState),
       vm::DefinePropertyFlags::getDefaultNewPropertyFlags(),
       lv.ns);
-  // NB: If setting the property failed, then the NativeState cell will soon
-  // be unreachable, and when it's later finalized, the shared_ptr will be
-  // deleted.
-  checkStatus(res.getStatus());
-  if (!*res) {
-    throw jsi::JSINativeException(
-        "failed to define internal native state property");
-  }
 }
 
 std::shared_ptr<jsi::NativeState> HermesRuntimeImpl::getNativeState(
@@ -2761,6 +2894,28 @@ std::shared_ptr<jsi::NativeState> HermesRuntimeImpl::getNativeState(
       desc);
   (void)exists;
   assert(exists && "hasNativeState lied");
+  // Raw pointers below.
+  vm::NoAllocScope scope(runtime_);
+  vm::NativeState *ns = vm::vmcast<vm::NativeState>(
+      vm::JSObject::getNamedSlotValueUnsafe(*h, runtime_, desc)
+          .getObject(runtime_));
+  return reinterpret_cast<NativeStateContext *>(ns->context())->state;
+}
+
+std::optional<std::shared_ptr<jsi::NativeState>>
+HermesRuntimeImpl::findNativeState(vm::Handle<vm::JSObject> h) {
+  if (h->isProxyObject(runtime_) || h->isHostObject(runtime_)) {
+    return std::nullopt;
+  }
+  vm::NamedPropertyDescriptor desc;
+  if (!vm::JSObject::getOwnNamedDescriptor(
+          h,
+          runtime_,
+          vm::Predefined::getSymbolID(
+              vm::Predefined::InternalPropertyNativeState),
+          desc)) {
+    return std::nullopt;
+  }
   // Raw pointers below.
   vm::NoAllocScope scope(runtime_);
   vm::NativeState *ns = vm::vmcast<vm::NativeState>(

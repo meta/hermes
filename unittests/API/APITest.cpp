@@ -4200,6 +4200,245 @@ TEST_P(HermesSerializationTest, SerializeManyExternalBuffersWithTransfer) {
   }
 }
 
+namespace {
+/// NativeState subclass used by the structured clone tests below. It counts its
+/// own destructions so a test can tell when the last owner released it. The
+/// counter is atomic because a NativeState is destroyed on the finalizer
+/// thread.
+class SerializationState : public NativeState {
+ public:
+  SerializationState(int value, std::atomic<int> *dtors)
+      : value(value), dtors(dtors) {}
+  ~SerializationState() override {
+    if (dtors)
+      ++*dtors;
+  }
+
+  int value;
+  std::atomic<int> *dtors;
+};
+
+/// Wait for \p dtors to reach \p expected, or give up after two seconds.
+void waitForSerializationStateDtors(std::atomic<int> &dtors, int expected) {
+  for (int i = 0; i < 200; ++i) {
+    if (dtors.load() == expected)
+      return;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+} // namespace
+
+TEST_P(HermesSerializationTest, SerializeNativeState) {
+  // An object without native state must not gain one.
+  auto plain = deserializeAsObject(evalAndSerialize("({a: 1})"));
+  EXPECT_FALSE(plain.hasNativeState<SerializationState>(*rt));
+
+  auto state = std::make_shared<SerializationState>(42, nullptr);
+  auto obj = eval("({a: 1})").getObject(*rt);
+  obj.setNativeState(*rt, state);
+  auto serialized = serializationInterface->serializeBound(Value(*rt, obj));
+
+  // The copy shares the very same jsi::NativeState instance.
+  auto copy = deserializeAsObject(serialized);
+  ASSERT_TRUE(copy.hasNativeState<SerializationState>(*rt));
+  EXPECT_EQ(copy.getNativeState<SerializationState>(*rt).get(), state.get());
+  EXPECT_EQ(copy.getProperty(*rt, "a").getNumber(), 1);
+
+  // The original object keeps its native state.
+  EXPECT_EQ(obj.getNativeState<SerializationState>(*rt).get(), state.get());
+
+  // A Serialized object can be deserialized many times, including into another
+  // runtime. Every copy shares the same instance.
+  auto copyInRt2 =
+      serializationInterface2->deserialize(serialized).getObject(*rt2);
+  ASSERT_TRUE(copyInRt2.hasNativeState<SerializationState>(*rt2));
+  EXPECT_EQ(
+      copyInRt2.getNativeState<SerializationState>(*rt2).get(), state.get());
+}
+
+TEST_P(HermesSerializationTest, SerializeNestedNativeState) {
+  auto outerState = std::make_shared<SerializationState>(1, nullptr);
+  auto innerState = std::make_shared<SerializationState>(2, nullptr);
+
+  auto outer = eval("({inner: {}, alias: null})").getObject(*rt);
+  auto inner = outer.getPropertyAsObject(*rt, "inner");
+  // The same inner object is reachable twice, so it is serialized once and
+  // referenced the second time.
+  outer.setProperty(*rt, "alias", inner);
+  outer.setNativeState(*rt, outerState);
+  inner.setNativeState(*rt, innerState);
+
+  auto copy = deserializeAsObject(
+      serializationInterface->serializeBound(Value(*rt, outer)));
+  EXPECT_EQ(
+      copy.getNativeState<SerializationState>(*rt).get(), outerState.get());
+
+  auto innerCopy = copy.getPropertyAsObject(*rt, "inner");
+  EXPECT_EQ(
+      innerCopy.getNativeState<SerializationState>(*rt).get(),
+      innerState.get());
+
+  // The reference record must produce the same object, native state included.
+  auto aliasCopy = copy.getPropertyAsObject(*rt, "alias");
+  EXPECT_TRUE(Object::strictEquals(*rt, innerCopy, aliasCopy));
+}
+
+TEST_P(HermesSerializationTest, SerializeNativeStateOnExoticObjects) {
+  // Native state is carried by every serializable object type, not only plain
+  // objects, because it lives at a fixed position of every object record.
+  const char *sources[] = {
+      "[1, 2, 3]",
+      "new Map([[1, 2]])",
+      "new Set([1])",
+      "new Date(0)",
+      "new Int8Array([1, 2])",
+      "new Error('boom')",
+      "new Number(7)",
+  };
+  for (const char *source : sources) {
+    auto state = std::make_shared<SerializationState>(0, nullptr);
+    auto obj = eval(source).getObject(*rt);
+    obj.setNativeState(*rt, state);
+
+    auto copy = serializationInterface2
+                    ->deserialize(
+                        serializationInterface->serializeBound(Value(*rt, obj)))
+                    .getObject(*rt2);
+    ASSERT_TRUE(copy.hasNativeState<SerializationState>(*rt2)) << source;
+    EXPECT_EQ(copy.getNativeState<SerializationState>(*rt2).get(), state.get())
+        << source;
+  }
+}
+
+TEST_P(HermesSerializationTest, SerializeNativeStateWithTransfer) {
+  auto messageState = std::make_shared<SerializationState>(1, nullptr);
+  auto bufferState = std::make_shared<SerializationState>(2, nullptr);
+
+  auto message = eval("var ab = new ArrayBuffer(8); ({m: 1})").getObject(*rt);
+  message.setNativeState(*rt, messageState);
+
+  auto buffer = rt->global().getPropertyAsObject(*rt, "ab");
+  buffer.setNativeState(*rt, bufferState);
+  Array transfers = Array::createWithElements(*rt, Value(*rt, buffer));
+
+  auto serialized = serializationInterface->serializeBoundWithTransfer(
+      Value(*rt, message), transfers);
+  auto deserialized =
+      serializationInterface2->deserializeWithTransfer(serialized);
+
+  ASSERT_EQ(deserialized.length(*rt2), 2);
+  auto messageCopy = deserialized.getValueAtIndex(*rt2, 0).asObject(*rt2);
+  ASSERT_TRUE(messageCopy.hasNativeState<SerializationState>(*rt2));
+  EXPECT_EQ(
+      messageCopy.getNativeState<SerializationState>(*rt2).get(),
+      messageState.get());
+
+  // A transferred ArrayBuffer carries its native state too.
+  auto bufferCopy = deserialized.getValueAtIndex(*rt2, 1).asObject(*rt2);
+  ASSERT_TRUE(bufferCopy.hasNativeState<SerializationState>(*rt2));
+  EXPECT_EQ(
+      bufferCopy.getNativeState<SerializationState>(*rt2).get(),
+      bufferState.get());
+}
+
+TEST_P(HermesSerializationTest, SerializedNativeStateOutlivesSourceObject) {
+  // Destructors run on the finalizer thread, so use an atomic.
+  std::atomic<int> dtors = 0;
+  {
+    std::shared_ptr<Serialized> serialized;
+    {
+      auto obj = eval("({})").getObject(*rt);
+      obj.setNativeState(*rt, std::make_shared<SerializationState>(42, &dtors));
+      serialized = serializationInterface->serializeBound(Value(*rt, obj));
+    }
+    // The source object is now unreachable, but the Serialized object still
+    // owns the native state, so it must not have been destroyed.
+    eval("gc()");
+    EXPECT_EQ(0, dtors.load());
+
+    auto copy = deserializeAsObject(serialized);
+    ASSERT_TRUE(copy.hasNativeState<SerializationState>(*rt));
+    EXPECT_EQ(copy.getNativeState<SerializationState>(*rt)->value, 42);
+  }
+  // Nothing holds the native state any more.
+  eval("gc()");
+  waitForSerializationStateDtors(dtors, 1);
+  EXPECT_EQ(1, dtors.load());
+}
+
+TEST_P(HermesSerializationTest, SerializeNullNativeState) {
+  auto obj = eval("({})").getObject(*rt);
+  obj.setNativeState(*rt, nullptr);
+  auto copy =
+      serializationInterface2
+          ->deserialize(serializationInterface->serializeBound(Value(*rt, obj)))
+          .getObject(*rt2);
+  ASSERT_TRUE(copy.hasNativeState(*rt2));
+  EXPECT_EQ(copy.getNativeState<NativeState>(*rt2), nullptr);
+}
+
+TEST_P(HermesSerializationTest, SerializeManyNativeStates) {
+  constexpr int kCount = 5000;
+  auto arr = eval("Array.from({length: 5000}, () => ({}))")
+                 .getObject(*rt)
+                 .getArray(*rt);
+  std::vector<std::shared_ptr<SerializationState>> states;
+  for (int i = 0; i < kCount; ++i) {
+    states.push_back(std::make_shared<SerializationState>(i, nullptr));
+    arr.getValueAtIndex(*rt, i).getObject(*rt).setNativeState(
+        *rt, states.back());
+  }
+  auto copy =
+      serializationInterface2
+          ->deserialize(serializationInterface->serializeBound(Value(*rt, arr)))
+          .getObject(*rt2)
+          .getArray(*rt2);
+  ASSERT_EQ(copy.size(*rt2), kCount);
+  for (int i = 0; i < kCount; ++i) {
+    EXPECT_EQ(
+        copy.getValueAtIndex(*rt2, i)
+            .getObject(*rt2)
+            .getNativeState<SerializationState>(*rt2)
+            .get(),
+        states[i].get());
+  }
+}
+
+TEST_P(HermesSerializationTest, SerializeBoundWithoutNativeStates) {
+  auto serialized =
+      serializationInterface->serializeBound(Value(*rt, eval("({a: 1})")));
+  EXPECT_EQ(
+      deserializeAsObject(serialized).getProperty(*rt, "a").getNumber(), 1);
+
+  auto transferred = serializationInterface->serializeBoundWithTransfer(
+      Value(*rt, eval("({b: 2})")), Array(*rt, 0));
+  auto deserialized =
+      serializationInterface2->deserializeWithTransfer(transferred);
+  EXPECT_EQ(
+      deserialized.getValueAtIndex(*rt2, 0)
+          .getObject(*rt2)
+          .getProperty(*rt2, "b")
+          .getNumber(),
+      2);
+}
+
+TEST_P(HermesSerializationTest, SerializeDoesNotCopyNativeState) {
+  auto state = std::make_shared<SerializationState>(1, nullptr);
+  auto obj = eval("({})").getObject(*rt);
+  obj.setNativeState(*rt, state);
+
+  auto serialized = serializationInterface->serialize(Value(*rt, obj));
+  EXPECT_FALSE(deserializeAsObject(serialized).hasNativeState(*rt));
+
+  auto transferred = serializationInterface->serializeWithTransfer(
+      Value(*rt, obj), Array(*rt, 0));
+  auto deserialized =
+      serializationInterface2->deserializeWithTransfer(transferred);
+  EXPECT_FALSE(
+      deserialized.getValueAtIndex(*rt2, 0).getObject(*rt2).hasNativeState(
+          *rt2));
+}
+
 class HermesWorkerTest : public HermesRuntimeTest {
  public:
   HermesWorkerTest() : HermesRuntimeTest() {}

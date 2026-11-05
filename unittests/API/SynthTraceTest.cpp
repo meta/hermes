@@ -2755,6 +2755,34 @@ TEST_F(SynthTraceReplayTest, SerializeReplay) {
     EXPECT_TRUE(jsi::Object::strictEquals(rt, innerObjClone, innerObjClone2));
   }
 }
+
+TEST_F(SynthTraceReplayTest, SerializeBoundReplay) {
+  auto state = std::make_shared<jsi::NativeState>();
+  {
+    auto &rt = *traceRt;
+    jsi::Object obj = jsi::Object(rt);
+    obj.setProperty(rt, "foo", "bar");
+    obj.setNativeState(rt, state);
+
+    auto serializationInterface = jsi::castInterface<jsi::ISerialization>(&rt);
+    auto serialized =
+        serializationInterface->serializeBound(jsi::Value(rt, obj));
+    auto deserialized =
+        serializationInterface->deserialize(serialized).asObject(rt);
+    EXPECT_EQ(deserialized.getNativeState<jsi::NativeState>(rt), state);
+    EXPECT_EQ(
+        deserialized.getProperty(rt, "foo").getString(rt).utf8(rt), "bar");
+
+    rt.global().setProperty(rt, "obj", deserialized);
+  }
+  replay();
+  {
+    auto &rt = *replayRt;
+    auto deserialized = rt.global().getPropertyAsObject(rt, "obj");
+    EXPECT_EQ(
+        deserialized.getProperty(rt, "foo").getString(rt).utf8(rt), "bar");
+  }
+}
 #endif
 
 using JobQueueReplayTest = SynthTraceReplayTest;

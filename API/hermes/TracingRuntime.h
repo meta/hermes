@@ -212,6 +212,11 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
       const jsi::Array &transferList) override;
   jsi::Array deserializeWithTransfer(
       std::unique_ptr<jsi::Serialized> &serialized) override;
+  std::shared_ptr<jsi::Serialized> serializeBound(
+      const jsi::Value &value) override;
+  std::unique_ptr<jsi::Serialized> serializeBoundWithTransfer(
+      const jsi::Value &value,
+      const jsi::Array &transferList) override;
 #endif
 
   void addMarker(const std::string &marker);
