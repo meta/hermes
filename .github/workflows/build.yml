@@ -27,7 +27,7 @@ jobs:
         cmake -S hermes -B build_hdb -G Ninja ${RELEASE_FLAGS}
         cmake --build ./build_hdb --target hdb check-hermes
       env:
-        RELEASE_FLAGS: "-DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=True -DCMAKE_OSX_ARCHITECTURES=x86_64;arm64 \\ -DBUILD_SHARED_LIBS=OFF -DHERMES_BUILD_SHARED_JSI=OFF"
+        RELEASE_FLAGS: "-DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=True -DCMAKE_OSX_ARCHITECTURES=x86_64;arm64 -DBUILD_SHARED_LIBS=OFF -DHERMES_BUILD_SHARED_JSI=OFF"
     - name: Create CLI tarball
       run: |-
         mkdir output staging
