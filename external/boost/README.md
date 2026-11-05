@@ -13,3 +13,7 @@ bz2.
 7. Rename the `boost` namespace to `hoost` using a preprocessor define.
 8. Rename the `xxx_fcontext()` globals to have a `hoost_` prefix.
 9. Change the include path from `boost/` to `hoost/`.
+10. Add a BTI landing pad (`hint #34`) at each `hoost_*_fcontext` entry and a
+    `GNU_PROPERTY_AARCH64_FEATURE_1_BTI` note to the AArch64 ELF assembly
+    (`*_arm64_aapcs_elf_gas.S`), both only when `__ARM_FEATURE_BTI_DEFAULT` is
+    set (`-mbranch-protection=bti` or `standard`).

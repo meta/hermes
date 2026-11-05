@@ -52,11 +52,32 @@
  *******************************************************/
 
 .file "make_arm64_aapcs_elf_gas.S"
+
+#if defined(__ARM_FEATURE_BTI_DEFAULT) && (__ARM_FEATURE_BTI_DEFAULT == 1)
+// hoost_make_fcontext starts with a BTI landing pad, so advertise BTI for the object
+// when branch-target enforcement is requested. Context switches resume
+// through `ret`, which BTI does not check.
+.pushsection .note.gnu.property, "a", %note
+.balign 8
+.long 4
+.long 0x10
+.long 0x5
+.asciz "GNU"
+.long 0xc0000000 // GNU_PROPERTY_AARCH64_FEATURE_1_AND
+.long 4
+.long 1 // GNU_PROPERTY_AARCH64_FEATURE_1_BTI
+.long 0
+.popsection
+#endif
+
 .text
 .align  2
 .global hoost_make_fcontext
 .type   hoost_make_fcontext, %function
 hoost_make_fcontext:
+#if defined(__ARM_FEATURE_BTI_DEFAULT) && (__ARM_FEATURE_BTI_DEFAULT == 1)
+    hint #34 // bti c
+#endif
     # shift address in x0 (allocated stack) to lower 16 byte boundary
     and x0, x0, ~0xF
 
