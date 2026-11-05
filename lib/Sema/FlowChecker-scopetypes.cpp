@@ -277,6 +277,18 @@ class FlowChecker::DeclareScopeTypes {
   /// Storage for the argument arrays referenced by unresolvedAliasExpansions.
   /// std::deque keeps them from moving.
   std::deque<llvh::SmallVector<Type *, 2>> unresolvedAliasExpansionArgs{};
+  /// A temporary class installed by completeForwardGeneric.
+  struct TempClass {
+    /// Forward generic class instantiations specialized with it as a type
+    /// argument. Only top-level arguments are tracked: union, tuple and object
+    /// keys compare through Type::info, so they follow the replacement.
+    llvh::SmallVector<Type *, 1> users{};
+    /// The class that replaced it, null until replaced. Alias copies keep the
+    /// temporary class until syncForwardGenericClassAliasCopies.
+    TypeInfo *finalClass = nullptr;
+  };
+  /// Temporary classes installed by completeForwardGeneric.
+  llvh::DenseMap<TypeInfo *, TempClass> tempClasses{};
   /// Keep track of all forward declarations of classes, so they can be
   /// completed.
   llvh::SmallVector<Type *, 4> forwardClassDecls{};
@@ -1176,6 +1188,7 @@ class FlowChecker::DeclareScopeTypes {
       // specializeGenericWithParsedTypes uses the completed argument TypeInfos.
       type->info = outer.flowContext_.createClass(
           typeDecl->genericClassDecl->name, generic.typeArgTypes);
+      tempClasses.try_emplace(type->info);
     }
 
     // Whether all type arguments have a concrete TypeInfo.
@@ -1339,6 +1352,11 @@ class FlowChecker::DeclareScopeTypes {
     // It's possible the arguments aren't fully canonicalized here,
     // which will be handled in fixupUnionsAndGenericTables.
     assert(typeDecl->genericClassDecl && "Expected a generic class");
+    for (Type *arg : generic.typeArgTypes) {
+      auto it = tempClasses.find(arg->info);
+      if (it != tempClasses.end() && !it->second.finalClass)
+        it->second.users.push_back(type);
+    }
     llvh::SaveAndRestore savedDepth{outer.genericClassDepth_, generic.depth};
     auto [newDecl, specialization] = outer.specializeGenericWithParsedTypes(
         typeDecl->genericClassDecl,
@@ -1363,7 +1381,43 @@ class FlowChecker::DeclareScopeTypes {
     }
     Type *classType =
         llvh::cast<ClassConstructorType>(classConsType->info)->getClassType();
+    TypeInfo *tempClass = type->info;
     type->info = classType->info;
+    finalizeTempClass(tempClass, classType->info);
+  }
+
+  /// Record that \p tempClass was replaced by \p finalClass.
+  /// A specialization created with \p tempClass as a type argument (e.g. for
+  /// type T = C<T>) is cached under it, so also cache it under the final
+  /// arguments. Otherwise a later C<T> creates a second, nominally different
+  /// specialization of the same type.
+  void finalizeTempClass(TypeInfo *tempClass, TypeInfo *finalClass) {
+    auto it = tempClasses.find(tempClass);
+    if (it == tempClasses.end() || it->second.finalClass)
+      return;
+    it->second.finalClass = finalClass;
+    llvh::SmallVector<Type *, 1> users = std::move(it->second.users);
+
+    for (Type *user : users) {
+      const GenericTypeInstantiation &generic =
+          forwardGenericInstantiations.at(user);
+      if (!generic.classSpecialization)
+        continue;
+      GenericInfo<ESTree::Node> &genericInfo =
+          outer.getGenericInfoMustExist(generic.typeDecl->genericClassDecl);
+      GenericInfo<ESTree::Node>::TypeArgsVector typeArgs{};
+      for (Type *arg : generic.typeArgTypes) {
+        auto tempIt = tempClasses.find(arg->info);
+        typeArgs.push_back(
+            tempIt != tempClasses.end() && tempIt->second.finalClass
+                ? tempIt->second.finalClass
+                : arg->info);
+      }
+      if (!genericInfo.getSpecialization(typeArgs)) {
+        (void)genericInfo.addSpecialization(
+            outer, std::move(typeArgs), generic.classSpecialization);
+      }
+    }
   }
 
   /// Fixup a union by first fixing up any non-looping arms then

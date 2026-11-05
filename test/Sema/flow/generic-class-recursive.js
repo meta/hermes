@@ -34,39 +34,27 @@ let jsonGenericArray: JsonGenericArray;
 
 // CHECK:%untyped_function.1 = untyped_function()
 // CHECK-NEXT:%class.2 = class(C {
-// CHECK-NEXT:  %homeObject: %class.12
+// CHECK-NEXT:  %homeObject: %class.10
 // CHECK-NEXT:})
 // CHECK-NEXT:%class.3 = class(D {
-// CHECK-NEXT:  %homeObject: %class.13
+// CHECK-NEXT:  %homeObject: %class.11
 // CHECK-NEXT:})
-// CHECK-NEXT:%union.4 = union(null | %class.14)
-// CHECK-NEXT:%union.5 = union(null | %class.15)
-// CHECK-NEXT:%union.6 = union(null | %class.16)
-// CHECK-NEXT:%class_constructor.7 = class_constructor(%class.14)
-// CHECK-NEXT:%class_constructor.8 = class_constructor(%class.17)
-// CHECK-NEXT:%class_constructor.9 = class_constructor(%class.2)
-// CHECK-NEXT:%class_constructor.10 = class_constructor(%class.18)
-// CHECK-NEXT:%class_constructor.11 = class_constructor(%class.3)
-// CHECK-NEXT:%class.12 = class( {
+// CHECK-NEXT:%union.4 = union(null | %class.12)
+// CHECK-NEXT:%union.5 = union(null | %class.13)
+// CHECK-NEXT:%union.6 = union(null | %class.14)
+// CHECK-NEXT:%class_constructor.7 = class_constructor(%class.12)
+// CHECK-NEXT:%class_constructor.8 = class_constructor(%class.2)
+// CHECK-NEXT:%class_constructor.9 = class_constructor(%class.3)
+// CHECK-NEXT:%class.10 = class( {
 // CHECK-NEXT:})
-// CHECK-NEXT:%class.13 = class( {
+// CHECK-NEXT:%class.11 = class( {
 // CHECK-NEXT:})
-// CHECK-NEXT:%class.14 = class(C {
-// CHECK-NEXT:  %homeObject: %class.19
+// CHECK-NEXT:%class.12 = class(C {
+// CHECK-NEXT:  %homeObject: %class.15
 // CHECK-NEXT:})
-// CHECK-NEXT:%class.15 = class(Array<%union.5>)
-// CHECK-NEXT:%class.16 = class(Array<%union.6>)
-// CHECK-NEXT:%class.17 = class(C {
-// CHECK-NEXT:  %homeObject: %class.20
-// CHECK-NEXT:})
-// CHECK-NEXT:%class.18 = class(D {
-// CHECK-NEXT:  %homeObject: %class.21
-// CHECK-NEXT:})
-// CHECK-NEXT:%class.19 = class( {
-// CHECK-NEXT:})
-// CHECK-NEXT:%class.20 = class( {
-// CHECK-NEXT:})
-// CHECK-NEXT:%class.21 = class( {
+// CHECK-NEXT:%class.13 = class(Array<%union.5>)
+// CHECK-NEXT:%class.14 = class(Array<%union.6>)
+// CHECK-NEXT:%class.15 = class( {
 // CHECK-NEXT:})
 
 // CHECK:SemContext
@@ -86,15 +74,15 @@ let jsonGenericArray: JsonGenericArray;
 // CHECK-NEXT:        Decl %d.12 'arguments' Var Arguments
 // CHECK-NEXT:        Decl %d.13 'C' Class : %class_constructor.7
 // CHECK-NEXT:        Decl %d.14 'C' Class : %class_constructor.8
-// CHECK-NEXT:        Decl %d.15 'C' Class : %class_constructor.9
-// CHECK-NEXT:        Decl %d.16 'D' Class : %class_constructor.10
-// CHECK-NEXT:        Decl %d.17 'D' Class : %class_constructor.11
+// CHECK-NEXT:        Decl %d.15 'D' Class : %class_constructor.9
 // CHECK-NEXT:        Scope %s.2
 // CHECK-NEXT:        Scope %s.3
 // CHECK-NEXT:        Scope %s.4
 // CHECK-NEXT:        Scope %s.5
 // CHECK-NEXT:        Scope %s.6
+// CHECK-NEXT:    Func strict mayReachImplicitReturn
 // CHECK-NEXT:        Scope %s.7
+// CHECK-NEXT:    Func strict mayReachImplicitReturn
 // CHECK-NEXT:        Scope %s.8
 // CHECK-NEXT:    Func strict mayReachImplicitReturn
 // CHECK-NEXT:        Scope %s.9
@@ -102,14 +90,6 @@ let jsonGenericArray: JsonGenericArray;
 // CHECK-NEXT:        Scope %s.10
 // CHECK-NEXT:    Func strict mayReachImplicitReturn
 // CHECK-NEXT:        Scope %s.11
-// CHECK-NEXT:    Func strict mayReachImplicitReturn
-// CHECK-NEXT:        Scope %s.12
-// CHECK-NEXT:    Func strict mayReachImplicitReturn
-// CHECK-NEXT:        Scope %s.13
-// CHECK-NEXT:    Func strict mayReachImplicitReturn
-// CHECK-NEXT:        Scope %s.14
-// CHECK-NEXT:    Func strict mayReachImplicitReturn
-// CHECK-NEXT:        Scope %s.15
 
 // CHECK:FunctionExpression : %untyped_function.1
 // CHECK-NEXT:    Id 'exports' [D:E:%d.1 'exports']
@@ -124,23 +104,13 @@ let jsonGenericArray: JsonGenericArray;
 // CHECK-NEXT:            TypeParameterDeclaration
 // CHECK-NEXT:                TypeParameter
 // CHECK-NEXT:            ClassBody
-// CHECK-NEXT:        ClassDeclaration Scope %s.6
-// CHECK-NEXT:            Id 'C' [D:E:%d.15 'C']
-// CHECK-NEXT:            TypeParameterDeclaration
-// CHECK-NEXT:                TypeParameter
-// CHECK-NEXT:            ClassBody
 // CHECK-NEXT:        ClassDeclaration Scope %s.2
 // CHECK-NEXT:            Id 'C' [D:E:%d.2 'C']
 // CHECK-NEXT:            TypeParameterDeclaration
 // CHECK-NEXT:                TypeParameter
 // CHECK-NEXT:            ClassBody
-// CHECK-NEXT:        ClassDeclaration Scope %s.7
-// CHECK-NEXT:            Id 'D' [D:E:%d.16 'D']
-// CHECK-NEXT:            TypeParameterDeclaration
-// CHECK-NEXT:                TypeParameter
-// CHECK-NEXT:            ClassBody
-// CHECK-NEXT:        ClassDeclaration Scope %s.8
-// CHECK-NEXT:            Id 'D' [D:E:%d.17 'D']
+// CHECK-NEXT:        ClassDeclaration Scope %s.6
+// CHECK-NEXT:            Id 'D' [D:E:%d.15 'D']
 // CHECK-NEXT:            TypeParameterDeclaration
 // CHECK-NEXT:                TypeParameter
 // CHECK-NEXT:            ClassBody
