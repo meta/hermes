@@ -313,20 +313,18 @@ void LocalTimeOffsetCache::reuseEmptyEntries(
   }
 
   assert(
-      before && after && before != after &&
+      (before && after && before != after) &&
       "`before` and `after` interval should be valid");
   assert(
-      before->isEmpty() ||
-      before->startMs <= timeMs &&
-          "the start time of `before` must start on or before timeMs");
+      (before->isEmpty() || before->startMs <= timeMs) &&
+      "the start time of `before` must start on or before timeMs");
   assert(
-      after->isEmpty() ||
-      timeMs < after->startMs &&
-          "The start time of `after` must start after timeMs");
+      (after->isEmpty() || timeMs < after->startMs) &&
+      "The start time of `after` must start after timeMs");
   assert(
-      before->isEmpty() || after->isEmpty() ||
-      before->endMs < after->startMs &&
-          "`before` interval must strictly start before `after` interval");
+      (before->isEmpty() || after->isEmpty() ||
+       before->endMs < after->startMs) &&
+      "`before` interval must strictly start before `after` interval");
 }
 
 void LocalTimeOffsetCache::extendOrRecomputeCacheEntry(
