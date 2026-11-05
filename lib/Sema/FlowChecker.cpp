@@ -226,6 +226,13 @@ void FlowChecker::populateBuiltinMethods() {
       continue;
     }
 
+    if (!funcDecl->_returnType) {
+      sm_.error(
+          funcDecl->getStartLoc(),
+          "ft: builtin function must have a return type annotation");
+      continue;
+    }
+
     // Name of the function being called.
     auto *id = llvh::cast<ESTree::IdentifierNode>(funcDecl->_id);
 
