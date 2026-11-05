@@ -202,6 +202,10 @@ class FlowChecker::FindLoopingTypes {
         result = true;
       }
     }
+    if (const auto &indexer = type->getIndexer()) {
+      result |= isTypeLooping(indexer->keyType);
+      result |= isTypeLooping(indexer->valueType);
+    }
     return result;
   }
 
@@ -1018,6 +1022,10 @@ class FlowChecker::DeclareScopeTypes {
     } else if (auto *obj = llvh::dyn_cast<ExactObjectType>(type->info)) {
       for (auto &field : obj->getFields())
         completeForwardType(field.type, visited);
+      if (const auto &indexer = obj->getIndexer()) {
+        completeForwardType(indexer->keyType, visited);
+        completeForwardType(indexer->valueType, visited);
+      }
     } else if (auto *ftype = llvh::dyn_cast<TypedFunctionType>(type->info)) {
       completeForwardType(ftype->getReturnType(), visited);
       if (ftype->getThisParam())
