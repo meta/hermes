@@ -318,18 +318,22 @@ class FlowChecker : public ESTree::RecursionDepthTracker<FlowChecker> {
     Type *classConsType;
     /// The class's own lexical scope (where private names are declared).
     sema::LexicalScope *classScope;
+    /// The genericClassDepth_ of the specialization.
+    unsigned depth;
 
     DeferredGenericClass(
         ESTree::ClassDeclarationNode *specialization,
         TypeBindingTableScopePtrTy scope,
         Type *declType,
         Type *classConsType,
-        sema::LexicalScope *classScope)
+        sema::LexicalScope *classScope,
+        unsigned depth)
         : specialization(specialization),
           scope(scope),
           classType(declType),
           classConsType(classConsType),
-          classScope(classScope) {}
+          classScope(classScope),
+          depth(depth) {}
   };
 
   /// A resolved generic bound comparison to perform after type resolution.
@@ -355,6 +359,15 @@ class FlowChecker : public ESTree::RecursionDepthTracker<FlowChecker> {
   /// Queue of the generics that we haven't finished typechecking yet,
   /// which need their bodies typechecked.
   std::deque<DeferredGenericClass> typecheckQueue_;
+
+  /// Maximum genericClassDepth_ of a generic class specialization.
+  static constexpr unsigned kMaxGenericClassDepth = 100;
+
+  /// Number of generic class specializations whose processing led to the one
+  /// currently being processed, 0 outside of any.
+  /// Their bodies are queued rather than checked recursively, so this is what
+  /// bounds expansions like `class A<T> { m(): void { new A<T[]>(); } }`.
+  unsigned genericClassDepth_ = 0;
 
   /// The Decl for the generic Array<T> class, identified by @Hermes.array.
   sema::Decl *arrayClassDecl_ = nullptr;

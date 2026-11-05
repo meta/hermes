@@ -70,8 +70,15 @@ class FlowChecker::GenericTypeInstantiation {
   /// using the same one.
   ESTree::Node *classSpecialization = nullptr;
 
-  GenericTypeInstantiation(TypeDecl *typeDecl, ESTree::Node *annotation)
-      : typeDecl(typeDecl), annotation(annotation) {}
+  /// The genericClassDepth_ where the annotation was resolved, e.g. in the
+  /// bound of another specialization.
+  unsigned depth;
+
+  GenericTypeInstantiation(
+      TypeDecl *typeDecl,
+      ESTree::Node *annotation,
+      unsigned depth)
+      : typeDecl(typeDecl), annotation(annotation), depth(depth) {}
 };
 
 class FlowChecker::FindLoopingTypes {
@@ -611,7 +618,8 @@ class FlowChecker::DeclareScopeTypes {
         // We don't yet care whether this is a generic class or type alias.
         Type *type = outer.flowContext_.createType(
             outer.flowContext_.getGenericInfo(), annotation);
-        GenericTypeInstantiation instantiation{typeDecl, gta};
+        GenericTypeInstantiation instantiation{
+            typeDecl, gta, outer.genericClassDepth_};
 
         // Populate the type arg Types.
         ESTree::NodeList &args =
@@ -675,7 +683,8 @@ class FlowChecker::DeclareScopeTypes {
       if (outer.arrayTypeDecl_) {
         Type *type = outer.flowContext_.createType(
             outer.flowContext_.getGenericInfo(), annotation);
-        GenericTypeInstantiation instantiation{outer.arrayTypeDecl_, arr};
+        GenericTypeInstantiation instantiation{
+            outer.arrayTypeDecl_, arr, outer.genericClassDepth_};
         instantiation.typeArgTypes.push_back(elementType);
         forwardGenericInstantiations.insert({type, std::move(instantiation)});
         return type;
@@ -1218,9 +1227,11 @@ class FlowChecker::DeclareScopeTypes {
       }
 
       // Expansions that keep producing new type arguments never hit the
-      // specialization cache, e.g. type A<T> = [A<[T]>].
+      // specialization cache, e.g. type A<T> = [A<[T]>], or through bounds,
+      // e.g. type A<T: A<[T]>> = T.
       if (aliasExpansionLimitHit ||
-          aliasExpansionDepth >= kMaxAliasExpansionDepth) {
+          aliasExpansionDepth >= kMaxAliasExpansionDepth ||
+          generic.depth >= kMaxGenericClassDepth) {
         if (!aliasExpansionLimitHit) {
           outer.sm_.error(
               generic.annotation->getSourceRange(),
@@ -1257,11 +1268,14 @@ class FlowChecker::DeclareScopeTypes {
             generic.annotation->getSourceRange(),
             generic.typeArgTypes,
             scope,
-            [this](ESTree::Node *n) -> Type * {
+            [this, &generic](ESTree::Node *n) -> Type * {
               // Do not complete the bound here. It may recursively reference
               // this specialization before its RHS has been cached. The
               // forward-type worklist completes it before bound validation.
               llvh::SmallDenseSet<ESTree::TypeAliasNode *> boundVisited{};
+              // Expansions created by the bound are nested in this one.
+              llvh::SaveAndRestore savedDepth{
+                  outer.genericClassDepth_, generic.depth + 1};
               return resolveTypeAnnotation(n, boundVisited, 0);
             });
         if (!populated) {
@@ -1321,6 +1335,7 @@ class FlowChecker::DeclareScopeTypes {
     // It's possible the arguments aren't fully canonicalized here,
     // which will be handled in fixupUnionsAndGenericTables.
     assert(typeDecl->genericClassDecl && "Expected a generic class");
+    llvh::SaveAndRestore savedDepth{outer.genericClassDepth_, generic.depth};
     auto [newDecl, specialization] = outer.specializeGenericWithParsedTypes(
         typeDecl->genericClassDecl,
         generic.annotation->getSourceRange(),
@@ -1478,6 +1493,7 @@ class FlowChecker::DeclareScopeTypes {
                        << "\n");
 
       outer.bindingTable_.activateScope(deferred.scope);
+      llvh::SaveAndRestore savedDepth{outer.genericClassDepth_, deferred.depth};
 
       // Actually parse and move on to the next one.
       // The superClass node has already been visited,

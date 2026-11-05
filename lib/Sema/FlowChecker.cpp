@@ -2623,6 +2623,7 @@ void FlowChecker::drainTypecheckQueue() {
         << llvh::cast<ESTree::IdentifierNode>(specialization->_id)->_name->str()
         << "\n");
     bindingTable_.activateScope(deferred.scope);
+    llvh::SaveAndRestore savedDepth{genericClassDepth_, deferred.depth};
     visitClassNode(
         deferred.specialization,
         llvh::cast<ESTree::ClassBodyNode>(specialization->_body),
@@ -3655,6 +3656,12 @@ std::pair<ESTree::Node *, bool> FlowChecker::specializeGenericImpl(
 
   // Create specialization if it doesn't exist.
   if (wasNewlyCreated) {
+    if (llvh::isa<ESTree::ClassDeclarationNode>(generic.originalNode) &&
+        genericClassDepth_ >= kMaxGenericClassDepth) {
+      sm_.error(
+          errorRange, "ft: too deeply nested generic class specialization");
+      return {nullptr, false};
+    }
     LLVM_DEBUG(llvh::dbgs() << "Creating specialization for generic\n");
     // Avoid stack overflow in the clone by executing in a separate stack.
     executeInStack(
@@ -3745,6 +3752,12 @@ FlowChecker::specializeGenericWithParsedTypes(
 
       assert(typeParamsNode);
 
+      // Specializations created by the bounds or body of a class
+      // specialization are nested in it.
+      llvh::SaveAndRestore savedDepth{
+          genericClassDepth_,
+          genericClassDepth_ +
+              llvh::isa<ESTree::ClassDeclarationNode>(specialization)};
       ScopeRAII paramScope{*this};
       bool populated = validateAndBindTypeParameters(
           typeParamsNode,
@@ -4249,7 +4262,8 @@ void FlowChecker::typecheckGenericClassSpecialization(
         bindingTable_.getCurrentScope(),
         classType,
         classConsType,
-        specialization->getScope());
+        specialization->getScope(),
+        genericClassDepth_);
   } else {
     bool success = parseClassType(
         specialization->_superClass,
@@ -4266,7 +4280,8 @@ void FlowChecker::typecheckGenericClassSpecialization(
           bindingTable_.getCurrentScope(),
           classType,
           classConsType,
-          specialization->getScope());
+          specialization->getScope(),
+          genericClassDepth_);
     }
   }
 }
