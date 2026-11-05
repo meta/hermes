@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - static_h
+      - 260318099.0.0-stable
 jobs:
   macos:
     runs-on: macos-15
