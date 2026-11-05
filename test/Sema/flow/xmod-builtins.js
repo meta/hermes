@@ -19,7 +19,7 @@
 //   * The $SHBuiltin.import member expression:
 //        (number, string, any) => any
 //   * The call to $SHBuiltin.import
-//        type of args[2]
+//        type of args[2], or any if there are two args
 
 // (Note: the (x as any).length expressions are a workaround for a
 // current deficiency in static hermes.)
@@ -35,6 +35,11 @@
     });
     $SHBuiltin.moduleFactory(2, function(global, require): number {
         var n2: number = ($SHBuiltin.import(1, 'n', "abc") as any).length + 2;
+        return 0;
+    });
+    $SHBuiltin.moduleFactory(3, function(global, require): number {
+        // Import-of-export without the third argument is 'any'.
+        $SHBuiltin.export('n3', $SHBuiltin.import(1, 'n'));
         return 0;
     });
 })
@@ -71,6 +76,11 @@
 // CHECK-NEXT:                Decl %d.13 'require' Parameter : any
 // CHECK-NEXT:                Decl %d.14 'n2' Var : number
 // CHECK-NEXT:                Decl %d.15 'arguments' Var Arguments
+// CHECK-NEXT:        Func strict noImplicitReturn
+// CHECK-NEXT:            Scope %s.6
+// CHECK-NEXT:                Decl %d.16 'global' Parameter : any
+// CHECK-NEXT:                Decl %d.17 'require' Parameter : any
+// CHECK-NEXT:                Decl %d.18 'arguments' Var Arguments
 
 // CHECK:FunctionExpression : %untyped_function.1
 // CHECK-NEXT:    Id 'exports' [D:E:%d.1 'exports']
@@ -150,5 +160,29 @@
 // CHECK-NEXT:                                                    BinOp +
 // CHECK-NEXT:                                                    NumericLiteral : 2
 // CHECK-NEXT:                                            Id 'n2' [D:E:%d.14 'n2']
+// CHECK-NEXT:                                    ReturnStatement
+// CHECK-NEXT:                                        NumericLiteral : 0
+// CHECK-NEXT:                    ExpressionStatement
+// CHECK-NEXT:                        CallExpression : %function.3
+// CHECK-NEXT:                            MemberExpression : any
+// CHECK-NEXT:                                SHBuiltin
+// CHECK-NEXT:                                Id 'moduleFactory'
+// CHECK-NEXT:                            NumericLiteral : 3
+// CHECK-NEXT:                            FunctionExpression : %function.3
+// CHECK-NEXT:                                Id 'global' [D:E:%d.16 'global']
+// CHECK-NEXT:                                Id 'require' [D:E:%d.17 'require']
+// CHECK-NEXT:                                BlockStatement
+// CHECK-NEXT:                                    ExpressionStatement
+// CHECK-NEXT:                                        CallExpression : void
+// CHECK-NEXT:                                            MemberExpression : any
+// CHECK-NEXT:                                                SHBuiltin
+// CHECK-NEXT:                                                Id 'export'
+// CHECK-NEXT:                                            StringLiteral : "n3"
+// CHECK-NEXT:                                            CallExpression : any
+// CHECK-NEXT:                                                MemberExpression : any
+// CHECK-NEXT:                                                    SHBuiltin
+// CHECK-NEXT:                                                    Id 'import'
+// CHECK-NEXT:                                                NumericLiteral : 1
+// CHECK-NEXT:                                                StringLiteral : "n"
 // CHECK-NEXT:                                    ReturnStatement
 // CHECK-NEXT:                                        NumericLiteral : 0

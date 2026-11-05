@@ -3632,9 +3632,12 @@ class FlowChecker::ExprVisitor {
 
   void checkSHBuiltinImport(ESTree::CallExpressionNode *call) {
     visitESTreeChildren(*this, call, nullptr);
-    assert(
-        call->_arguments.size() == 3 &&
-        "Ensured by checks in SemanticResolver.");
+    // SemanticResolver ensures two or three arguments.
+    if (call->_arguments.size() != 3) {
+      // Without the third argument the imported value is untyped.
+      outer_.setNodeType(call, outer_.flowContext_.getAny());
+      return;
+    }
     auto argsIter = call->_arguments.begin();
     argsIter++;
     argsIter++;

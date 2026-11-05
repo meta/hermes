@@ -971,8 +971,15 @@ Value *ESTreeIRGen::genSHBuiltinModuleFactory(
 
 Value *ESTreeIRGen::genSHBuiltinImport(ESTree::CallExpressionNode *call) {
   ESTree::NodeList &args = getArguments(call);
-  assert(
-      call->_arguments.size() == 3 && "Ensured by checks in SemanticResolver.");
+  // SemanticResolver allows two arguments for an import-of-export, but the
+  // arguments of $SHBuiltin.export are never generated.
+  if (args.size() != 3) {
+    Mod->getContext().getSourceErrorManager().error(
+        call->getSourceRange(),
+        "$SHBuiltin.import with two arguments is only allowed inside "
+        "$SHBuiltin.export");
+    return Builder.getLiteralUndefined();
+  }
   auto argsIter = args.begin();
   ++argsIter;
   ++argsIter;
