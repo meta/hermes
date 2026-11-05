@@ -424,6 +424,29 @@ TEST(DateUtilTest, HistoricalStandardOffsetChangeTest) {
   hermes::oscompat::unset_env("TZ");
 }
 
+TEST(DateUtilTest, PermanentDaylightTimeTest) {
+  if (!hasIANATimezoneDB())
+    return;
+  setTimeZone("America/Vancouver");
+  LocalTimeOffsetCache cache;
+  auto offset = [&cache](double utc) { return localTime(utc, cache) - utc; };
+
+  // British Columbia kept -07:00 all year from 2026-11-01, recorded in tzdata
+  // as a new standard time. Older tzdata keeps switching to -08:00.
+  if (offset(timeValue(2027, 1, 15, 12)) != -7 * MS_PER_HOUR)
+    return;
+
+  // Earlier dates keep their own offsets, rather than the current standard
+  // offset plus an hour of DST.
+  EXPECT_EQ(-8 * MS_PER_HOUR, offset(timeValue(2026, 1, 15, 12)));
+  EXPECT_EQ(-7 * MS_PER_HOUR, offset(timeValue(2026, 7, 15, 12)));
+  EXPECT_EQ(-7 * MS_PER_HOUR, offset(timeValue(2026, 11, 4, 12)));
+  EXPECT_EQ(timeValue(2026, 1, 1, 8), utcTime(timeValue(2026, 1, 1), cache));
+  EXPECT_EQ(timeValue(2026, 11, 1, 7), utcTime(timeValue(2026, 11, 1), cache));
+
+  hermes::oscompat::unset_env("TZ");
+}
+
 TEST(DateUtilTest, CloselySpacedOffsetTransitionsTest) {
   if (!hasIANATimezoneDB())
     return;
