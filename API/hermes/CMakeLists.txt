@@ -91,9 +91,14 @@ if(HERMES_IS_ANDROID)
   set(API_JNI_DEPS fbjni::fbjni)
 endif()
 
+if(WIN32 AND HERMES_ENABLE_CORE_EXTENSIONS)
+  # The Crypto extension sources entropy from BCryptGenRandom.
+  set(API_BCRYPT_DEPS bcrypt)
+endif()
+
 add_hermes_library(hermesapi
   ${api_sources}
-  LINK_OBJLIBS hermesPublic LINK_LIBS jsi ${CDP_DEPS} ${API_JNI_DEPS}
+  LINK_OBJLIBS hermesPublic LINK_LIBS jsi ${CDP_DEPS} ${API_JNI_DEPS} ${API_BCRYPT_DEPS}
   )
 target_include_directories(hermesapi_obj PUBLIC ..)
 
