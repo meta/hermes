@@ -8,7 +8,9 @@
 #ifndef HERMES_VM_JIT_X86_64_RUNTIMEOFFSETS_H
 #define HERMES_VM_JIT_X86_64_RUNTIMEOFFSETS_H
 
+#include "hermes/VM/ArrayStorage.h"
 #include "hermes/VM/Callable.h"
+#include "hermes/VM/JSArray.h"
 #include "hermes/VM/Runtime.h"
 #include "hermes/VM/RuntimeModule.h"
 #include "hermes/VM/sh_runtime.h"
@@ -153,6 +155,90 @@ struct RuntimeOffsets {
       (AlignedHeapSegment::kOffsetOfAllocRegion >> kLogCardSize) >=
           SegmentContents::kFirstUsedIndex,
       "a dirtied card must never land in the repurposed card table prefix");
+
+  /// The largest allocation size, in bytes, at which a cell is guaranteed NOT
+  /// to have been placed in a multi-unit JumboHeapSegment.
+  ///
+  /// Derivation: an ArrayStorageSmall is allocated with CanBeLarge::Yes
+  /// (ArrayStorage.h), and the only two places such a cell can become large
+  /// both spell the threshold the same way --
+  /// HadesGC::allocSlow() sends `sz > FixedSizeHeapSegment::maxSize()` to
+  /// OldGen::allocLarge(), and HadesGC::allocLongLived() allocates in a
+  /// FixedSizeHeapSegment for anything `sz <= FixedSizeHeapSegment::maxSize()`.
+  /// Everything at or below the bound therefore lives in a young-gen or
+  /// old-gen FixedSizeHeapSegment, which is exactly one kSegmentUnitSize unit
+  /// long. That is what the inline array store needs: it satisfies
+  /// emitSafeStoreOrSlow()'s precondition that the slot address lies within
+  /// the first unit of its segment, and it makes `loc & ~(unit-1)` the true
+  /// segment start.
+  ///
+  /// This is a CELL size in bytes, not an element count, because the element
+  /// count in ArrayStorageSmall::size does not bound the cell: capacity may
+  /// be much larger than size (ArrayStorage grows geometrically and shrinking
+  /// keeps the capacity), and it is capacity that the allocation size is
+  /// derived from. The gate therefore reads the cell's own KindAndSize.
+  static constexpr uint32_t kMaxInlineStorage = FixedSizeHeapSegment::maxSize();
+  static_assert(
+      kMaxInlineStorage < kSegmentUnitSize,
+      "a fixed-size segment holds at most one unit");
+  /// A cell larger than GCCell::maxNormalSize() stores 0 in its KindAndSize
+  /// instead of its size, so the inline gate has to reject 0 as well. It can
+  /// only do that soundly if every non-jumbo size is representable, which is
+  /// what this pins.
+  static_assert(
+      kMaxInlineStorage <= GCCell::maxNormalSize(),
+      "a non-jumbo cell must store its size inline");
+
+  /// Width, in bits, of the size field of KindAndSize. The emitted gate reads
+  /// it as a plain 32-bit load from offset 0 of the cell, which is only the
+  /// size when this is 32.
+  static constexpr uint32_t kindAndSizeNumSizeBits = KindAndSize::kNumSizeBits;
+  /// @}
+
+  /// \name Fast array element store.
+  ///
+  /// The layout the inline PutByVal fast path reads out of a JSArray. See
+  /// Emitter::emitPutByValFastArrayTier().
+  /// @{
+  static constexpr uint32_t arrayImplBeginIndex =
+      offsetof(ArrayImpl, beginIndex_);
+  static constexpr uint32_t arrayImplElemCount =
+      offsetof(ArrayImpl, elemCount_);
+  static constexpr uint32_t arrayImplIndexedStorage =
+      offsetof(ArrayImpl, indexedStorage_);
+
+  /// Offset of the 16-bit ClassFlags word in a HiddenClass.
+  static constexpr uint32_t hiddenClassFlags = offsetof(HiddenClass, flags_);
+
+  /// Bit mask, within a HiddenClass's 16-bit ClassFlags word, of the three
+  /// class flags the inline fast array store depends on, and the value that
+  /// word must have under that mask: indexedStorage set,
+  /// hasIndexLikeProperties clear and frozen clear. The first two together
+  /// are JSObject::hasFastIndexProperties().
+  ///
+  /// Both are derived from the bitfield declaration rather than hardcoded, so
+  /// reordering ClassFlags cannot silently change the emitted immediates.
+  /// They are functions rather than constexpr constants because reading a
+  /// union through a member other than the one written is not a constant
+  /// expression in C++17. The values they must produce are pinned by an
+  /// assert at the emission site.
+  ///
+  /// frozen has to be tested even though the indexed properties are fast:
+  /// Object.freeze() changes neither indexedStorage nor
+  /// hasIndexLikeProperties, and ArrayImpl::_setOwnIndexedImpl() refuses the
+  /// write when the class is frozen.
+  static uint32_t classFlagsFastArrayMask() {
+    ClassFlags f;
+    f.indexedStorage = 1;
+    f.hasIndexLikeProperties = 1;
+    f.frozen = 1;
+    return f._flags;
+  }
+  static uint32_t classFlagsFastArrayValue() {
+    ClassFlags f;
+    f.indexedStorage = 1;
+    return f._flags;
+  }
   /// @}
 #endif
 

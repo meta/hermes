@@ -22,6 +22,154 @@ STATISTIC(
 
 namespace hermes::vm::x86_64 {
 
+#if HERMES_JIT_INLINE_SAFE_STORE
+void Emitter::emitPutByValFastArrayTier(
+    FR frTarget,
+    FR frKey,
+    FR frValue,
+    const asmjit::Label &helperLab) {
+  comment("// Inline fast array store");
+
+  // All three operands are already synced to the frame by the caller, so any
+  // temp holding another FR is dead weight here.
+  freeAllFRTempExcept(frTarget);
+
+  // The target and the value are needed as raw HermesValues in GP registers.
+  // The key is needed as the double it has to be, which is what
+  // emit_double_is_uint32() consumes; getOrAllocFRInVecD() only moves the
+  // raw 64 bits, so this is safe for a key of any type -- a non-number is
+  // NaN-encoded and the conversion below rejects it, which is precisely how
+  // toArrayIndexFastPath() itself gets away with reading key->f64
+  // unconditionally.
+  static_assert(
+      HERMESVALUE_VERSION == 2,
+      "non-numbers must be NaN-encoded for the key test below");
+  HWReg hwTarget = getOrAllocFRInGpX(frTarget, true);
+  HWReg hwValue = getOrAllocFRInGpX(frValue, true);
+  HWReg hwKey = getOrAllocFRInVecD(frKey, true);
+
+  // As in emitPutByIdInlineTier(), the allocs and frees below emit no code at
+  // all: they only decide which registers this sequence may use. Once every
+  // register is recorded, all of them are marked free, which is what leaves
+  // the helper path with no temp registered as an FR location.
+  HWReg hwLoc = allocTempGpX();
+  HWReg hwIdx = allocTempGpX();
+  HWReg hwTemp1 = allocTempGpX();
+  HWReg hwTemp2 = allocTempGpX();
+  HWReg hwKeyTmp = allocTempVecD();
+  const x86::Gp target = hwTarget.gpq();
+  const x86::Gp value = hwValue.gpq();
+  const x86::Xmm key = hwKey.xmm();
+  // Holds the object, then the indexed storage, then the element address.
+  const x86::Gp loc = hwLoc.gpq();
+  const x86::Gp idx = hwIdx.gpq();
+  const x86::Gp temp1 = hwTemp1.gpq();
+  const x86::Gp temp2 = hwTemp2.gpq();
+  const x86::Xmm keyTmp = hwKeyTmp.xmm();
+  freeReg(hwLoc);
+  freeReg(hwIdx);
+  freeReg(hwTemp1);
+  freeReg(hwTemp2);
+  freeReg(hwKeyTmp);
+  freeFRTemp(frTarget);
+  freeFRTemp(frKey);
+  freeFRTemp(frValue);
+
+  // Code generation starts here.
+
+  // Is the target an object?
+  emit_sh_ljs_is_object(a, temp1, target);
+  a.jne(helperLab);
+  // loc is the pointer to the object.
+  emit_sh_ljs_get_pointer(a, loc, target);
+
+  // Is it a JSArray, and nothing else? The runtime reaches ArrayImpl's
+  // haveOwnIndexed/setOwnIndexed through the object's ObjectVTable; the
+  // exact kind is what lets this code skip that dispatch. ArrayImplKind
+  // would be the wrong test: Arguments is in that range and shares the
+  // storage layout, but restricting to JSArray is what the rest of this
+  // sequence was verified against.
+  a.cmp(
+      x86::byte_ptr(
+          loc,
+          (int32_t)(offsetof(SHGCCell, kindAndSize) +
+                    RuntimeOffsets::kindAndSizeKind)),
+      asmjit::Imm((uint8_t)CellKind::JSArrayKind));
+  a.jne(helperLab);
+
+  // Fast index properties (indexedStorage set, hasIndexLikeProperties clear)
+  // and frozen clear, in one masked compare of the hidden class's flags.
+  const uint32_t flagsMask = RuntimeOffsets::classFlagsFastArrayMask();
+  const uint32_t flagsValue = RuntimeOffsets::classFlagsFastArrayValue();
+  assert(
+      flagsMask == 0x884 && flagsValue == 0x800 &&
+      "unexpected ClassFlags bit layout");
+  emit_load_cp(a, temp1, x86::ptr(loc, offsetof(SHJSObject, clazz)));
+  emit_sh_cp_decode_non_null(a, temp1);
+  a.movzx(temp1.r32(), x86::word_ptr(temp1, RuntimeOffsets::hiddenClassFlags));
+  a.and_(temp1.r32(), asmjit::Imm(flagsMask));
+  a.cmp(temp1.r32(), asmjit::Imm(flagsValue));
+  a.jne(helperLab);
+
+  // toArrayIndexFastPath(): the key must be a double that survives a round
+  // trip through uint32, and must not be 0xFFFFFFFF, which JS arrays do not
+  // accept as an index.
+  emit_double_is_uint32(a, idx, keyTmp, key);
+  // As in fastArrayLoad(): vucomisd reports an unordered compare (a NaN
+  // operand, i.e. any non-number key) as EQUAL, so the parity flag is a
+  // second, separate exit.
+  a.jne(helperLab);
+  a.jp(helperLab);
+  a.cmp(idx.r32(), asmjit::Imm(0xFFFFFFFF));
+  a.je(helperLab);
+
+  // _haveOwnIndexedImpl()'s and _setOwnIndexedImpl()'s range test:
+  // `index - beginIndex_ < elemCount_`, unsigned, which is one comparison
+  // for both ends. idx becomes the index into the storage. The 32-bit
+  // subtract zeroes the upper half of idx, which is what makes the scaled
+  // 64-bit index below the uint32 one.
+  a.sub(idx.r32(), x86::dword_ptr(loc, RuntimeOffsets::arrayImplBeginIndex));
+  a.cmp(idx.r32(), x86::dword_ptr(loc, RuntimeOffsets::arrayImplElemCount));
+  a.jae(helperLab);
+
+  // The storage. It cannot be null here: elemCount_ is 0 whenever
+  // indexedStorage_ is, which the comparison above has already ruled out --
+  // the same reasoning that lets _setOwnIndexedImpl() call
+  // getIndexedStorageUnsafe() on this path.
+  emit_load_cp(a, loc, x86::ptr(loc, RuntimeOffsets::arrayImplIndexedStorage));
+  emit_sh_cp_decode_non_null(a, loc);
+
+  // The storage cell must not be a jumbo cell, or emitSafeStoreOrSlow()'s
+  // precondition (see its declaration) is violated. A cell allocated in a
+  // JumboHeapSegment has a size greater than kMaxInlineStorage, or 0 if it
+  // is too large to be represented at all, so a single unsigned compare of
+  // `size - 1` rejects both.
+  static_assert(
+      RuntimeOffsets::kindAndSizeNumSizeBits == 32,
+      "the size field must be the low 32 bits of the cell header");
+  a.mov(temp1.r32(), x86::dword_ptr(loc, offsetof(SHGCCell, kindAndSize)));
+  a.sub(temp1.r32(), asmjit::Imm(1));
+  a.cmp(temp1.r32(), asmjit::Imm(RuntimeOffsets::kMaxInlineStorage - 1));
+  a.ja(helperLab);
+
+  // The address of the element.
+  a.lea(
+      loc,
+      x86::ptr(loc, idx, 3, (int32_t)offsetof(SHArrayStorageSmall, storage)));
+
+  // _haveOwnIndexedImpl() reports false for an `empty` element, so a write
+  // over a hole is not a fast-path write at all: the runtime resolves the
+  // property normally, and may find an accessor on the prototype chain.
+  // Decline, and let the helper do that.
+  a.mov(temp1, x86::qword_ptr(loc));
+  emit_sh_ljs_is_empty(a, temp1, temp1);
+  a.je(helperLab);
+
+  // Store, if the write barrier for it is a no-op or a card-dirty.
+  emitSafeStoreOrSlow(loc, value, temp1, temp2, helperLab);
+}
+#endif // HERMES_JIT_INLINE_SAFE_STORE
+
 void Emitter::putByValImpl(
     FR frTarget,
     FR frKey,
@@ -44,6 +192,21 @@ void Emitter::putByValImpl(
   syncToFrame(frTarget);
   syncToFrame(frKey);
   syncToFrame(frValue);
+
+#if HERMES_JIT_INLINE_SAFE_STORE
+  // Unlike the PutById tier this needs nothing from a property cache: the
+  // guards are all on the values themselves, so the tier goes ahead of the
+  // helper call unconditionally. PutByVal passes the target as the receiver,
+  // which is the one precondition of the runtime fast path that is satisfied
+  // by construction rather than by a guard.
+  asmjit::Label helperLab = a.newLabel();
+  asmjit::Label contLab = a.newLabel();
+  emitPutByValFastArrayTier(frTarget, frKey, frValue, helperLab);
+  // Falling out of the inline tier means the store is done.
+  a.jmp(contLab);
+  a.bind(helperLab);
+#endif
+
   freeAllFRTempExcept({});
 
   a.mov(x86::rdi, xRuntime);
@@ -51,6 +214,10 @@ void Emitter::putByValImpl(
   loadFrameAddr(x86::rdx, frKey);
   loadFrameAddr(x86::rcx, frValue);
   callRuntimeWithSavedIP((void *)shImpl, shImplName);
+
+#if HERMES_JIT_INLINE_SAFE_STORE
+  a.bind(contLab);
+#endif
 }
 
 void Emitter::putByValWithReceiver(

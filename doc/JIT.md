@@ -46,7 +46,7 @@ The machine-code emitter is [asmjit](https://asmjit.com) (vendored in
 | `lib/VM/JIT/JitHandlers.{h,cpp}` | C++ helpers callable from emitted code that are JIT-specific (the generic ones are the `_sh_ljs_*` functions from the SH runtime). Arch-independent. |
 | `include/hermes/VM/JIT/JitCounters.h` | The `JIT_COUNTERS` list and `JitCounter` enum. The counter array is ABI between the VM and emitted code; arch-independent. |
 | `lib/VM/JIT/DiscoverBB.cpp` | Scans bytecode to find basic-block boundaries (branch targets, fallthroughs after branches, Catch, switch tables, exception handler targets). Arch-independent. |
-| `lib/VM/JIT/RuntimeOffsets.h` | `offsetof` constants for fields the emitted code touches directly (Runtime, StackOverflowGuard, CodeBlock, JSFunction, HiddenClass, IdentifierTable, Hades young-gen fields...). Arch-independent. |
+| `lib/VM/JIT/RuntimeOffsets.h` | `offsetof` constants for fields the emitted code touches directly (Runtime, StackOverflowGuard, CodeBlock, JSFunction, HiddenClass, IdentifierTable, Hades young-gen fields...); on x86-64 it also carries the card-table/segment/compactee geometry the inline write barrier reads, each offset or constant static_assert-pinned against the GC (see "Inline write barrier (x86-64)" below). Arch-independent. |
 | `lib/VM/JIT/PerfJitDump.cpp` | Linux `perf` jitdump support. Arch-independent. |
 | `doc/JITTesting.md` | The CI-shaped build/test matrix for all five JIT configs (arm64-qemu, x86-64 HV64/HV32/BOXED ASan+Debug, x86-64 Release), the dump-baseline workflow summary, the release-build validation writeup, and the perf sanity table. Companion to this file and `utils/jit/README.md`. |
 
@@ -348,10 +348,16 @@ cache-hit protocol inline, in up to three tiers:
    sites).
 
 Miss → out-of-line call to `_sh_ljs_get_by_id_rjs`/`_sh_ljs_try_get_by_id_rjs`
-with the cache-entry address. Writes have no inline fast path yet (explicit
-TODO): they go through `_jit_put_by_id`, which implements cache-hit,
-cached-add-transition (checking the RuntimeModule `AddPropertyCacheEntry`,
-parent epoch and parent pointer) and falls back to
+with the cache-entry address. Writes have an inline tier on x86-64
+(`emitPutByIdInlineTier`, see "Inline write barrier (x86-64)" below): when
+the site's write cache already names a hidden class at compile time, the
+emitter bakes in a class/slot check and an inline store guarded by the
+safe-store barrier predicate. A cold cache -- in particular every function
+compiled under `-Xjit=force`, which compiles on the first call before any
+site has run interpreted -- emits the helper call only, exactly as before.
+Either way the fallback is `_jit_put_by_id`, unchanged: it implements
+cache-hit, cached-add-transition (checking the RuntimeModule
+`AddPropertyCacheEntry`, parent epoch and parent pointer) and falls back to
 `Interpreter::putByIdSlowPath_RJS`.
 
 ### Inline allocation
@@ -372,10 +378,20 @@ Since the JIT stores into freshly allocated young-gen cells before any
 safepoint, those initializing stores need no write barriers (this is also why
 `newObjectWithBuffer` bails to the slow path when the property count exceeds
 `JSObject::maxYoungGenAllocationPropCount()`). Stores into pre-existing
-objects (environments, own slots) are *not* inlined — they call the
-`_sh_ljs_*` helpers, which perform the Hades barriers in C++ (see the TODOs
-about inlining write barriers). The one Hades-specific check emitted inline
-is a weak-root *read* barrier guard: `newObjectWithBuffer` reads the cached
+objects are a mix, on x86-64: own-slot stores (the PutById inline tier) and
+fast-array element stores (the PutByVal inline tier) ARE inlined, each
+behind the "safe store" barrier predicate described below. Environment
+slot stores remain `_sh_ljs_*` helper calls, which perform the Hades
+barriers in C++ -- not because they cannot be inlined the same way, but
+because they measured below 1.2% of cycles on the benchmarks that
+motivated this work; the predicate is available if a workload ever
+justifies spending the code size and complexity there. arm64 inlines none
+of these; it stays on the helper path throughout.
+
+The primary Hades-specific inline emission is that same write-barrier
+predicate (`Emitter::emitSafeStoreOrSlow`, x86-64 only -- see "Inline write
+barrier (x86-64)" below). The other one, present on both backends, is a
+weak-root *read* barrier guard: `newObjectWithBuffer` reads the cached
 `HiddenClass` from the RuntimeModule's `objectLiteralHiddenClasses_`
 `WeakRoot`s, and bails to the slow path whenever
 `heap_.ogMarkingBarriers_` is active.
@@ -402,6 +418,125 @@ are the GC roots. Specifics:
   `HERMESVM_COMPRESSED_POINTERS` / `HERMESVM_BOXED_DOUBLES`
   (`emit_sh_cp_*`, `Emit_sh_shv_decode`); the contiguous-heap requirement in
   Config.h makes decode a simple `add xRuntime`.
+
+### Inline write barrier (x86-64)
+
+x86-64 is the only backend that stores a heap pointer inline without a
+helper call. Every such store -- the PutById tier, the PutByVal tier, and
+any future consumer -- goes through one shared predicate,
+`Emitter::emitSafeStoreOrSlow` (`JitEmitter.h`), which performs the store
+itself only when Hades's write barrier for it is provably a no-op or a
+single card-dirty; every other case jumps to the caller's helper label
+without storing. Full derivation, including the source citations for each
+fact below, is in
+`doc/superpowers/specs/2026-08-27-jit-inline-property-writes.md`.
+
+**The decision sequence**, given `loc` (slot address) and `value` (the
+64-bit HermesValue) in registers:
+
+    segLoc = loc & ~(kSegmentUnitSize - 1)
+    if (segLoc == runtime.heap_.youngGen_.lowLim_)      → STORE, done
+    if (runtime.heap_.ogMarkingBarriers_ != 0)          → HELPER
+    if (compactee active)                               → HELPER
+    if (word at segLoc+4 (shiftedSegmentSize) != 1)      → HELPER
+    STORE
+    if (value is a young pointer)
+      card byte at segLoc + ((loc - segLoc) >> 9) = 1   (dirty)
+
+That is: a young-generation target needs no barrier at all; a marking
+collection in progress or a compaction in progress both need the full C++
+barrier; and a segment whose card array is not the inline one (see below)
+cannot be dirtied by this code. Otherwise the store happens, and the card
+is dirtied exactly when the stored value is itself a young pointer.
+
+**The one non-obvious precondition:** `loc` must lie within the first
+`kSegmentUnitSize` bytes of its segment. The predicate derives the segment
+start as `loc & ~(kSegmentUnitSize - 1)`, which is only the true segment
+start under that bound -- a jumbo (multi-unit) segment is aligned to
+`kSegmentUnitSize` but is several units long, so for a `loc` further in,
+the mask names a later unit and the "is this a one-unit segment" test
+reads object payload instead of segment metadata. This matters because the
+runtime's own large-object barrier does not have this problem: it derives
+the segment start from the *owning cell*
+(`AlignedHeapSegment::dirtyCardForAddressInLargeObj`), while this code
+derives it from `loc` alone; the two agree only while `loc` is in the same
+unit as the cell head. Each caller is responsible for the bound, not the
+predicate: PutById satisfies it through
+`WritePropertyCacheEntry::kMaxSlot` (0xff, at most ~2KB past a cell head,
+and every cell head lives in the first unit of its segment); PutByVal
+satisfies it through `RuntimeOffsets::kMaxInlineStorage`
+(`FixedSizeHeapSegment::maxSize()`), which bounds the indexed-storage
+cell's own allocation size and so proves the cell cannot have been placed
+in a jumbo segment. The predicate's own segment-size test (the `+4` check
+above) is necessary but not sufficient for this -- it does not substitute
+for the caller's bound.
+
+**RuntimeOffsets maintenance contract.** The predicate bakes GC geometry
+into emitted code; each fact is pinned by an `offsetof` or a
+`static_assert` -- in `lib/VM/JIT/RuntimeOffsets.h` for most of them, and
+at the x86-64 emitter use site for the `KindAndSize` size-field width
+(`JitEmitter-property.cpp`) and the compactee sentinel's imm32 fit
+(`JitEmitter-internal.cpp`) -- so a GC-side change breaks the build
+instead of silently miscompiling:
+
+- `kSegmentUnitSize` is a power of two;
+- `kLogCardSize == 9` (512-byte cards);
+- `CardStatus::Dirty == 1`;
+- the inline card array (`inlineCardsArray_`) sits at segment offset 0;
+- every card index the store can produce falls at or past
+  `kFirstUsedIndex`, clear of the alloc-region prefix that offset 0
+  actually holds;
+- `shiftedSegmentSize`'s width is the 16 bits the predicate compares;
+- `KindAndSize`'s size field is 32 bits, matching the plain load the
+  PutByVal gate does at cell offset 0;
+- `kMaxInlineStorage` is at most `FixedSizeHeapSegment::maxSize()` and at
+  most `GCCell::maxNormalSize()` (a cell above that bound stores 0, not
+  its size, in `KindAndSize`, so the gate must reject 0 too);
+- the young generation's `lowLim_`/`level_`/`effectiveEnd_` offsets, and
+  the compactee's `start` offset and `kInvalidCompacteeStart` sentinel,
+  including that the sentinel value fits the 32-bit immediate form the
+  emitter uses to compare it.
+
+One item is deliberately *not* on that list: the `ClassFlags` bit mask
+and value the PutByVal tier tests on the target's hidden class
+(`indexedStorage` set, `hasIndexLikeProperties` and `frozen` clear) are
+computed at runtime by writing the bitfields and reading back the union's
+`_flags` member (`RuntimeOffsets::classFlagsFastArrayMask/Value`), not
+`static_assert`ed, because reading a union through a member
+other than the one just written is not a constant expression in C++17. An
+assert at the emission site pins the values instead.
+
+**Build-state gate.** The whole predicate and its two consumers compile in
+only when `HERMES_JIT_INLINE_SAFE_STORE` is set (`JitEmitter.h`): Hades GC,
+no `HERMESVM_COMPRESSED_POINTERS`, no `HERMESVM_BOXED_DOUBLES`. MallocGC
+has no young generation or card table to reason about; HV32 stores a
+32-bit compressed value where the emitters carry a 64-bit HermesValue;
+BOXED may need to box the value before storing. All three configurations
+keep emitting the unconditional helper call, exactly as before this
+series. The `heap_hv_64` lit feature (`test/lit.cfg`) identifies the one
+build where the inline tiers exist, for tests that check emitted code
+rather than just behavior.
+
+**Tests.** `test/jit/x86-64/putbyid-inline.js` and `putbyval-inline.js`
+each run the inline tier against a real, collecting heap and would fail --
+loudly, under ASan, if the card-dirty store were removed -- while
+`putbyid-inline-emitted.js` and `putbyval-inline-emitted.js` (both
+`REQUIRES: heap_hv_64`) check the emitted instructions directly. A caveat
+on the two behavioral tests: a missing card dirty only fails loudly under
+`HERMES_SLOW_DEBUG`, where `HadesGC::verifyCardTable()` catches it: in a
+Release build the same defect surfaces as a wrong printed value, or as
+nothing at all if the reclaimed memory is not reused before the next read.
+A green run of these tests on a Release tree is not, by itself, evidence
+of barrier correctness -- the ASan+Debug (`HERMES_SLOW_DEBUG`) run is.
+
+**Measured effect** (pixel-grid React benchmark, precompiled bytecode,
+Release, HV64, `-Xjit`): +5.2% cumulative across the two stages landed so
+far (PutById tier +4.9%, PutByVal +1.4-2.1%); pixel-grid-small +3.3%,
+relay +2.5%, Octane Richards +14.7%. `_jit_put_by_id` helper calls dropped
+from 810M to 67M; fast-path-eligible PutByVal helper calls from 102M to
+7.7M. Environment stores (spec Stage 3) were deliberately left on the
+helper path: they measured below 1.2% of cycles on these benchmarks, so
+inlining them was not pursued.
 
 ### Arithmetic, comparisons and NaN handling
 
@@ -605,6 +740,19 @@ bring-up milestones are done:
   `getbyid-fast.js` (`REQUIRES: debug_options`) is skipped instead --
   same 72/1 count, not the same membership (see `doc/JITTesting.md`,
   "Release-build validation").
+
+  The counts above predate the 2026-08-27 inline-write-barrier series
+  (`doc/superpowers/specs/2026-08-27-jit-inline-property-writes.md`),
+  which added four more `test/jit/x86-64/` files:
+  - `putbyid-inline.js` -- the PutById inline tier against a real,
+    collecting heap; proves a missing card dirty is a live bug, not a
+    theoretical one.
+  - `putbyid-inline-emitted.js` -- pins the instructions the PutById
+    tier emits (`REQUIRES: heap_hv_64`).
+  - `putbyval-inline.js` -- the PutByVal fast-array inline store against
+    a real, collecting heap, same card-dirty hazard as above.
+  - `putbyval-inline-emitted.js` -- pins the instructions the PutByVal
+    tier emits (`REQUIRES: heap_hv_64`).
 - The `aarch64/jit-stress.js` differential matrix -- interpreter vs.
   `-Xjit=force`, with and without `-Xjit-emit-type-asserts`, at both
   `-O` and `-O0` -- is byte-identical on every config exercised,
@@ -754,6 +902,14 @@ against.
 (Deliberate backend drift: x86-64 carries two Class-D type-assert sites,
 in `fastArrayLength`/`fastArrayLoad`, that arm64 lacks; this is
 design-sanctioned for now, to be reconciled deliberately later.)
+
+The inline write barrier (see "Inline write barrier (x86-64)" above) is
+itself a mode gate: `HERMES_JIT_INLINE_SAFE_STORE` is on only in the
+`HEAP_HV_64` tree built above, so the PutById and PutByVal inline tiers
+exist there and nowhere else -- both HV32 and BOXED keep emitting the
+unconditional helper call for those instructions, unchanged by this
+series. `test/lit.cfg`'s `heap_hv_64` feature marks that one tree for
+tests that check emitted code rather than behavior.
 
 Build and run both:
 

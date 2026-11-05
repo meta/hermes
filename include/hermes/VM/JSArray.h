@@ -33,6 +33,10 @@ class ArrayImpl : public JSObject {
   GCPointer<StorageType> indexedStorage_;
 
   friend void ArrayImplBuildMeta(const GCCell *cell, Metadata::Builder &mb);
+  /// The x86-64 JIT emits an inline fast array element store that reads the
+  /// three fields above directly; RuntimeOffsets is where their offsets are
+  /// derived with offsetof().
+  friend struct RuntimeOffsets;
 
  public:
   static bool classof(const GCCell *cell) {
