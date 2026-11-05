@@ -172,6 +172,12 @@ class Cloner {
       clonedNodesMaps_.emplace_back();
       curNewFunction_ = semContext_.prepareClonedFunction(
           oldInfo, curNewFunction_, curNewScope_);
+      // Parameter expressions put the parameters and 'arguments' in a separate
+      // parameter scope, the parent of the body scope.
+      // Scopes in between have no decls the body can reference, and any scopes
+      // created by the parameter expressions are parented to the body scope.
+      if (oldInfo->hasParameterExpressions)
+        cloneScope(oldInfo->getParameterScope());
       oldScope = oldInfo->getFunctionBodyScope();
     } else if (auto *scopeDec = getDecoration<ScopeDecorationBase>(oldNode);
                scopeDec && scopeDec->getScope()) {
@@ -182,28 +188,34 @@ class Cloner {
     }
 
     // If the node created a scope, create a new cloned scope.
-    if (oldScope) {
-      // Hoisted functions will be transferred after the node is cloned,
-      // because the new nodes haven't been created yet but we need a scope to
-      // insert into as we go down.
-      curNewScope_ = semContext_.prepareClonedScope(
-          oldScope, curNewFunction_, curNewScope_);
-
-      // Map the cloned decls so identifiers can be cloned properly.
-      assert(curNewScope_->decls.size() == oldScope->decls.size());
-      for (size_t i = 0, e = oldScope->decls.size(); i < e; ++i) {
-        clonedDecls_[oldScope->decls[i]] = curNewScope_->decls[i];
-      }
-    }
+    // Hoisted functions will be transferred after the node is cloned,
+    // because the new nodes haven't been created yet but we need a scope to
+    // insert into as we go down.
+    if (oldScope)
+      cloneScope(oldScope);
 
     // Set function-specific information if necessary.
     if (auto *func = llvh::dyn_cast<FunctionLikeNode>(oldNode)) {
       FunctionInfo *oldInfo = func->getSemInfo();
+      // The body scope index may differ, since not every scope is cloned.
+      curNewFunction_->functionBodyScopeIdx = curNewScope_->idxInParentFunction;
       if (oldInfo->argumentsDecl) {
         auto it = clonedDecls_.find(oldInfo->argumentsDecl.getValue());
         assert(it != clonedDecls_.end() && "argumentsDecl not cloned");
         curNewFunction_->argumentsDecl = it->second;
       }
+    }
+  }
+
+  /// Create a clone of \p oldScope in the current function and scope, map its
+  /// decls so identifiers can be cloned properly, and make it the current
+  /// scope.
+  void cloneScope(LexicalScope *oldScope) {
+    curNewScope_ =
+        semContext_.prepareClonedScope(oldScope, curNewFunction_, curNewScope_);
+    assert(curNewScope_->decls.size() == oldScope->decls.size());
+    for (size_t i = 0, e = oldScope->decls.size(); i < e; ++i) {
+      clonedDecls_[oldScope->decls[i]] = curNewScope_->decls[i];
     }
   }
 
@@ -303,8 +315,9 @@ class Cloner {
             DeclCollector::clone(declCollector, clonedNodesForFunc));
       }
 
+      // The function may have created more than one scope.
+      curNewScope_ = curNewFunction_->parentScope;
       curNewFunction_ = curNewFunction_->parentFunction;
-      curNewScope_ = curNewScope_->parentScope;
     }
 
     // Copy ScopeDecorationBase information.
