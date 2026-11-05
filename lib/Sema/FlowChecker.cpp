@@ -3641,6 +3641,17 @@ std::pair<ESTree::Node *, bool> FlowChecker::specializeGenericImpl(
     llvh::ArrayRef<Type *> typeArgTypes) {
   assert(cloneScope && "must have cloneScope");
 
+  // Check the count before creating the specialization, because it is cached
+  // even if binding the type parameters fails.
+  if (typeArgTypes.size() != generic.numTypeParams) {
+    sm_.error(
+        errorRange,
+        llvh::Twine("type argument mismatch, expected ") +
+            llvh::Twine(generic.numTypeParams) + ", found " +
+            llvh::Twine(typeArgTypes.size()));
+    return {nullptr, false};
+  }
+
   // Extract info from types.
   GenericInfo<ESTree::Node>::TypeArgsVector typeArgs{};
   for (Type *type : typeArgTypes) {
