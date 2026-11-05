@@ -55,6 +55,7 @@ outer<string>('a');
 // CHECK-NEXT:            Decl %d.15 'arguments' Var Arguments
 // CHECK-NEXT:            Decl %d.16 'inner' Var : %function.2
 // CHECK-NEXT:            hoistedFunction inner
+// CHECK-NEXT:            hoistedFunction inner
 // CHECK-NEXT:        Func strict noImplicitReturn
 // CHECK-NEXT:            Scope %s.5
 // CHECK-NEXT:                Decl %d.17 'y' Parameter
@@ -70,6 +71,7 @@ outer<string>('a');
 // CHECK-NEXT:            Decl %d.23 'inner' Var
 // CHECK-NEXT:            Decl %d.24 'arguments' Var Arguments
 // CHECK-NEXT:            Decl %d.25 'inner' Var : %function.3
+// CHECK-NEXT:            hoistedFunction inner
 // CHECK-NEXT:            hoistedFunction inner
 // CHECK-NEXT:        Func strict noImplicitReturn
 // CHECK-NEXT:            Scope %s.8

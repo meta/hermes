@@ -315,6 +315,16 @@ class Cloner {
             DeclCollector::clone(declCollector, clonedNodesForFunc));
       }
 
+      // The body scope isn't associated with a node, so transfer its hoisted
+      // functions here.
+      for (ESTree::FunctionDeclarationNode *hoisted :
+           func->getSemInfo()->getFunctionBodyScope()->hoistedFunctions) {
+        auto it = clonedNodesForFunc.find(hoisted);
+        assert(it != clonedNodesForFunc.end() && "didn't store clone");
+        curNewFunction_->getFunctionBodyScope()->hoistedFunctions.push_back(
+            llvh::cast<ESTree::FunctionDeclarationNode>(it->second));
+      }
+
       // The function may have created more than one scope.
       curNewScope_ = curNewFunction_->parentScope;
       curNewFunction_ = curNewFunction_->parentFunction;
