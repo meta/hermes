@@ -170,6 +170,12 @@ class Cloner {
                        << oldNode->getNodeName() << "\n");
       FunctionInfo *oldInfo = func->getSemInfo();
       clonedNodesMaps_.emplace_back();
+      // A named function expression declares its name in a scope of the
+      // enclosing function, associated with the node and parent of the
+      // function.
+      if (auto *scopeDec = getDecoration<ScopeDecorationBase>(oldNode);
+          scopeDec && scopeDec->getScope())
+        cloneScope(scopeDec->getScope());
       curNewFunction_ = semContext_.prepareClonedFunction(
           oldInfo, curNewFunction_, curNewScope_);
       // Parameter expressions put the parameters and 'arguments' in a separate
