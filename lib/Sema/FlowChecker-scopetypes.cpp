@@ -1249,10 +1249,10 @@ class FlowChecker::DeclareScopeTypes {
       // Specialize it with the provided arguments by resolving the type.
       Type *resolved;
       {
-        // Resolve the bound and RHS in the alias's declaration scope.
-        // paramScope below is where the type parameters are bound; a bound may
-        // reference an earlier parameter (e.g. <T, U: T>), which is already
-        // bound when it is resolved.
+        // Bind the parameters and resolve the RHS in the alias's declaration
+        // scope. paramScope below is where the type parameters are bound;
+        // bound checks resolve their bounds in it later, so a bound may
+        // reference any parameter (e.g. <T, U: T>).
         // The arguments are already-resolved concrete Types.
         auto savedScope = outer.bindingTable_.getCurrentScope();
         outer.bindingTable_.activateScope(genericInfo.bindingTableScope);
@@ -1262,22 +1262,18 @@ class FlowChecker::DeclareScopeTypes {
         });
 
         ScopeRAII paramScope{outer};
-        bool populated = outer.validateAndBindTypeParameters(
-            llvh::cast<ESTree::TypeParameterDeclarationNode>(
-                aliasNode->_typeParameters),
-            generic.annotation->getSourceRange(),
-            generic.typeArgTypes,
-            scope,
-            [this, &generic](ESTree::Node *n) -> Type * {
-              // Do not complete the bound here. It may recursively reference
-              // this specialization before its RHS has been cached. The
-              // forward-type worklist completes it before bound validation.
-              llvh::SmallDenseSet<ESTree::TypeAliasNode *> boundVisited{};
-              // Expansions created by the bound are nested in this one.
-              llvh::SaveAndRestore savedDepth{
-                  outer.genericClassDepth_, generic.depth + 1};
-              return resolveTypeAnnotation(n, boundVisited, 0);
-            });
+        bool populated;
+        {
+          // Expansions created by the bounds are nested in this one.
+          llvh::SaveAndRestore savedDepth{
+              outer.genericClassDepth_, generic.depth + 1};
+          populated = outer.validateAndBindTypeParameters(
+              llvh::cast<ESTree::TypeParameterDeclarationNode>(
+                  aliasNode->_typeParameters),
+              generic.annotation->getSourceRange(),
+              generic.typeArgTypes,
+              scope);
+        }
         if (!populated) {
           LLVM_DEBUG(llvh::dbgs() << "Failed to bind type parameters\n");
           type->info = outer.flowContext_.getAnyInfo();
@@ -1523,9 +1519,9 @@ class FlowChecker::DeclareScopeTypes {
   /// Run a post-processing validation step to check certain errors that are
   /// hard to find during resolution.
   void validateTypes() {
-    for (const auto &check : deferredGenericBoundChecks) {
-      outer.validateGenericBound(check);
-    }
+    // Resolving a bound may queue more checks.
+    for (size_t i = 0; i < deferredGenericBoundChecks.size(); ++i)
+      outer.validateGenericBound(deferredGenericBoundChecks[i]);
 
     /// Ensure that rest params have valid types.
     for (Type *funcType : funcTypesWithRest) {

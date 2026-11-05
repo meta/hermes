@@ -13,9 +13,20 @@ class Pair<A, B> {}
 type Alias<T extends Pair<Base>> = T;
 let z: Alias<Pair<Base, Base>>;
 
+// The wrong-arity bound is resolved for two specializations.
+class C<T extends Pair<Base>> {}
+let x: C<number>;
+let y: C<string>;
+
 // Auto-generated content below. Please do not modify manually.
 
-// CHECK:{{.*}}generic-bounds-args-mismatch-error.js:13:22: error: type argument mismatch, expected 2, found 1
+// CHECK:{{.*}}generic-bounds-args-mismatch-error.js:13:26: error: type argument mismatch, expected 2, found 1
 // CHECK-NEXT:type Alias<T extends Pair<Base>> = T;
-// CHECK-NEXT:                     ^~~~~~~~~~
-// CHECK-NEXT:Emitted 1 errors. exiting.
+// CHECK-NEXT:                         ^~~~~~
+// CHECK-NEXT:{{.*}}generic-bounds-args-mismatch-error.js:17:23: error: type argument mismatch, expected 2, found 1
+// CHECK-NEXT:class C<T extends Pair<Base>> {}
+// CHECK-NEXT:                      ^~~~~~
+// CHECK-NEXT:{{.*}}generic-bounds-args-mismatch-error.js:17:23: error: type argument mismatch, expected 2, found 1
+// CHECK-NEXT:class C<T extends Pair<Base>> {}
+// CHECK-NEXT:                      ^~~~~~
+// CHECK-NEXT:Emitted 3 errors. exiting.

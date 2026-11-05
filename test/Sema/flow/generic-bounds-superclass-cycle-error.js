@@ -16,13 +16,7 @@ let x: A<Base>;
 
 // Auto-generated content below. Please do not modify manually.
 
-// CHECK:{{.*}}generic-bounds-superclass-cycle-error.js:14:20: error: ft: type parameter bound cannot reference the generic being declared
-// CHECK-NEXT:class B<T> extends A<T> {}
-// CHECK-NEXT:                   ^
-// CHECK-NEXT:{{.*}}generic-bounds-superclass-cycle-error.js:14:20: error: ft: super type must be a class
-// CHECK-NEXT:class B<T> extends A<T> {}
-// CHECK-NEXT:                   ^
-// CHECK-NEXT:{{.*}}generic-bounds-superclass-cycle-error.js:15:9: error: ft: type argument for type parameter 'T' is incompatible with its bound
+// CHECK:{{.*}}generic-bounds-superclass-cycle-error.js:15:9: error: ft: type argument for type parameter 'T' is incompatible with its bound
 // CHECK-NEXT:let x: A<Base>;
 // CHECK-NEXT:        ^~~~~~
-// CHECK-NEXT:Emitted 3 errors. exiting.
+// CHECK-NEXT:Emitted 1 errors. exiting.
