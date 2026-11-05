@@ -34,17 +34,19 @@
 #include <vector>
 
 /// Non-zero when this backend emits inline heap stores guarded by the inline
-/// write-barrier predicate (Emitter::emitSafeStoreOrSlow()). Three build
-/// states switch it off, and in each of them every store site emits exactly
-/// the runtime helper call it emitted before the predicate existed:
-/// - MallocGC, which has neither a young generation nor a card table;
-/// - HERMESVM_COMPRESSED_POINTERS (HV32), where a slot holds a 32-bit
-///   compressed value rather than the 64-bit HermesValue the emitters carry
-///   in a GP register;
-/// - HERMESVM_BOXED_DOUBLES, where storing a value may first have to box it.
+/// write-barrier predicate (Emitter::emitSafeStoreOrSlow()). One build state
+/// switches it off: MallocGC, which has neither a young generation nor a card
+/// table for the predicate to reason about, and where every store site emits
+/// exactly the runtime helper call it emitted before the predicate existed.
+///
+/// Every heap-value mode is covered. The two that do not store a HermesValue
+/// verbatim -- HERMESVM_COMPRESSED_POINTERS, where a slot is a 32-bit
+/// compressed value, and HERMESVM_BOXED_DOUBLES, where a slot is a
+/// SmallHermesValue whose encoding of some doubles requires a heap
+/// allocation -- are handled inside the predicate: it encodes the value and
+/// declines to the helper for the one case emitted code cannot perform.
 /// See doc/JIT.md's heap-value-mode build matrix.
-#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && \
-    !defined(HERMESVM_COMPRESSED_POINTERS) && !defined(HERMESVM_BOXED_DOUBLES)
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
 #define HERMES_JIT_INLINE_SAFE_STORE 1
 #else
 #define HERMES_JIT_INLINE_SAFE_STORE 0
@@ -1553,24 +1555,41 @@ class Emitter {
       const char *shImplName);
 
 #if HERMES_JIT_INLINE_SAFE_STORE
-  /// Emit an inline store of the HermesValue in \p value to the heap slot
-  /// whose address is in \p loc, performed only when the Hades write barrier
-  /// for that store is provably either a no-op or a single card-dirty. In
-  /// every other case -- concurrent marking active, a compaction in progress,
-  /// or a segment whose card array is not the inline one -- nothing is stored
-  /// and control jumps to \p slowLab, whose code is expected to perform the
-  /// store through the runtime, barrier included.
+  /// Emit an inline store of the already-encoded slot value in \p shv to the
+  /// heap slot whose address is in \p loc, performed only when the Hades
+  /// write barrier for that store is provably either a no-op or a single
+  /// card-dirty. In every other case -- concurrent marking active, a
+  /// compaction in progress, or a segment whose card array is not the inline
+  /// one -- nothing is stored and control jumps to \p slowLab, whose code is
+  /// expected to perform the store through the runtime, barrier included.
+  ///
+  /// A heap slot holds a SmallHermesValue, not a HermesValue, and under
+  /// HERMESVM_BOXED_DOUBLES the two differ. Callers produce \p shv with
+  /// emit_shv_encode_for_slot_or_slow(), which is where the one value this
+  /// path cannot store is declined -- a double whose bits do not fit inline
+  /// needs a heap-allocated BoxedDouble. That happens BEFORE the caller's
+  /// guards, not here, because a value that cannot be encoded is the cheapest
+  /// thing to reject and rejecting it early skips the whole guard chain; on
+  /// Box2D two thirds of the stores reaching these tiers are exactly that.
+  /// In the default heap-value mode the encode emits nothing and \p shv is
+  /// \p value.
+  ///
+  /// Everything here, the card decision included, is phrased in terms of the
+  /// ORIGINAL 64-bit \p value rather than \p shv: the two agree on which
+  /// values are pointers (the BoxedDouble that would not is already gone),
+  /// and a HermesValue carries its pointer uncompressed, which is what the
+  /// segment compare needs.
   ///
   /// The emitted predicate mirrors HadesGC::writeBarrier() and
   /// HadesGC::relocationWriteBarrier() exactly:
   ///
   ///     segLoc = loc & ~(kSegmentUnitSize-1)
   ///     if (segLoc == runtime.heap_.youngGen_.lowLim_)  // young target
-  ///       *loc = value; done                            //   no barrier
+  ///       *loc = shv; done                              //   no barrier
   ///     if (runtime.heap_.ogMarkingBarriers_)  goto slow  // snapshot barrier
   ///     if (compactee active)                  goto slow  // relocation into
   ///     if (segLoc's size != 1 unit)           goto slow  //   the compactee
-  ///     *loc = value
+  ///     *loc = shv
   ///     if (value is a pointer &&
   ///         (value.ptr & ~(kSegmentUnitSize-1)) == youngGen lowLim)
   ///       segLoc[(loc - segLoc) >> kLogCardSize] = CardStatus::Dirty
@@ -1608,15 +1627,22 @@ class Emitter {
   /// segment holds that array out of line, so its stores go to the helper.
   ///
   /// \param loc address of the slot; preserved.
-  /// \param value the 64-bit HermesValue to store; preserved.
+  /// \param shv the encoded slot value to store; read only up to the store.
+  ///   It MAY be \p t2 -- and under boxed doubles it is, because the caller
+  ///   encoded into t2 before its guards -- which is sound precisely because
+  ///   t2 is not touched here until after the store.
+  /// \param value the original 64-bit HermesValue, used for the card
+  ///   decision; preserved.
   /// \param t1 scratch, clobbered. Must differ from \p loc and \p value.
-  /// \param t2 scratch, clobbered. Must differ from \p loc and \p value.
+  /// \param t2 scratch, clobbered after the store. Must differ from \p loc
+  ///   and \p value.
   /// \param slowLab where to jump when the store was NOT performed.
   ///
   /// EFLAGS are clobbered. Nothing else is touched: in particular this
   /// emits no call, so no register needs to be synced or freed around it.
   void emitSafeStoreOrSlow(
       const x86::Gp &loc,
+      const x86::Gp &shv,
       const x86::Gp &value,
       const x86::Gp &t1,
       const x86::Gp &t2,

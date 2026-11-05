@@ -810,6 +810,7 @@ if(HERMES_ENABLE_TEST_SUITE)
     heap_hv_mode=${HERMESVM_HEAP_HV_MODE}
     ubsan=${HERMES_ENABLE_UNDEFINED_BEHAVIOR_SANITIZER}
     asan=${HERMES_ENABLE_ADDRESS_SANITIZER}
+    handle_san=${HERMESVM_SANITIZE_HANDLES}
     coverage=${coverage_directory}
     shermes=${HERMES_TOOLS_OUTPUT_DIR}/shermes
     check_native_stack=${HERMES_CHECK_NATIVE_STACK}

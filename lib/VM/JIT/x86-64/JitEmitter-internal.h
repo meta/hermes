@@ -603,6 +603,101 @@ inline void emit_sh_shv_decode(
   Emit_sh_shv_decode(a, inOut, doneLab).emitAll(a);
 }
 
+#ifdef HERMESVM_BOXED_DOUBLES
+/// Encode the HermesValue in \p in into the SmallHermesValue that a heap slot
+/// holds, leaving the result in \p out. This is the inverse of
+/// Emit_sh_shv_decode and mirrors HermesValue32::encodeHermesValue() case for
+/// case, with one difference that is the whole reason it takes a label: a
+/// double whose bits do not fit an inline "compressed HV64" has to be boxed
+/// in a heap-allocated BoxedDouble, and emitted code cannot allocate. Such a
+/// value is DECLINED -- control jumps to \p slowLab with nothing written --
+/// and the caller's slow path, which reaches the runtime, boxes it there.
+///
+/// Declared only under HERMESVM_BOXED_DOUBLES, unlike Emit_sh_shv_decode
+/// which is always declared and emits nothing in the default build. The
+/// decode can afford that because it works in place; an encode that produced
+/// nothing would still owe its caller a register, so the caller selects
+/// between this and using the HermesValue itself with the same #ifdef. Its
+/// one caller is emit_shv_encode_for_slot_or_slow() below, which the inline
+/// write tiers call ahead of their guards.
+///
+/// \param out receives the SmallHermesValue. Must differ from \p in.
+/// \param in the HermesValue to encode; preserved.
+/// \param temp scratch, clobbered. Must differ from \p in and \p out.
+/// \param slowLab where to jump when the value cannot be encoded inline.
+///
+/// EFLAGS are clobbered.
+void emit_shv_encode_or_slow(
+    x86::Assembler &a,
+    const x86::Gp &out,
+    const x86::Gp &in,
+    const x86::Gp &temp,
+    const asmjit::Label &slowLab);
+#endif
+
+/// Encode \p value into the SmallHermesValue a heap slot holds, ready to be
+/// handed to Emitter::emitSafeStoreOrSlow(), and return the register that
+/// holds it. This is the mode-selecting wrapper the inline write tiers call,
+/// so that they need no #ifdef of their own: under boxed doubles it emits
+/// emit_shv_encode_or_slow() above and returns \p out; in the default build a
+/// slot holds the HermesValue itself, so it emits nothing at all and returns
+/// \p value.
+///
+/// Call it BEFORE the tier's guards. Nothing has been stored at that point,
+/// so the decline costs nothing -- and a value that cannot be encoded is by
+/// far the cheapest thing to reject, because rejecting it there skips the
+/// whole guard chain. See doc/JIT.md's "Inline write barrier (x86-64)".
+///
+/// \param out receives the SmallHermesValue under boxed doubles; unused
+///   otherwise. Must differ from \p value and \p temp.
+/// \param value the HermesValue to encode; preserved.
+/// \param temp scratch, clobbered under boxed doubles.
+/// \param slowLab where to jump when the value cannot be encoded inline.
+[[nodiscard]] inline const x86::Gp &emit_shv_encode_for_slot_or_slow(
+    [[maybe_unused]] x86::Assembler &a,
+    [[maybe_unused]] const x86::Gp &out,
+    const x86::Gp &value,
+    [[maybe_unused]] const x86::Gp &temp,
+    [[maybe_unused]] const asmjit::Label &slowLab) {
+#ifdef HERMESVM_BOXED_DOUBLES
+  emit_shv_encode_or_slow(a, out, value, temp, slowLab);
+  return out;
+#else
+  return value;
+#endif
+}
+
+/// Load the SmallHermesValue at \p mem into \p tempReg and compare it against
+/// the "empty" value, i.e. an array hole. CPU flags are updated as a result;
+/// je on success.
+///
+/// x86-64: the two branches are not a width difference alone, and the
+/// invariant that selects between them is the slot width, which is why this
+/// switches on sizeof the way emit_load_shv()/emit_store_shv() next door do
+/// rather than on the compressed-pointer macro. When a SmallHermesValue is 8
+/// bytes -- the default build, and the boxed build without compressed
+/// pointers -- an inline value holds the HermesValue's bits unshifted, so
+/// HermesValue's own ETag test applies verbatim. When it is 4 bytes those
+/// bits have been shifted down and the ETag is no longer where a shift can
+/// find it, so the encoded empty value is compared as a whole instead; it is
+/// a compile-time constant either way.
+inline void emit_shv_load_is_empty(
+    x86::Assembler &a,
+    const x86::Gp &tempReg,
+    const x86::Mem &mem) {
+  if constexpr (sizeof(SmallHermesValue) == 4) {
+    emit_load_shv(a, tempReg, mem);
+    a.cmp(
+        tempReg.r32(),
+        asmjit::Imm((uint32_t)SmallHermesValue::encodeEmptyValue().getRaw()));
+  } else {
+    x86::Mem m = mem;
+    m.setSize(8);
+    a.mov(tempReg, m);
+    emit_sh_ljs_is_empty(a, tempReg, tempReg);
+  }
+}
+
 /// For a register containing a pointer to a GCCell, retrieve its CellKind (a
 /// single byte) and place it in \p out.
 /// \p out and \p in may refer to the same register.

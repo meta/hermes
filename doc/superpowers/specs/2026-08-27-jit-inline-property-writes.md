@@ -233,3 +233,158 @@ needs a barrier and is a plain inline store.
   barrier reads the OLD value); the inline path never stores when the
   flag is set, so this holds by construction.
 - Large objects: covered by the fixed-size-segment gates above.
+
+## Stage 4 — HV32 / BOXED support (added 2026-08-27)
+
+Stages 1-2 are compiled out under `HERMESVM_COMPRESSED_POINTERS` /
+`HERMESVM_BOXED_DOUBLES`. Measurements showed nothing in this branch
+improved HV32 (the GC dead-zone fix is a structural no-op there:
+`minAllocationSize()` == the 8-byte bucket step), so the inline write
+paths are the one lever available to the Android configuration.
+
+What changes in those modes (verified in `SmallHermesValue.h`/
+`-inline.h`): `SmallHermesValue` is `HermesValue32` whenever
+`HERMESVM_BOXED_DOUBLES` is defined (both the hv32 and boxed trees);
+its `RawType` is `CompressedPointer::RawType` (32-bit with compressed
+pointers, pointer-width without), with `kNumTagBits = SH_SHV_TAG_BITS`
+in the low bits and `kNumValueBits = kNumRawTypeBits - kNumTagBits`.
+Encoding a 64-bit HermesValue (`HermesValue32::encodeHermesValue`):
+
+- number-or-compressible (undefined/null/bool/empty and doubles): if
+  `isShiftedUInt<kNumValueBits, 64 - kNumValueBits>(raw)` (the low
+  `64 - kNumValueBits` bits are zero) then the SHV is
+  `raw >> (64 - kNumRawTypeBits)` with tag `CompressedHV64` (== 0,
+  static_asserted); otherwise a `BoxedDouble` must be ALLOCATED — the
+  inline path DECLINES to the helper in that case.
+- pointers (Object/Str/BigInt): tag remap (`HV32 Tag = HV64 Tag -
+  (Tag::Str - Tag::String)`, static_asserted in the runtime) and
+  `CompressedPointer::encodeNonNull(ptr) | tag` — the emitter already has
+  `emit_sh_cp_encode_non_null`.
+- symbols: `fromTagAndValue(Tag::Symbol, id)`.
+
+Design: the encode lives INSIDE the predicate so consumers stay
+mode-agnostic. `emitSafeStoreOrSlow(loc, value64, t1, t2, slowLab)`
+under these modes: (1) young-target exit exactly as before (loc-based);
+(2) marking / compactee / segment-size tests as before; (3) encode
+`value64` into `t2` per the rules above, jumping to `slowLab` for the
+BoxedDouble case (nothing stored yet, so declining is safe);
+(4) store the SHV (32-bit under compressed pointers, otherwise raw
+width); (5) the card-dirty decision uses the ORIGINAL 64-bit value:
+pointer tag test on `value64` and young-segment compare on its raw
+pointer (mask with `~(SEG-1)` against `youngGen_.lowLim_`) — equivalent
+to the runtime's `inYoungGen(CompressedPointer)` (segment-start compare
+against `youngGenCP_`). BoxedDouble never reaches the store, so
+`value.isPointer()` on the SHV side never has to consider it.
+
+Consumers: `emitPutByIdInlineTier` and the PutByVal tier already compute
+`loc` via the mode-aware `sh_mirror.h` structs; their slot arithmetic
+uses `sizeof(SHGCSmallHermesValue)` (check every hardcoded `*8`). The
+`HERMES_JIT_INLINE_SAFE_STORE` gate drops the two mode exclusions.
+`RuntimeOffsets` pins re-verified under both modes; add pins for
+`SH_SHV_TAG_BITS`, `SH_SHV_RAW_TYPE_BITS`, the `CompressedHV64 == 0`
+tag, and `sizeof(SHGCSmallHermesValue)`.
+
+Testing: the existing `putbyid-inline*.js` / `putbyval-inline*.js` lose
+their `REQUIRES: heap_hv_64` (the `-emitted` pins gain per-mode CHECK
+prefixes like `test/jit/x86-64/hvmodes.js`), plus a new test that stores
+every SHV shape through the inline path on an old object across
+young-gen collections: undefined/null/true/false, small ints, a double
+that is compressible, a double that is NOT (must take the helper and
+box), strings, objects, a symbol, a bigint — verified against the
+interpreter. Gates: jit suite on all four trees, G4 on hv32 and boxed,
+full ASan `check-hermes` on the hv32 tree (it exists) and on the HV64
+tree; prove-can-fail on the hv32 tree (card store removed → old→young
+test fails). Measurement: HV32 Release trees (`cmake-build-x86jit-rel-hv32`
+is HEAD; `.../scratchpad/hermes-hv32-head` is the pre-Stage-4 binary),
+interleaved A/B on pixel-grid, pixel-grid-small, relay, Richards,
+DeltaBlue, Box2D (precompiled .hbc in the scratchpad).
+
+### Stage 4, corrections found during implementation
+
+Three facts the design above did not anticipate, all of them in the
+PutByVal tier rather than the predicate, and all of them consequences
+of the slot width rather than of the encoding:
+
+- The element address is a scaled index, not a byte offset. The `lea`
+  was hardcoded to scale 3; under compressed pointers it must be 2.
+  Expressed as `RuntimeOffsets::kLogSmallHermesValueSize` (log2 of
+  `sizeof(SHGCSmallHermesValue)`), pinned by a `static_assert` that the
+  slot is 4 or 8 bytes.
+- The hole test read the slot as a HermesValue and compared its ETag
+  against `HVETag_Empty`. That works wherever a slot is 8 bytes -- an
+  inline value holds the HermesValue's bits unshifted, so BOXED without
+  compressed pointers is fine too -- but not where it is 4, since the
+  bits have been shifted down out of ETag position. Under compressed
+  pointers the whole encoded empty value (`0xFFF90000`) is compared
+  instead. `emit_shv_load_is_empty` in `JitEmitter-internal.h`.
+- `KindAndSize` is as wide as a compressed pointer, and it packs an
+  8-bit kind above the size. So the size field is 32 bits in an 8-byte
+  header but only 24 in a 4-byte one, and the jumbo-cell gate's plain
+  32-bit load at cell offset 0 has to mask the kind off before the
+  `size - 1` compare. The `static_assert` that pinned the width at 32
+  becomes `<= 32` plus that mask.
+
+One design point the spec left open is settled the strict way: the
+encode's dispatch ends with an equality test for `HVETag_Symbol` rather
+than an unconditional "everything left is a symbol". `HVTag_RawHV32`
+also reaches that arm and has no SmallHermesValue encoding at all
+(`encodeHermesValue` asserts instead), so it is declined to the helper.
+A JIT frame register should never hold one; declining costs an already
+non-taken compare on the symbol path and nothing anywhere else.
+
+Under `HERMESVM_SANITIZE_HANDLES` the encode declines every
+number-or-compressible value rather than storing one inline. Handle-San
+makes the runtime box even representable doubles, so that a
+SmallHermesValue holding a number is always a pointer; emitted code
+cannot allocate, so it stays out of the way rather than storing an
+encoding the runtime would not have produced.
+
+Per-mode emitted-code tests needed a mechanism that did not exist:
+`REQUIRES: heap_hv_64` skips a whole file, which is the opposite of
+what is wanted once the tier exists in all three modes. `test/lit.cfg`
+gained a `%hv-mode` substitution naming the current mode, so a RUN line
+reads `--check-prefixes=SPEC,SPEC-%hv-mode` and a file pins what is
+common under `SPEC` and what differs under `SPEC-HV64` / `SPEC-HV32` /
+`SPEC-BOXED`. FileCheck only errors when none of its prefixes has any
+check, so the two inactive prefixes cost nothing.
+
+### Stage 4b — encode before the guards (measured)
+
+The first Stage 4 landing put the encode inside `emitSafeStoreOrSlow`,
+which is the last thing a tier does. That made a store whose value has
+no inline encoding pay for the entire guard chain before being declined.
+A scratch counter over the HV32 Release build, incremented at each tier
+entry and at the encoder's decline edge, showed how much that costs:
+
+    benchmark    tier entries   declines      rate
+    Box2D          17,380,706   11,061,828   63.64%
+    relay           4,771,261      120,991    2.54%
+    pixel-grid    981,338,804       61,674    0.01%
+    pixel-grid-sm  66,729,631        6,378    0.01%
+    Richards       85,299,788            0    0.00%
+    DeltaBlue      15,365,166            0    0.00%
+
+So the Box2D regression was exactly what it looked like: two thirds of
+its stores are doubles with no inline SmallHermesValue encoding.
+
+The encode therefore moved to the top of each tier, through a
+mode-selecting wrapper (`emit_shv_encode_for_slot_or_slow`) that emits
+nothing in `HEAP_HV_64` and returns the HermesValue itself, so the tiers
+still carry no `#ifdef`. `emitSafeStoreOrSlow` now takes the encoded
+value alongside the original; the original is what the card decision
+still reads. The encoded value lives in `temp2`, which both tiers
+already allocate and no guard touches, so holding it across the guards
+is free; inside the predicate `temp2` is reused only after the store,
+where the encoded value is dead.
+
+Measured (HV32 Release, `-Xjit`, interleaved, encode-in-predicate vs
+encode-first): Box2D +1.4% (n=12), pixel-grid +2.4% (n=5), Richards
++0.6%, pixel-grid-small +0.6%, DeltaBlue -0.3%, relay -1.0% (the last
+two inside their run-to-run spread). Against the pre-Stage-4 build the
+net is pixel-grid +6.5%, Richards +9.6%, pixel-grid-small +1.0%,
+DeltaBlue +1.5%, relay -0.8%, Box2D -1.1%.
+
+Box2D still loses. What is left is the encode itself on every store plus
+the tier prologue on stores that fail a guard rather than the encode.
+Removing that needs a per-site decline record, so a site that always
+declines can stop running the tier; that is a follow-up.

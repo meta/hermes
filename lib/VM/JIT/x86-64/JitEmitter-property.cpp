@@ -77,6 +77,17 @@ void Emitter::emitPutByValFastArrayTier(
 
   // Code generation starts here.
 
+  // The value has to be encoded into the SmallHermesValue an element slot
+  // actually holds, and one value cannot be: a double that would need a
+  // heap-allocated BoxedDouble is declined here. Doing that FIRST, before any
+  // guard, is what makes the decline cheap -- it skips the whole chain below
+  // rather than running it and then giving up. temp2 holds the result from
+  // here to the store; no guard touches it. In the default heap-value mode
+  // this emits nothing at all -- not even the comment, which the encoder
+  // itself writes -- and `shv` is `value`.
+  const x86::Gp &shv =
+      emit_shv_encode_for_slot_or_slow(a, temp2, value, temp1, helperLab);
+
   // Is the target an object?
   emit_sh_ljs_is_object(a, temp1, target);
   a.jne(helperLab);
@@ -144,29 +155,44 @@ void Emitter::emitPutByValFastArrayTier(
   // JumboHeapSegment has a size greater than kMaxInlineStorage, or 0 if it
   // is too large to be represented at all, so a single unsigned compare of
   // `size - 1` rejects both.
+  //
+  // KindAndSize packs the size below the kind, in a word as wide as a
+  // compressed pointer, so the size occupies the low 32 bits of an 8-byte
+  // header and only the low 24 of a 4-byte one. The 32-bit load is right in
+  // both cases; the narrow one needs the kind masked off first.
   static_assert(
-      RuntimeOffsets::kindAndSizeNumSizeBits == 32,
-      "the size field must be the low 32 bits of the cell header");
+      RuntimeOffsets::kindAndSizeNumSizeBits <= 32,
+      "the size field must fit the 32-bit load below");
   a.mov(temp1.r32(), x86::dword_ptr(loc, offsetof(SHGCCell, kindAndSize)));
+  if constexpr (RuntimeOffsets::kindAndSizeNumSizeBits < 32) {
+    constexpr uint32_t kSizeMask =
+        (uint32_t)(((uint64_t)1 << RuntimeOffsets::kindAndSizeNumSizeBits) - 1);
+    a.and_(temp1.r32(), asmjit::Imm(kSizeMask));
+  }
   a.sub(temp1.r32(), asmjit::Imm(1));
   a.cmp(temp1.r32(), asmjit::Imm(RuntimeOffsets::kMaxInlineStorage - 1));
   a.ja(helperLab);
 
-  // The address of the element.
+  // The address of the element. The scale is the width of a heap value slot,
+  // which is four bytes under compressed pointers and eight otherwise -- an
+  // element index is not a byte offset in any mode.
   a.lea(
       loc,
-      x86::ptr(loc, idx, 3, (int32_t)offsetof(SHArrayStorageSmall, storage)));
+      x86::ptr(
+          loc,
+          idx,
+          RuntimeOffsets::kLogSmallHermesValueSize,
+          (int32_t)offsetof(SHArrayStorageSmall, storage)));
 
   // _haveOwnIndexedImpl() reports false for an `empty` element, so a write
   // over a hole is not a fast-path write at all: the runtime resolves the
   // property normally, and may find an accessor on the prototype chain.
   // Decline, and let the helper do that.
-  a.mov(temp1, x86::qword_ptr(loc));
-  emit_sh_ljs_is_empty(a, temp1, temp1);
+  emit_shv_load_is_empty(a, temp1, x86::ptr(loc));
   a.je(helperLab);
 
   // Store, if the write barrier for it is a no-op or a card-dirty.
-  emitSafeStoreOrSlow(loc, value, temp1, temp2, helperLab);
+  emitSafeStoreOrSlow(loc, shv, value, temp1, temp2, helperLab);
 }
 #endif // HERMES_JIT_INLINE_SAFE_STORE
 
@@ -974,6 +1000,17 @@ void Emitter::emitPutByIdInlineTier(
 
   // Code generation starts here.
 
+  // The value has to be encoded into the SmallHermesValue a property slot
+  // actually holds, and one value cannot be: a double that would need a
+  // heap-allocated BoxedDouble is declined here. Doing that FIRST, before any
+  // guard, is what makes the decline cheap -- it skips the whole chain below
+  // rather than running it and then giving up. temp2 holds the result from
+  // here to the store; no guard touches it. In the default heap-value mode
+  // this emits nothing at all -- not even the comment, which the encoder
+  // itself writes -- and `shv` is `value`.
+  const x86::Gp &shv =
+      emit_shv_encode_for_slot_or_slow(a, temp2, value, temp1, helperLab);
+
   // Is the target an object?
   emit_sh_ljs_is_object(a, temp1, target);
   a.jne(helperLab);
@@ -1008,7 +1045,7 @@ void Emitter::emitPutByIdInlineTier(
   a.lea(loc, x86::ptr(loc, (int32_t)ofs));
 
   // Store, if the write barrier for it is a no-op or a card-dirty.
-  emitSafeStoreOrSlow(loc, value, temp1, temp2, helperLab);
+  emitSafeStoreOrSlow(loc, shv, value, temp1, temp2, helperLab);
 }
 #endif // HERMES_JIT_INLINE_SAFE_STORE
 

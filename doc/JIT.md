@@ -434,12 +434,16 @@ fact below, is in
 **The decision sequence**, given `loc` (slot address) and `value` (the
 64-bit HermesValue) in registers:
 
+    (in the caller, ahead of every guard:)
+    shv = encode(value)                                  (boxed doubles only)
+    if (encoding shv would need a BoxedDouble)          → HELPER
+    (in the predicate:)
     segLoc = loc & ~(kSegmentUnitSize - 1)
     if (segLoc == runtime.heap_.youngGen_.lowLim_)      → STORE, done
     if (runtime.heap_.ogMarkingBarriers_ != 0)          → HELPER
     if (compactee active)                               → HELPER
     if (word at segLoc+4 (shiftedSegmentSize) != 1)      → HELPER
-    STORE
+    STORE shv
     if (value is a young pointer)
       card byte at segLoc + ((loc - segLoc) >> 9) = 1   (dirty)
 
@@ -487,15 +491,24 @@ instead of silently miscompiling:
   `kFirstUsedIndex`, clear of the alloc-region prefix that offset 0
   actually holds;
 - `shiftedSegmentSize`'s width is the 16 bits the predicate compares;
-- `KindAndSize`'s size field is 32 bits, matching the plain load the
-  PutByVal gate does at cell offset 0;
+- `KindAndSize`'s size field is at most 32 bits, so the PutByVal gate's
+  plain 32-bit load at cell offset 0 contains it; where it is narrower --
+  the four-byte header of a compressed-pointer build, where the kind shares
+  the word -- the gate masks the kind off first;
 - `kMaxInlineStorage` is at most `FixedSizeHeapSegment::maxSize()` and at
   most `GCCell::maxNormalSize()` (a cell above that bound stores 0, not
   its size, in `KindAndSize`, so the gate must reject 0 too);
 - the young generation's `lowLim_`/`level_`/`effectiveEnd_` offsets, and
   the compactee's `start` offset and `kInvalidCompacteeStart` sentinel,
   including that the sentinel value fits the 32-bit immediate form the
-  emitter uses to compare it.
+  emitter uses to compare it;
+- the width of a heap value slot (`kSmallHermesValueSize` and its log,
+  which every slot index is scaled by) and, under boxed doubles, everything
+  the encode bakes in: `SH_SHV_TAG_BITS` and `SH_SHV_RAW_TYPE_BITS` agreeing
+  with `HermesValue32`'s own constants and with the slot width, a non-zero
+  payload width (so the shift the emitted test branches on sets flags), a
+  zero `CompressedHV64` tag, and one constant bias mapping all three
+  HermesValue pointer tags onto the SmallHermesValue ones.
 
 One item is deliberately *not* on that list: the `ClassFlags` bit mask
 and value the PutByVal tier tests on the target's hidden class
@@ -506,37 +519,91 @@ computed at runtime by writing the bitfields and reading back the union's
 other than the one just written is not a constant expression in C++17. An
 assert at the emission site pins the values instead.
 
-**Build-state gate.** The whole predicate and its two consumers compile in
-only when `HERMES_JIT_INLINE_SAFE_STORE` is set (`JitEmitter.h`): Hades GC,
-no `HERMESVM_COMPRESSED_POINTERS`, no `HERMESVM_BOXED_DOUBLES`. MallocGC
-has no young generation or card table to reason about; HV32 stores a
-32-bit compressed value where the emitters carry a 64-bit HermesValue;
-BOXED may need to box the value before storing. All three configurations
-keep emitting the unconditional helper call, exactly as before this
-series. The `heap_hv_64` lit feature (`test/lit.cfg`) identifies the one
-build where the inline tiers exist, for tests that check emitted code
-rather than just behavior.
+**A slot holds a SmallHermesValue, not a HermesValue,** and the two differ
+in every mode that defines `HERMESVM_BOXED_DOUBLES` (both `HEAP_HV_PREFER32`
+and `HEAP_HV_BOXED`). `emit_shv_encode_or_slow` (`JitEmitter-internal.cpp`)
+mirrors `HermesValue32::encodeHermesValue()` case for case -- an ETag
+dispatch over the inline ("compressed HV64") values, the three pointer tags
+and Symbol -- with one difference, which is why it takes a label. A double
+whose low bits are not zero has no inline encoding: it has to be boxed in a
+heap-allocated `BoxedDouble`, and emitted code cannot allocate. That value
+is DECLINED to the helper, which boxes it there.
 
-**Tests.** `test/jit/x86-64/putbyid-inline.js` and `putbyval-inline.js`
-each run the inline tier against a real, collecting heap and would fail --
-loudly, under ASan, if the card-dirty store were removed -- while
-`putbyid-inline-emitted.js` and `putbyval-inline-emitted.js` (both
-`REQUIRES: heap_hv_64`) check the emitted instructions directly. A caveat
-on the two behavioral tests: a missing card dirty only fails loudly under
+**The encode runs first, before the tier's guards**, through the
+mode-selecting wrapper `emit_shv_encode_for_slot_or_slow` (which emits
+nothing at all in `HEAP_HV_64` and returns the HermesValue itself, so the
+tiers need no `#ifdef`). This is a measured ordering, not a stylistic one. A
+value with no inline encoding is the cheapest thing a tier can reject, and
+rejecting it before the guards means such a store does not also pay for the
+class compare, the cell-kind and flags tests, the index conversion and the
+storage load. A scratch counter over the HV32 Release build put the decline
+rate at **63.6%** on Octane Box2D (11.1M declines out of 17.4M tier entries)
+against **0.01%** on pixel-grid, 0% on Richards and DeltaBlue, and 2.5% on
+relay -- Box2D writes mostly doubles, and most physics doubles do not
+compress. Moving the encode ahead of the guards recovered about half of the
+Box2D regression the tiers had introduced (-2.5% to -1.1% against the
+pre-Stage-4 build) and gained on pixel-grid as well (+2.4%).
+
+The tiers hold the encoded value in `temp2` from there to the store; no
+guard touches that register, so it costs nothing to keep. Inside the
+predicate `temp2` doubles as scratch, which is sound because it is not
+reused until after the store, by which point the encoded value is dead.
+
+Everything in the predicate, the card decision included, is phrased in
+terms of the original 64-bit value. The two agree on which values are
+pointers -- the one pointer a SmallHermesValue has that a HermesValue does
+not, a `BoxedDouble`, was already declined -- and a HermesValue carries its
+pointer uncompressed, which is what the young-segment compare needs.
+
+**Build-state gate.** The predicate and its two consumers compile in when
+`HERMES_JIT_INLINE_SAFE_STORE` is set (`JitEmitter.h`), which is every
+heap-value mode under Hades. Only MallocGC switches it off, having neither
+a young generation nor a card table to reason about; there every store site
+emits the unconditional helper call, exactly as before this series. No
+lit feature gates emitted-code tests to a mode: `test/lit.cfg`'s `%hv-mode`
+substitution names the current mode, so a test pins what is common under
+one FileCheck prefix and what differs under `<PREFIX>-HV64` / `-HV32` /
+`-BOXED`.
+
+**Tests.** `test/jit/x86-64/putbyid-inline.js`, `putbyval-inline.js` and
+`inline-store-shv-shapes.js` each run the inline tiers against a real,
+collecting heap and would fail -- loudly, under ASan -- if the card-dirty
+store were removed; the last of those drives every SmallHermesValue shape
+through both tiers, including the non-compressible doubles that must take
+the helper. `putbyid-inline-emitted.js` and `putbyval-inline-emitted.js`
+check the emitted instructions directly, in all three modes. A caveat on
+the behavioral tests: a missing card dirty only fails loudly under
 `HERMES_SLOW_DEBUG`, where `HadesGC::verifyCardTable()` catches it: in a
 Release build the same defect surfaces as a wrong printed value, or as
 nothing at all if the reclaimed memory is not reused before the next read.
 A green run of these tests on a Release tree is not, by itself, evidence
 of barrier correctness -- the ASan+Debug (`HERMES_SLOW_DEBUG`) run is.
 
-**Measured effect** (pixel-grid React benchmark, precompiled bytecode,
-Release, HV64, `-Xjit`): +5.2% cumulative across the two stages landed so
-far (PutById tier +4.9%, PutByVal +1.4-2.1%); pixel-grid-small +3.3%,
-relay +2.5%, Octane Richards +14.7%. `_jit_put_by_id` helper calls dropped
-from 810M to 67M; fast-path-eligible PutByVal helper calls from 102M to
-7.7M. Environment stores (spec Stage 3) were deliberately left on the
-helper path: they measured below 1.2% of cycles on these benchmarks, so
-inlining them was not pursued.
+**Measured effect on HV64** (pixel-grid React benchmark, precompiled
+bytecode, Release, `-Xjit`): +5.2% cumulative across the two stages that
+landed first (PutById tier +4.9%, PutByVal +1.4-2.1%); pixel-grid-small
++3.3%, relay +2.5%, Octane Richards +14.7%. `_jit_put_by_id` helper calls
+dropped from 810M to 67M; fast-path-eligible PutByVal helper calls from
+102M to 7.7M. Environment stores (spec Stage 3) were deliberately left on
+the helper path: they measured below 1.2% of cycles on these benchmarks,
+so inlining them was not pursued.
+
+**Measured effect on HV32** (`HEAP_HV_PREFER32`, Release, `-Xjit`,
+interleaved A/B against the same tree with the tiers compiled out, medians
+of 4-14 paired runs, encode-first ordering): pixel-grid **+6.5%**,
+pixel-grid-small +1.0%, Octane Richards **+9.6%**, DeltaBlue +1.5%, relay
+-0.8%, **Box2D -1.1%**.
+
+Box2D is the one benchmark the tiers lose on, and the reason is the decline
+rate quoted above: with two thirds of its stores unencodable, the tiers can
+only add work there. Moving the encode ahead of the guards halved that loss
+(it was -2.5% with the encode inside the predicate) but did not remove it;
+what remains is the encode's own handful of instructions on every store,
+plus the tier prologue on the stores that fail a guard rather than the
+encode. Closing the rest would need a per-site record of how often a site
+declined, so that a site which always declines can stop emitting -- or
+stop executing -- the tier at all. That is a follow-up, not part of this
+series.
 
 ### Arithmetic, comparisons and NaN handling
 
@@ -748,11 +815,15 @@ bring-up milestones are done:
     collecting heap; proves a missing card dirty is a live bug, not a
     theoretical one.
   - `putbyid-inline-emitted.js` -- pins the instructions the PutById
-    tier emits (`REQUIRES: heap_hv_64`).
+    tier emits, per mode via `SPEC-%hv-mode` prefixes. Both `-emitted`
+    tests are `UNSUPPORTED: handle_san`: under `HERMESVM_SANITIZE_HANDLES`
+    the runtime boxes every number, so the encoder declines the
+    inline-number case outright and the pinned encode sequence does not
+    exist (a deliberate emission difference, not a regression).
   - `putbyval-inline.js` -- the PutByVal fast-array inline store against
     a real, collecting heap, same card-dirty hazard as above.
   - `putbyval-inline-emitted.js` -- pins the instructions the PutByVal
-    tier emits (`REQUIRES: heap_hv_64`).
+    tier emits, per mode via `SPEC-%hv-mode` prefixes.
 - The `aarch64/jit-stress.js` differential matrix -- interpreter vs.
   `-Xjit=force`, with and without `-Xjit-emit-type-asserts`, at both
   `-O` and `-O0` -- is byte-identical on every config exercised,
@@ -904,12 +975,15 @@ in `fastArrayLength`/`fastArrayLoad`, that arm64 lacks; this is
 design-sanctioned for now, to be reconciled deliberately later.)
 
 The inline write barrier (see "Inline write barrier (x86-64)" above) is
-itself a mode gate: `HERMES_JIT_INLINE_SAFE_STORE` is on only in the
-`HEAP_HV_64` tree built above, so the PutById and PutByVal inline tiers
-exist there and nowhere else -- both HV32 and BOXED keep emitting the
-unconditional helper call for those instructions, unchanged by this
-series. `test/lit.cfg`'s `heap_hv_64` feature marks that one tree for
-tests that check emitted code rather than behavior.
+one more thing this matrix has to cover, and one of the few that is not
+just an encoding difference: the PutById and PutByVal inline tiers exist in
+all three trees, but under boxed doubles they encode the value into a
+SmallHermesValue first and decline the doubles that would have to be boxed,
+and under compressed pointers every slot address is scaled by four rather
+than eight. `test/lit.cfg`'s `%hv-mode` substitution is what lets one
+emitted-code test pin all of that per mode, under a `-HV64` / `-HV32` /
+`-BOXED` FileCheck prefix, instead of a mode-gating lit feature that would
+skip two of the three.
 
 Build and run both:
 

@@ -14,6 +14,7 @@
 #include "hermes/VM/Runtime.h"
 #include "hermes/VM/RuntimeModule.h"
 #include "hermes/VM/sh_runtime.h"
+#include "hermes/VM/sh_small_hermes_value.h"
 
 namespace hermes {
 namespace vm {
@@ -68,6 +69,93 @@ struct RuntimeOffsets {
       offsetof(HiddenClass, lazyJITId_);
   static constexpr uint32_t hiddenClassObjectParent =
       offsetof(HiddenClass, objectParent_);
+
+  /// \name Heap value slot geometry and inline SmallHermesValue encoding.
+  ///
+  /// What an inline store site has to know about the SmallHermesValue a heap
+  /// slot actually holds: how wide it is, and -- under boxed doubles -- how
+  /// the 64-bit HermesValue the emitters carry in a GP register is encoded
+  /// into one. Each constant is either derived from the runtime's own
+  /// definition or pinned by a static_assert here, so a change on the
+  /// runtime side breaks the build rather than the emitted code. See
+  /// Emitter::emitSafeStoreOrSlow() and emit_shv_encode_or_slow().
+  /// @{
+
+  /// Size in bytes of one heap value slot: a direct property slot, an
+  /// ArrayStorageSmall element, an environment slot. This is what every slot
+  /// index has to be scaled by; it is 4 under compressed pointers and 8
+  /// otherwise, so a hardcoded 8 is a mode bug.
+  static constexpr uint32_t kSmallHermesValueSize =
+      sizeof(SHGCSmallHermesValue);
+  static_assert(
+      kSmallHermesValueSize == sizeof(SmallHermesValue),
+      "the C mirror and the C++ type must agree on the slot width");
+
+  /// log2 of kSmallHermesValueSize: the scale factor of an x86 indexed
+  /// addressing mode over an array of slots.
+  static constexpr uint32_t kLogSmallHermesValueSize =
+      kSmallHermesValueSize == 4 ? 2 : 3;
+  static_assert(
+      ((uint32_t)1 << kLogSmallHermesValueSize) == kSmallHermesValueSize,
+      "a heap value slot must be 4 or 8 bytes wide");
+
+#ifdef HERMESVM_BOXED_DOUBLES
+  /// Width in bits of a whole SmallHermesValue, and of the tag that occupies
+  /// its low bits. The C macros are what the C helpers in
+  /// sh_small_hermes_value.h are written against, and the emitted encode has
+  /// to agree with both them and the C++ class.
+  static constexpr uint32_t kShvRawTypeBits = SH_SHV_RAW_TYPE_BITS;
+  static constexpr uint32_t kShvTagBits = SH_SHV_TAG_BITS;
+  static_assert(
+      kShvRawTypeBits == HermesValue32::kNumRawTypeBits &&
+          kShvRawTypeBits == kSmallHermesValueSize * 8,
+      "SH_SHV_RAW_TYPE_BITS must be the full width of a slot");
+  static_assert(
+      kShvTagBits == HermesValue32::kNumTagBits,
+      "SH_SHV_TAG_BITS must be the class's tag width");
+
+  /// Width in bits of the payload of a non-pointer SmallHermesValue. A
+  /// HermesValue is storable inline exactly when its low 64 - kShvValueBits
+  /// bits are zero, which is the test the emitted encode makes.
+  static constexpr uint32_t kShvValueBits = kShvRawTypeBits - kShvTagBits;
+  static_assert(
+      kShvValueBits == HermesValue32::kNumValueBits,
+      "the value payload is everything above the tag");
+  static_assert(
+      kShvValueBits != 0 && kShvValueBits < 64,
+      "the emitted shift that tests for inline representability must have a "
+      "non-zero count, so that it sets the flags it is branched on");
+
+  /// A SymbolID fits the payload with room to spare, which is what lets the
+  /// emitted symbol encode be a plain shift with no range check of its own.
+  /// HermesValue32::fromTagAndValue() asserts exactly this.
+  static_assert(
+      (uint64_t)SymbolID::LAST_INVALID_ID < ((uint64_t)1 << kShvValueBits),
+      "a SymbolID must fit a SmallHermesValue's payload");
+
+  /// The tag of an inline ("compressed HV64") value is zero, which is what
+  /// makes the encode of one a plain right shift with nothing to or in --
+  /// and what makes the "does it fit" test above a test of the low bits
+  /// alone. HermesValue32::bitsToCompressedHV64() relies on the same fact.
+  static_assert(
+      (uint32_t)HermesValue32::Tag::CompressedHV64 == 0,
+      "the compressed-HV64 tag must be zero");
+
+  /// The constant offset between a HermesValue's pointer tag and the
+  /// SmallHermesValue tag it encodes to. This is
+  /// HermesValue32::encodeHermesValue()'s toHV32Tag(), written as an
+  /// addition rather than a subtraction of its negation.
+  static constexpr int32_t kShvPointerTagBias =
+      (int32_t)HV32Tag_String - (int32_t)HVTag_Str;
+  static_assert(
+      (int32_t)HVTag_Str + kShvPointerTagBias == (int32_t)HV32Tag_String &&
+          (int32_t)HVTag_BigInt + kShvPointerTagBias ==
+              (int32_t)HV32Tag_BigInt &&
+          (int32_t)HVTag_Object + kShvPointerTagBias == (int32_t)HV32Tag_Object,
+      "one bias must map all three pointer tags");
+#endif
+  /// @}
+
 #if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
   static constexpr uint32_t runtimeHadesYGLevel =
       offsetof(Runtime, heap_.youngGen_.level_);

@@ -147,6 +147,130 @@ void Emit_sh_shv_decode::emitRestCases([[maybe_unused]] x86::Assembler &a) {
 #endif
 }
 
+#ifdef HERMESVM_BOXED_DOUBLES
+void emit_shv_encode_or_slow(
+    x86::Assembler &a,
+    const x86::Gp &out,
+    const x86::Gp &in,
+    const x86::Gp &temp,
+    const asmjit::Label &slowLab) {
+  assert(out != in && "the output must not alias the input");
+  assert(temp != in && temp != out && "the scratch must differ from both");
+  static_assert(HERMESVALUE_VERSION == 2, "Reading a HermesValue's ETag");
+  static_assert(HermesValue32::kVersion == 1, "Encoding HV32 bits");
+
+  // The comment is emitted here rather than by the callers so that the
+  // default heap-value mode, where this function does not exist, emits
+  // nothing whatsoever -- not even a comment line. Emitter::commentV() ends
+  // in exactly this call.
+  a.comment("// Encode the value as a SmallHermesValue");
+
+  asmjit::Label ptrLab = a.newLabel();
+  asmjit::Label symLab = a.newLabel();
+  asmjit::Label doneLab = a.newLabel();
+
+  // HermesValue32::encodeHermesValue(), case for case:
+  //
+  //   number or compressible -> a right shift, or a BoxedDouble allocation
+  //                             this cannot do: decline;
+  //   String/BigInt/Object   -> a compressed pointer with a remapped tag;
+  //   Symbol                 -> the id shifted up over the tag.
+  //
+  // The dispatch is on the ETag rather than the tag, because the first case
+  // is an ETag range test -- HermesValue::isNumberOrCompressible() -- and the
+  // other two fall out of the same value with no second shift.
+  a.mov(out, in);
+  a.sar(out, kHV_NumDataBits - 1);
+  // isNumberOrCompressible(): (uint32_t)etag <= LastNumberOrCompressible,
+  // unsigned, which is exactly the comparison the runtime makes. Every
+  // double's ETag is either a small non-negative number or below
+  // HVETag_Empty; the tags this excludes -- Symbol, RawHV32 and the three
+  // pointer tags -- are precisely the ones that sort ABOVE it once the
+  // negative ETags are read as unsigned.
+  static_assert(
+      (int16_t)HVETag_LastNumberOrCompressible == (int16_t)(-10),
+      "HVETag_LastNumberOrCompressible must be -10");
+  a.cmp(out.r32(), asmjit::Imm((int32_t)HVETag_LastNumberOrCompressible));
+  a.ja(ptrLab);
+
+#if HERMESVM_SANITIZE_HANDLES != 0
+  // Handle sanitization has encodeHermesValue() allocate on EVERY non-pointer
+  // encode -- canInlineCompressibleOrNumberHV64() refuses to inline any
+  // number, so that callers cannot get away with treating a
+  // SmallHermesValue holding one as anything but a pointer, and
+  // encodeHermesValue() additionally forces a throwaway encodeNumberValue()
+  // for its side effect of moving the heap. Emitted code cannot allocate, so
+  // this whole case is declined to the helper, which does both.
+  //
+  // Be honest about what that does NOT cover: only this arm declines. The
+  // symbol arm below still encodes inline, so a JIT symbol store skips the
+  // heap move that the runtime's encodeSymbolValue() path would have
+  // triggered, and a stale handle that only that store would have exposed
+  // stays hidden. That is a loss of sanitizer coverage, not of correctness --
+  // the encoding written is the one the runtime writes -- and closing it
+  // would mean declining every store under Handle-San, which is a bigger
+  // behavior change than the sanitizer is worth here.
+  a.jmp(slowLab);
+#else
+  // canInlineCompressibleOrNumberHV64(): the value is inline-representable
+  // exactly when its low 64 - kNumValueBits bits are zero. Shifting those
+  // bits up to the top of the register is that test -- shl sets ZF from its
+  // result -- and costs no immediate wide enough to need a register.
+  a.mov(temp, in);
+  a.shl(temp, RuntimeOffsets::kShvValueBits);
+  // A double that does not fit has to become a heap-allocated BoxedDouble.
+  // Nothing has been stored at this point, so declining is free and the
+  // helper does the allocation.
+  a.jnz(slowLab);
+  // bitsToCompressedHV64(): the CompressedHV64 tag is zero, so the encode is
+  // the shift alone, and it is not even that when a SmallHermesValue is as
+  // wide as a HermesValue (the boxed build without compressed pointers).
+  a.mov(out, in);
+  if constexpr (RuntimeOffsets::kShvRawTypeBits < 64)
+    a.shr(out, 64 - RuntimeOffsets::kShvRawTypeBits);
+  a.jmp(doneLab);
+#endif
+
+  a.bind(ptrLab);
+  // Symbol and RawHV32 are the only ETags left below the pointers, so one
+  // more unsigned compare separates the pointer cases from them.
+  static_assert(
+      (int16_t)HVETag_FirstPointer == (int16_t)(-6),
+      "HVETag_FirstPointer must be -6");
+  a.cmp(out.r32(), asmjit::Imm((int32_t)HVETag_FirstPointer));
+  a.jb(symLab);
+  // encodePointerImpl(): a compressed pointer with the tag or-ed into its low
+  // bits, which are zero by heap alignment. The tag is the HermesValue's own,
+  // biased by a constant (toHV32Tag()); recovering it from the ETag is a
+  // second arithmetic shift, and the addition leaves a value in 1..3 with a
+  // clear upper half, so the or below cannot disturb the pointer.
+  a.sar(out, 1);
+  a.add(out, asmjit::Imm(RuntimeOffsets::kShvPointerTagBias));
+  emit_sh_ljs_get_pointer(a, temp, in);
+  emit_sh_cp_encode_non_null(a, temp);
+  a.or_(out, temp);
+  a.jmp(doneLab);
+
+  a.bind(symLab);
+  // encodeHermesValue() asserts at this point that what is left is a symbol.
+  // An assert is not available here, and RawHV32 -- the one other ETag that
+  // reaches this branch -- has no SmallHermesValue encoding at all, so
+  // anything that is not a symbol is declined instead.
+  static_assert(
+      (int16_t)HVETag_Symbol == (int16_t)(-9), "HVETag_Symbol must be -9");
+  a.cmp(out.r32(), asmjit::Imm((int32_t)HVETag_Symbol));
+  a.jne(slowLab);
+  // fromTagAndValue(Tag::Symbol, id): a SymbolID is a uint32 held in the low
+  // half of the HermesValue, so the 32-bit move both extracts it and clears
+  // the upper half.
+  a.mov(out.r32(), in.r32());
+  a.shl(out, RuntimeOffsets::kShvTagBits);
+  a.or_(out, asmjit::Imm((uint32_t)HermesValue32::Tag::Symbol));
+
+  a.bind(doneLab);
+}
+#endif // HERMESVM_BOXED_DOUBLES
+
 void emit_jsobject_init(
     x86::Assembler &a,
     const x86::Gp &obj,
@@ -371,6 +495,7 @@ asmjit::Error OurLogger::_log(const char *data, size_t size) noexcept {
 #if HERMES_JIT_INLINE_SAFE_STORE
 void Emitter::emitSafeStoreOrSlow(
     const x86::Gp &loc,
+    const x86::Gp &shv,
     const x86::Gp &value,
     const x86::Gp &t1,
     const x86::Gp &t2,
@@ -378,13 +503,11 @@ void Emitter::emitSafeStoreOrSlow(
   assert(t1 != loc && t1 != value && "t1 must not alias loc or value");
   assert(t2 != loc && t2 != value && "t2 must not alias loc or value");
   assert(t1 != t2 && "the two temporaries must differ");
-  // The single store below writes the whole slot. In this build state a
-  // SmallHermesValue is a HermesValue, which is what lets a value the
-  // emitters carry in a GP register be stored without any re-encoding; that
-  // is exactly what HERMES_JIT_INLINE_SAFE_STORE selects for.
-  static_assert(
-      sizeof(SmallHermesValue) == sizeof(HermesValue),
-      "the inline store writes a 64-bit HermesValue");
+  assert(
+      shv != loc && shv != t1 && "the encoded value must survive to the store");
+  // \p shv MAY be \p t2, and under boxed doubles it is: the caller encoded
+  // into t2 before its guards. That is safe because t2 is not touched here
+  // until after the store, by which point the encoded value is dead.
 
   comment("// Inline store with barrier predicate");
 
@@ -448,9 +571,15 @@ void Emitter::emitSafeStoreOrSlow(
   a.jne(slowLab);
 
   // The barrier is now known to be at most a card-dirty. Store.
-  a.mov(x86::qword_ptr(loc), value);
+  emit_store_shv(a, shv, x86::ptr(loc));
 
-  // relocationWriteBarrier() is only reached for a pointer value.
+  // relocationWriteBarrier() is only reached for a pointer value. The test is
+  // made on the ORIGINAL HermesValue rather than on what was just stored,
+  // which is both cheaper and more accurate: a HermesValue carries its
+  // pointer uncompressed, which is what the segment compare below needs, and
+  // the one pointer a SmallHermesValue has that a HermesValue does not -- a
+  // BoxedDouble -- can never be here, because the encode declined it. \p t2
+  // is dead once the store above has consumed it.
   emit_sh_ljs_get_tag(a, t2, value);
   emit_sh_ljs_tag_is_pointer(a, t2);
   a.jb(doneLab);
@@ -477,7 +606,7 @@ void Emitter::emitSafeStoreOrSlow(
   a.jmp(doneLab);
 
   a.bind(youngTargetLab);
-  a.mov(x86::qword_ptr(loc), value);
+  emit_store_shv(a, shv, x86::ptr(loc));
 
   a.bind(doneLab);
 }
