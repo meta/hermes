@@ -96,6 +96,13 @@ function growingTuple(): void {
   type U = A<number>;
 }
 
+// The cycle is first found through the tuple, before the aliases are
+// expanded.
+function cycleAfterTuple(): void {
+  type G<X> = X | number;
+  type T0 = ?([T0] | G<boolean> | G<T0>);
+}
+
 // CHECK: error: ft: type contains a circular reference to itself
 // CHECK-NEXT: type U = number | Id<U>;
 // CHECK: error: ft: type contains a circular reference to itself
@@ -104,6 +111,8 @@ function growingTuple(): void {
 // CHECK-NEXT: type U = number | Alias<U>;
 // CHECK: error: ft: type contains a circular reference to itself
 // CHECK-NEXT: type U = number | Id<V>;
+// CHECK: error: ft: type contains a circular reference to itself
+// CHECK-NEXT: type U = Id<U> | Id<U>;
 // CHECK: error: ft: type contains a circular reference to itself
 // CHECK-NEXT: type U = Id<U> | Id<U>;
 // CHECK: error: ft: type contains a circular reference to itself
@@ -128,4 +137,6 @@ function growingTuple(): void {
 // CHECK-NEXT: type A<X, Y> = [A<Box<X>, Box<Y>>];
 // CHECK: error: ft: too deeply nested generic type alias expansion
 // CHECK-NEXT: type A<T> = [A<[T]>];
-// CHECK: Emitted 16 errors. exiting.
+// CHECK: error: ft: type contains a circular reference to itself
+// CHECK-NEXT: type T0 = ?([T0] | G<boolean> | G<T0>);
+// CHECK: Emitted 18 errors. exiting.

@@ -728,7 +728,9 @@ class FlowChecker::DeclareScopeTypes {
   /// repeating all the lookups.
   /// \post aliasType->info is non-null.
   void populateTypeAlias(Type *aliasType) {
-    if (aliasType->info && !llvh::isa<GenericType>(aliasType->info))
+    // An uncanonicalized union may have been collapsed to a single type since
+    // it was copied here, so refresh it too.
+    if (aliasType->info && !isUnresolved(aliasType))
       return;
 
     // Recursion can occur through generic annotations and name aliases.
@@ -761,10 +763,9 @@ class FlowChecker::DeclareScopeTypes {
       }
 
       // Continue through generic aliases, whose placeholder TypeInfo is not
-      // their resolved type.
+      // their resolved type, and aliases that copied an uncanonicalized union.
       if (!nextType->info ||
-          (llvh::isa<GenericType>(nextType->info) &&
-           typeAliasResolutions.count(nextType))) {
+          (isUnresolved(nextType) && typeAliasResolutions.count(nextType))) {
         curType = nextType;
         continue;
       }
@@ -822,7 +823,6 @@ class FlowChecker::DeclareScopeTypes {
     // further simplified now that we've instantiated all generics, so use a
     // post-processing step for that.
     fixupUnionsAndGenericTables();
-    checkSelfContainingUnions();
 
     // Parse all forward-declared class types.
     for (Type *type : forwardClassDecls) {
@@ -949,13 +949,9 @@ class FlowChecker::DeclareScopeTypes {
         }
       }
 
-      // We've created a cycle via a union, which means we may need it in order
-      // to complete some generic along the way. Canonicalize it here so that we
-      // can be sure to properly complete all the types we visited during the
-      // recursion that led us here.
-      if (auto *unionType = llvh::dyn_cast<UnionType>(type->info)) {
-        canonicalizeUnionType(type, unionType);
-      }
+      // Don't canonicalize a union here: its frame may not have visited all of
+      // its arms yet. The frame canonicalizes it on the way back, and generics
+      // that need it are completed by a later DFS that reaches them.
 
       LLVM_DEBUG(
           llvh::dbgs() << "Completed cyclic forward type: " << type << " "
@@ -1044,17 +1040,33 @@ class FlowChecker::DeclareScopeTypes {
     }
 
     // Complete all arms of the union before attempting to canonicalize.
-    for (Type *unionArm : unionType->getTypes()) {
+    // Copy the arms, since a recursive call may canonicalize this union.
+    llvh::SmallVector<Type *, 4> arms(
+        unionType->getTypes().begin(), unionType->getTypes().end());
+    for (Type *unionArm : arms) {
       completeForwardType(unionArm, visited);
     }
 
     // It's possible that the info of the type was modified in a recursive call,
     // so recheck it.
     // Canonicalize if necessary.
+    // An arm may still be in progress further up the DFS. Then this union is
+    // canonicalized by a later DFS that reaches it, e.g. from its own
+    // forwardUnions entry.
     unionType = llvh::dyn_cast<UnionType>(type->info);
-    if (unionType) {
+    if (unionType && llvh::none_of(unionType->getTypes(), isUnresolved)) {
       canonicalizeUnionType(type, unionType);
     }
+  }
+
+  /// \return whether \p type is an unexpanded generic or a union that isn't
+  /// canonicalized yet. canonicalizeUnionType and specialization lookup can't
+  /// use them: unions must be canonical, and all GenericTypes compare equal.
+  static bool isUnresolved(Type *type) {
+    if (llvh::isa<GenericType>(type->info))
+      return true;
+    auto *unionType = llvh::dyn_cast<UnionType>(type->info);
+    return unionType && unionType->getNumNonLoopingTypes() < 0;
   }
 
   /// Helper function to canonicalize the \p unionType that is the TypeInfo for
@@ -1102,39 +1114,6 @@ class FlowChecker::DeclareScopeTypes {
     }
   }
 
-  /// Report unions that reach themselves through union arms alone, e.g.
-  /// U = number | U. The DFS cycle check depends on traversal order and can
-  /// miss these when a generic alias expansion is cached.
-  void checkSelfContainingUnions() {
-    for (Type *type : forwardUnions) {
-      auto *unionType = llvh::dyn_cast<UnionType>(type->info);
-      if (!unionType)
-        continue;
-
-      llvh::SmallPtrSet<UnionType *, 4> visited{};
-      llvh::SmallVector<UnionType *, 4> worklist{unionType};
-      bool selfContaining = false;
-      while (!worklist.empty() && !selfContaining) {
-        for (Type *arm : worklist.pop_back_val()->getTypes()) {
-          auto *armUnion = llvh::dyn_cast<UnionType>(arm->info);
-          if (armUnion == unionType) {
-            selfContaining = true;
-            break;
-          }
-          if (armUnion && visited.insert(armUnion).second)
-            worklist.push_back(armUnion);
-        }
-      }
-
-      if (selfContaining) {
-        outer.sm_.error(
-            type->node->getSourceRange(),
-            "ft: type contains a circular reference to itself");
-        type->info = outer.flowContext_.getAnyInfo();
-      }
-    }
-  }
-
   /// Check for a cycle hidden by an expanded generic alias in a union.
   void checkResolvedGenericAliasCycle(
       Type *type,
@@ -1143,7 +1122,10 @@ class FlowChecker::DeclareScopeTypes {
     if (!unionType)
       return;
 
-    for (Type *arm : unionType->getTypes())
+    // Copy the arms, since a recursive call may canonicalize this union.
+    llvh::SmallVector<Type *, 4> arms(
+        unionType->getTypes().begin(), unionType->getTypes().end());
+    for (Type *arm : arms)
       completeForwardType(arm, visited);
   }
 
@@ -1185,8 +1167,9 @@ class FlowChecker::DeclareScopeTypes {
       completeForwardType(arg, visited);
 
       // An argument may still be resolving further up the DFS.
-      if (llvh::isa<GenericType>(arg->info)) {
-        // A generic class needs concrete arguments, so the worklist retries it.
+      if (isUnresolved(arg)) {
+        // A generic class needs concrete arguments, so a later DFS that
+        // reaches it completes it.
         if (isGenericClass)
           return;
         // A generic alias only needs them to memoize the expansion.
@@ -1376,7 +1359,12 @@ class FlowChecker::DeclareScopeTypes {
     if (!visited.insert(type).second)
       return;
 
-    for (Type *arm : unionType->getNonLoopingTypes()) {
+    // Copy the arms, since another Type may share this union and be
+    // canonicalized by the recursive call.
+    llvh::SmallVector<Type *, 4> arms(
+        unionType->getNonLoopingTypes().begin(),
+        unionType->getNonLoopingTypes().end());
+    for (Type *arm : arms) {
       if (auto *unionArm = llvh::dyn_cast<UnionType>(arm->info)) {
         LLVM_DEBUG(llvh::dbgs() << "Fixup union arm recurse: " << type << '\n');
         fixupNonLoopingArmsRecursive(arm, unionArm, visited);
