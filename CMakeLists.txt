@@ -59,10 +59,6 @@ if(HERMES_APPLE_TARGET_PLATFORM MATCHES "catalyst")
   set(THREADS_PREFER_PTHREAD_FLAG ON)
 endif()
 
-if (WIN32)
-add_definitions(-D_WINDOWS)
-endif()
-
 # This must be consistent with the release_version in:
 # - android/build.gradle
 # - npm/package.json
@@ -70,6 +66,12 @@ endif()
 project(Hermes
         VERSION 1.0.0
         LANGUAGES C CXX)
+
+# Has to be checked after `project`, before which WIN32 describes the host
+# https://github.com/Kitware/CMake/blob/v4.1.2/Modules/CMakeSystemSpecificInitialize.cmake#L8-L17
+if (WIN32)
+add_definitions(-D_WINDOWS)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
 
