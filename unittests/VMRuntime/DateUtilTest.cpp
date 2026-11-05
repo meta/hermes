@@ -242,7 +242,7 @@ TEST(DateUtilTest, HistoricalTotalOffsetTest) {
     return localTimeOffsetCache.totalOffsetInMs(timeMs);
   };
 
-  setTimeZone("America/Los_Angeles");
+  setTimeZone(hasIANATimezoneDB() ? "America/Los_Angeles" : "PST8PDT");
   localTimeOffsetCache.reset();
   EXPECT_EQ(-7 * MS_PER_HOUR, totalOffset(1489530532000)); // Mar 14, 2017
   EXPECT_EQ(-7 * MS_PER_HOUR, totalOffset(1019514530000)); // Apr 22, 2002
@@ -252,7 +252,7 @@ TEST(DateUtilTest, HistoricalTotalOffsetTest) {
   if (hasIANATimezoneDB())
     EXPECT_EQ(-8 * MS_PER_HOUR, totalOffset(1017700130000)); // Apr 1, 2002
 
-  setTimeZone("America/Chicago");
+  setTimeZone(hasIANATimezoneDB() ? "America/Chicago" : "CST6CDT");
   localTimeOffsetCache.reset();
   EXPECT_EQ(-5 * MS_PER_HOUR, totalOffset(1489530532000)); // Mar 14, 2017
   EXPECT_EQ(-5 * MS_PER_HOUR, totalOffset(1019514530000)); // Apr 22, 2002
