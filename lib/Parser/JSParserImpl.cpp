@@ -3408,7 +3408,7 @@ Optional<ESTree::Node *> JSParserImpl::parseTemplateLiteral(Param param) {
 
   return setLocation(
       start,
-      advance().End,
+      advance(JSLexer::AllowDiv).End,
       new (context_) ESTree::TemplateLiteralNode(
           std::move(quasis), std::move(expressions)));
 }
