@@ -200,7 +200,8 @@ class FlowChecker : public ESTree::RecursionDepthTracker<FlowChecker> {
       assert(
           (llvh::isa<ESTree::ProgramNode>(parent) ||
            llvh::isa<ESTree::BlockStatementNode>(parent) ||
-           llvh::isa<ESTree::ClassBodyNode>(parent)) &&
+           llvh::isa<ESTree::ClassBodyNode>(parent) ||
+           llvh::isa<ESTree::SwitchStatementNode>(parent)) &&
           "Invalid parent");
     }
 

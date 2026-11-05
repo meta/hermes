@@ -3691,8 +3691,11 @@ sema::Decl *FlowChecker::specializeGeneric(
       .first;
 }
 
-/// Get the NodeList from a parent node for inserting specializations.
-static ESTree::NodeList &getParentNodeList(ESTree::Node *parent) {
+/// Get the NodeList in \p parent containing \p node, for inserting
+/// specializations.
+static ESTree::NodeList &getParentNodeList(
+    ESTree::Node *parent,
+    ESTree::Node *node) {
   switch (parent->getKind()) {
     case ESTree::NodeKind::Program:
       return llvh::cast<ESTree::ProgramNode>(parent)->_body;
@@ -3700,6 +3703,18 @@ static ESTree::NodeList &getParentNodeList(ESTree::Node *parent) {
       return llvh::cast<ESTree::BlockStatementNode>(parent)->_body;
     case ESTree::NodeKind::ClassBody:
       return llvh::cast<ESTree::ClassBodyNode>(parent)->_body;
+    case ESTree::NodeKind::SwitchStatement:
+      // Declarations in a switch are in the consequent of one of its cases.
+      for (ESTree::Node &c :
+           llvh::cast<ESTree::SwitchStatementNode>(parent)->_cases) {
+        ESTree::NodeList &consequent =
+            llvh::cast<ESTree::SwitchCaseNode>(&c)->_consequent;
+        for (ESTree::Node &n : consequent) {
+          if (&n == node)
+            return consequent;
+        }
+      }
+      hermes_fatal("generic not found in its switch statement");
     default:
       hermes_fatal("invalid parent node for generic specialization");
   }
@@ -3760,7 +3775,7 @@ std::pair<ESTree::Node *, bool> FlowChecker::specializeGenericImpl(
       sm_.error(errorRange, "failed to create specialization for generic");
       return {nullptr, false};
     }
-    auto &nodeList = getParentNodeList(generic.parent);
+    auto &nodeList = getParentNodeList(generic.parent, generic.originalNode);
     nodeList.insert(generic.originalNode->getIterator(), *specialization);
     typeArgsRef =
         generic.addSpecialization(*this, std::move(typeArgs), specialization);
