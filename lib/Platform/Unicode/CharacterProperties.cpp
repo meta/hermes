@@ -9,6 +9,7 @@
 #include "hermes/Platform/Unicode/CodePointSet.h"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <iterator>
 #include <string>
@@ -356,15 +357,25 @@ llvh::ArrayRef<UnicodeRangePoolRef> unicodePropertyRanges(
       rangeMapEntry->rangeArraySize};
 }
 
+/// Decode one range from the property pool without allocating storage.
+static UnicodeRange decodeUnicodeRange(uint32_t packed) {
+  const uint32_t delta = packed & UNICODE_RANGE_POOL_DELTA_MASK;
+  const uint32_t startOrIndex = packed >> UNICODE_RANGE_POOL_DELTA_BITS;
+  if (delta == UNICODE_RANGE_POOL_DELTA_MASK)
+    return UNICODE_RANGE_POOL.overflow[startOrIndex];
+  return {startOrIndex, startOrIndex + delta};
+}
+
 void addRangeArrayPoolToBracket(
     CodePointSet *receiver,
     const llvh::ArrayRef<UnicodeRangePoolRef> rangeArrayPool,
     bool inverted) {
   auto addAllRanges = [&rangeArrayPool](CodePointSet *target) {
     for (auto rangePoolRef : rangeArrayPool) {
-      auto rangePool = llvh::ArrayRef<UnicodeRange>{
-          &UNICODE_RANGE_POOL[rangePoolRef.offset], rangePoolRef.size};
-      for (auto range : rangePool) {
+      auto rangePool = llvh::ArrayRef<uint32_t>{
+          &UNICODE_RANGE_POOL.ranges[rangePoolRef.offset], rangePoolRef.size};
+      for (auto packed : rangePool) {
+        const auto range = decodeUnicodeRange(packed);
         const uint32_t length = range.second - range.first + 1;
         target->add(CodePointRange{range.first, length});
       }
