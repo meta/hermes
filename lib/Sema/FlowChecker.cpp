@@ -3933,6 +3933,8 @@ bool FlowChecker::inferPlaceholdersFromCallArgs(
     bindingTable_.activateScope(paramParsingScope);
   }
 
+  // Whether every param could be parsed into a constraint.
+  bool paramsParsed = true;
   {
     ScopeRAII paramScope{*this};
     // Bind type parameters to our type arguments.
@@ -3951,7 +3953,8 @@ bool FlowChecker::inferPlaceholdersFromCallArgs(
 
       if (!ident) {
         // Cannot infer anything.
-        return false;
+        paramsParsed = false;
+        break;
       }
 
       // 'this' type annotation needs to be handled specially.
@@ -3986,6 +3989,8 @@ bool FlowChecker::inferPlaceholdersFromCallArgs(
   if (savedScope) {
     bindingTable_.activateScope(savedScope);
   }
+  if (!paramsParsed)
+    return false;
 
   // Snapshot which constraints are simple (direct InferencePlaceholder),
   // since pass 1 will mutate them.
