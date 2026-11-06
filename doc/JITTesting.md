@@ -200,6 +200,13 @@ is captured or expected: the workflow is a dev-loop tool for verifying a
 refactor didn't change codegen, which is only useful against the tree
 you're actively editing (the ASan+Debug ones).
 
+`jit-dump.sh` passes `-Xjit-max-recompiles=0` (see `doc/JIT.md`'s
+"Recompilation"), and that flag is load-bearing, not just a guard: the
+script's own corpus crosses the recompile threshold, and a baseline is
+first-compile output by definition — a version-2 body in a captured
+dump would not be the codegen an emitter change is being diffed
+against.
+
 Baselines roll forward when the test corpus grows, not only when an
 intentional emitter change is made; a roll is valid only when the diff
 against the prior baseline is a pure addition (new `===== file.js =====`

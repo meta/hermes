@@ -17,6 +17,7 @@
 typedef struct SHRuntime SHRuntime;
 typedef struct SHRuntimeModule SHRuntimeModule;
 typedef struct SHCodeBlock SHCodeBlock;
+typedef struct SHJitVersionData SHJitVersionData;
 
 namespace hermes::vm {
 
@@ -175,9 +176,13 @@ SHLegacyValue _jit_call_builtin(
     uint32_t argCount,
     uint32_t builtinMethodID);
 
+/// Slow path of PutById, and the recording site for the PutById tier's
+/// declines.
+/// \param versionData the version record of the CALLING body; the
+///   CodeBlock is reached through it.
 void _jit_put_by_id(
     SHRuntime *shr,
-    SHCodeBlock *codeBlock,
+    SHJitVersionData *versionData,
     SHLegacyValue *base,
     SHLegacyValue *value,
     uint8_t cacheIdx,

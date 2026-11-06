@@ -9,8 +9,8 @@
 // RUN: %hermes -fno-inline %s > %t.int && %hermes -fno-inline -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
 // RUN: %hermes -fno-inline -O0 %s > %t.int0 && %hermes -fno-inline -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
 // RUN: %hermes -fno-inline -O0 %s > %t.int0 && %hermes -fno-inline -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
-// RUN: %hermes -fno-inline -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
-// RUN: %hermes -fno-inline -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
+// RUN: %hermes -fno-inline -Xjit=force -Xjit-max-recompiles=0 -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
+// RUN: %hermes -fno-inline -O0 -Xjit=force -Xjit-max-recompiles=0 -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // REQUIRES: jit
 
 // Iteration: for-in (GetPNameList, GetNextPName) and the iteration protocol
@@ -221,11 +221,13 @@ say(keysOf(plain) + "|" + valsOf(plain));
 // CHECK: JIT successfully compiled FunctionID 2, 'keysOf'
 // CHECK: JIT successfully compiled FunctionID 6, 'valsOf'
 // CHECK: JIT successfully compiled FunctionID 1, 'say'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: a,b,c,|1,2,3,
 // CHECK0: JIT successfully compiled FunctionID 0, 'global'
 // CHECK0: JIT successfully compiled FunctionID 2, 'keysOf'
 // CHECK0: JIT successfully compiled FunctionID 6, 'valsOf'
 // CHECK0: JIT successfully compiled FunctionID 1, 'say'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: a,b,c,|1,2,3,
 
 // The two JmpUndefined-after-GetPNameList cases, plus the empty-enumeration
@@ -290,8 +292,10 @@ say(deleteDuring({k1: 1, k2: 2, k3: 3}, "k1"));
 // Adding during iteration, which also invalidates the hidden class.
 say(addDuring({m1: 1, m2: 2, m3: 3}));
 // CHECK: JIT successfully compiled FunctionID 8, 'addDuring'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: m1,m2,m3,
 // CHECK0: JIT successfully compiled FunctionID 8, 'addDuring'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: m1,m2,m3,
 
 // Early exit, and the nested case.
@@ -353,8 +357,10 @@ say(ofBreak(counter, 3) + "|" + ofBreak(counter, 0) + "|" +
 // CHECK0-NEXT: 0,1,2,||0,1,2,3,4,
 say(ofThrow(counter, 2) + "|" + ofThrow(counter, 99));
 // CHECK: JIT successfully compiled FunctionID 14, 'ofThrow'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 0,1,[stop at 2]|0,1,2,3,4,
 // CHECK0: JIT successfully compiled FunctionID 14, 'ofThrow'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 0,1,[stop at 2]|0,1,2,3,4,
 say(destructure([7, 8]) + " " + destructure([7]) + " " + destructure(counter));
 // CHECK: JIT successfully compiled FunctionID 15, 'destructure'

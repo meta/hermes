@@ -140,6 +140,13 @@ using ThreadRunner = std::function<void(std::function<void()>)>;
   /* JIT memory limit, after which no more code will be JIT'ed. */     \
   F(constexpr, uint32_t, JITMemoryLimit, 32u << 20)                    \
                                                                        \
+  /* Maximum recompiles per function; 0 disables recompilation. */     \
+  F(constexpr, uint32_t, JITMaxRecompiles, 1)                          \
+                                                                       \
+  /* ById declines in one body before a recompile is considered.  */   \
+  /* 0 is clamped to 1. Mirrors kDefaultRecompileDeclineThreshold. */  \
+  F(constexpr, uint32_t, JITRecompileThreshold, 64)                    \
+                                                                       \
   /* Increase compliance with test262 (stricter checks at runtime). */ \
   F(constexpr, bool, Test262, false)                                   \
                                                                        \

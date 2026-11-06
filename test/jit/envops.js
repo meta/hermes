@@ -19,7 +19,7 @@ function closure(z) {
 
 var f = closure(20);
 // CHECK: JIT successfully compiled FunctionID 1, 'closure'
-// CHECK-NEXT: 10 20 function closure({{.*}}
+// CHECK: 10 20 function closure({{.*}}
 print(f());
 // CHECK: JIT successfully compiled FunctionID 2, 'inner'
 // CHECK-NEXT: 20

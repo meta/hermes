@@ -10,8 +10,8 @@
 // RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
 // RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
 // RUN: %hermes -fno-inline %s > %t.intn && %hermes -fno-inline -Xjit -Xjit-threshold=2 -Xjit-crash-on-error %s > %t.warm && diff %t.intn %t.warm
-// RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
-// RUN: %hermes -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
+// RUN: %hermes -Xjit=force -Xjit-max-recompiles=0 -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
+// RUN: %hermes -O0 -Xjit=force -Xjit-max-recompiles=0 -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // RUN: %hermes -Xjit=force -Xjit-emit-counters %s 2>&1 >/dev/null | %FileCheck --check-prefix=COUNT %s
 // RUN: %hermes -fno-inline -Xjit -Xjit-threshold=2 -Xdump-jitcode=1 %s 2>&1 | %FileCheck --check-prefix=SPEC %s
 // REQUIRES: jit
@@ -250,18 +250,22 @@ print(getX(p1), p1.y, callSum(p1));
 // CHECK: JIT successfully compiled FunctionID 2, 'getX'
 // CHECK: JIT successfully compiled FunctionID 4, 'callSum'
 // CHECK: JIT successfully compiled FunctionID 17, ''
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 3 4 7
 // CHECK0: JIT successfully compiled FunctionID 1, 'Point'
 // CHECK0: JIT successfully compiled FunctionID 2, 'getX'
 // CHECK0: JIT successfully compiled FunctionID 4, 'callSum'
 // CHECK0: JIT successfully compiled FunctionID 17, ''
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 3 4 7
 
 setX(p1, 30);
 print(getX(p1), callSum(p1));
 // CHECK: JIT successfully compiled FunctionID 3, 'setX'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 30 34
 // CHECK0: JIT successfully compiled FunctionID 3, 'setX'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 30 34
 
 // An accessor property. The value the getter returns changes, so a cache
@@ -275,9 +279,11 @@ Object.defineProperty(acc, "acc", {
 print(getAccessor(acc));
 // CHECK: JIT successfully compiled FunctionID 5, 'getAccessor'
 // CHECK: JIT successfully compiled FunctionID 22, 'get'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 10
 // CHECK0: JIT successfully compiled FunctionID 5, 'getAccessor'
 // CHECK0: JIT successfully compiled FunctionID 22, 'get'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 10
 acc.n = 5;
 print(getAccessor(acc));
@@ -288,16 +294,20 @@ print(getAccessor(acc));
 // the three-property one, all through the same site.
 print(transition(10));
 // CHECK: JIT successfully compiled FunctionID 6, 'transition'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 10
 // CHECK0: JIT successfully compiled FunctionID 6, 'transition'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 10
 
 // Polymorphic, then megamorphic.
 var two = [new Point(1, 0), {x: 2}];
 print(poly(two, 20));
 // CHECK: JIT successfully compiled FunctionID 7, 'poly'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 30
 // CHECK0: JIT successfully compiled FunctionID 7, 'poly'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 30
 var many = [
   new Point(1, 0),
@@ -341,13 +351,17 @@ print(nested(5).x.y);
 // through the global object.
 print(bump(2), bump(3), counter);
 // CHECK: JIT successfully compiled FunctionID 13, 'bump'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 2 5 5
 // CHECK0: JIT successfully compiled FunctionID 13, 'bump'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 2 5 5
 report("counter", counter);
 // CHECK: JIT successfully compiled FunctionID 14, 'report'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: counter 5
 // CHECK0: JIT successfully compiled FunctionID 14, 'report'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: counter 5
 
 print(callWho(new Derived()));
@@ -371,8 +385,10 @@ print(callWho(new Derived()));
 
 print(churn(20000, "extra"));
 // CHECK: JIT successfully compiled FunctionID 16, 'churn'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 399980000
 // CHECK0: JIT successfully compiled FunctionID 16, 'churn'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 399980000
 
 // The two specialized tiers, emitted only in threshold mode. getX's cache

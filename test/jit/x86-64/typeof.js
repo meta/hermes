@@ -249,8 +249,10 @@ for (var i = 0; i < values.length; ++i) print(describe(values[i]));
 
 print(countStrings(["a", 1, {}, "b", 2, null, "c"]));
 // CHECK: JIT successfully compiled FunctionID 16, 'countStrings'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 223
 // CHECK0: JIT successfully compiled FunctionID 16, 'countStrings'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 223
 
 print(callThrough(twice, 21), callThrough.call(null, twice, 5));

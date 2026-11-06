@@ -23,7 +23,7 @@ function constants(o) {
 
 print(JSON.stringify(constants({}), undefined, 2));
 // CHECK: JIT successfully compiled FunctionID 1, 'constants'
-// CHECK-NEXT: {
+// CHECK: {
 // CHECK-NEXT:   "zero": 0,
 // CHECK-NEXT:   "uint8": 5,
 // CHECK-NEXT:   "int": 100000000,

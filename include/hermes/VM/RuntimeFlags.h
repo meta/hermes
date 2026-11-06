@@ -241,6 +241,24 @@ struct VMOnlyRuntimeFlags {
       llvh::cl::desc("maximum size for JIT code (in bytes)"),
       llvh::cl::init(32u << 20)};
 
+  llvh::cl::opt<uint32_t> JITMaxRecompiles{
+      "Xjit-max-recompiles",
+      llvh::cl::Hidden,
+      llvh::cl::cat(RuntimeCategory),
+      llvh::cl::desc(
+          "maximum number of recompiles per function "
+          "(0 disables recompilation)"),
+      llvh::cl::init(1)};
+
+  llvh::cl::opt<uint32_t> JITRecompileThreshold{
+      "Xjit-recompile-threshold",
+      llvh::cl::Hidden,
+      llvh::cl::cat(RuntimeCategory),
+      llvh::cl::desc(
+          "ById helper declines within one compiled body "
+          "before a recompile is considered (0 means 1)"),
+      llvh::cl::init(64)};
+
   llvh::cl::opt<uint32_t> JITHCIdLimit{
       "Xjit-hc-id-limit",
       llvh::cl::Hidden,

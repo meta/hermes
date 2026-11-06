@@ -117,6 +117,8 @@ static int executeHBCBytecodeFromCL(
           .withForceJIT(flags.JIT == cli::VMOnlyRuntimeFlags::JITMode::Force)
           .withJITThreshold(flags.JITThreshold)
           .withJITMemoryLimit(flags.JITMemoryLimit)
+          .withJITMaxRecompiles(flags.JITMaxRecompiles)
+          .withJITRecompileThreshold(flags.JITRecompileThreshold)
           .withEnableEval(cl::compilerRuntimeFlags.EnableEval)
           .withEnableAsyncGenerators(
               cl::compilerRuntimeFlags.EnableAsyncGenerators)

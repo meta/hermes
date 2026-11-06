@@ -123,6 +123,23 @@ class JITContext {
   /// Set the memory limit for JIT'ed code in bytes.
   void setMemoryLimit(uint32_t memoryLimit) {}
 
+  /// Set the maximum number of recompiles per function (0 disables).
+  void setMaxRecompiles(uint8_t maxRecompiles) {}
+
+  /// \return the maximum number of recompiles per function.
+  uint8_t getMaxRecompiles() const {
+    return 0;
+  }
+
+  /// Set the ById declines within one body before considering a
+  /// recompile (no-op without the JIT).
+  void setRecompileDeclineThreshold(uint32_t threshold) {}
+
+  /// \return the declines before a recompile is considered.
+  uint32_t getRecompileDeclineThreshold() const {
+    return 0;
+  }
+
   /// Set the largest lazy JIT id assignable to a HiddenClass (testing only).
   void setHCIdLimit(uint32_t hcIdLimit) {}
 

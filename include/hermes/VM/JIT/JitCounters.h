@@ -15,9 +15,14 @@ namespace vm {
 /// counters themselves are part of the ABI between the VM and emitted code
 /// (an array of uint64_t reachable from Runtime), not specific to any
 /// backend.
-#define JIT_COUNTERS(X) \
-  X(NumCall)            \
-  X(NumCallSlow)
+#define JIT_COUNTERS(X)                                           \
+  X(NumCall)                                                      \
+  X(NumCallSlow)                                                  \
+  /* Counts every threshold crossing, including after budget      \
+   * exhaustion and from retired bodies (the gates run inside     \
+   * considerRecompile), so it grows where it used to plateau. */ \
+  X(NumRecompileChecks)                                           \
+  X(NumRecompiles)
 
 /// Enum with an entry for each JIT counter. This is used to index into the
 /// list of counters.

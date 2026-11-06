@@ -483,6 +483,12 @@ class Emitter {
   /// The bytecode codeblock.
   CodeBlock *const codeBlock_;
 
+  /// The version record of the body being emitted, owned by the compile
+  /// driver until install. Its address is embedded as the identity
+  /// argument of the recording runtime helpers, so the body they are
+  /// called from is the body they report about.
+  JitVersionData *const versionData_;
+
   /// Optionally, the offset of the string name, used for debug printing.
   int32_t roOfsDebugFunctionName_ = -1;
 
@@ -524,6 +530,17 @@ class Emitter {
   x86::Assembler a{};
   /// The IP of the instruction being emitted.
   const inst::Inst *emittingIP{nullptr};
+  /// Write-cache indices of PutById sites whose specialization was
+  /// skipped in this compile because the cache had no class yet. Fresh
+  /// per compile (the Emitter is per-compile); moved into the candidate
+  /// JitVersionData::coldWriteCacheIdxs by the compile driver, which
+  /// uses them to require that one of these specific sites -- not some
+  /// unrelated cache -- has warmed before spending recompile budget.
+  llvh::SmallVector<uint8_t, 4> coldWriteCacheIdxs_;
+  /// Read-cache indices of GetById sites whose specialization was
+  /// skipped in this compile because the cache had no class yet. Same
+  /// role as coldWriteCacheIdxs_, for GetById sites.
+  llvh::SmallVector<uint8_t, 4> coldReadCacheIdxs_;
 
   /// Create an Emitter, but do not emit any actual code.
   /// Use \c enter to set up the stack frame before emitting the actual code.
@@ -536,6 +553,7 @@ class Emitter {
       bool emitCounters,
       PerfJitDump *perfJitDump,
       CodeBlock *codeBlock,
+      JitVersionData *versionData,
       const std::function<void(std::string &&message)> &longjmpError);
 
   /// Add the jitted function to the JIT runtime and return a pointer to it.

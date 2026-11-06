@@ -17,6 +17,7 @@
 
 #include "hermes/Inst/InstDecode.h"
 #include "hermes/VM/JIT/DiscoverBB.h"
+#include "hermes/VM/JIT/JitFunctionData.h"
 #include "hermes/VM/RuntimeModule.h"
 #include "hermes/VM/StringPrimitiveValueDenseMapInfo-inline.h"
 
@@ -50,6 +51,13 @@ namespace HERMESVM_JIT_ARCH_NS {
 class JITContext::Compiler {
   /// JITContext that owns this compiler.
   JITContext &jc_;
+  /// The version record of the body being compiled. Owned here -- not as
+  /// a local in compileCodeBlockImpl() -- because the emitter's error
+  /// path leaves compilation by longjmp, which skips local destructors
+  /// (see exceptionHandlers_); the Compiler itself sits outside the
+  /// jump boundary. Transferred to JitFunctionData::current at install;
+  /// destroyed with the Compiler on either failure path.
+  std::unique_ptr<JitVersionData> candidateVD_;
   /// The implementation of the assembly emitter.
   Emitter em_;
   /// The CodeBlock compiled by this instance.
@@ -92,6 +100,8 @@ class JITContext::Compiler {
  public:
   Compiler(Runtime &runtime, JITContext &jc, CodeBlock *codeBlock)
       : jc_(jc),
+        candidateVD_(
+            new JitVersionData(codeBlock, jc.getRecompileDeclineThreshold())),
         em_(runtime,
             *jc.impl_,
             jc.getDumpJITCode(),
@@ -100,6 +110,7 @@ class JITContext::Compiler {
             jc.counters_.get() != nullptr,
             jc.perfJitDump_.get(),
             codeBlock,
+            candidateVD_.get(),
             [this](std::string &&message) {
               otherErrorMessage_ = std::move(message);
               error_ = Error::Other;
@@ -190,13 +201,76 @@ JITCompiledFunctionPtr JITContext::compileImpl(
   return compiler.compileCodeBlock();
 }
 
+bool JITContext::recompile(Runtime &runtime, CodeBlock *codeBlock) {
+  assert(
+      codeBlock->getJITCompiled() &&
+      "recompile requires an existing compiled body");
+  JitFunctionData *data = codeBlock->getJitData();
+  assert(data && "compiled function must have JitFunctionData");
+
+  // compileImpl performs the whole install itself: it retires the
+  // previous version record and publishes the new body. It returns null
+  // on failure, in which case nothing was installed and the old body
+  // remains current.
+  JITCompiledFunctionPtr res = compileImpl(runtime, codeBlock);
+  if (!res) {
+    data->recompileBudget = 0;
+    return false;
+  }
+  --data->recompileBudget;
+  ++data->version;
+  if (counters_.get())
+    ++counters_.get()[(unsigned)JitCounter::NumRecompiles];
+  return true;
+}
+
+void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
+  if (counters_.get())
+    ++counters_.get()[(unsigned)JitCounter::NumRecompileChecks];
+  vd->declineCount = 0;
+  CodeBlock *codeBlock = vd->codeBlock;
+  JitFunctionData *data = codeBlock->getJitData();
+  assert(data && "considerRecompile requires JitFunctionData");
+  // Staleness gate: a retired body's events influence nothing. Its
+  // record keeps counting, costing one early-out call per threshold
+  // crossing on an already slow path.
+  if (vd != data->current.get())
+    return;
+  if (!enabled_ || !data->recompileBudget || vd->coldByIdSites == 0)
+    return;
+  // Progress check: has one of the SPECIFIC sites the most recent compile
+  // recorded as cold -- not just some unrelated cache -- warmed enough to
+  // change what the next compile would emit for it? A write site warms
+  // when its cache now names a class. A read site warms only when its
+  // cache satisfies the specialization gate emitGetById itself uses
+  // (numGoodChanges == 1 && a class is recorded); a merely non-null but
+  // still-polymorphic read cache would not change anything if recompiled.
+  bool warmed = false;
+  for (uint8_t idx : vd->coldWriteCacheIdxs) {
+    if (codeBlock->getWriteCacheEntry(idx)->clazz.getNoBarrierUnsafe()) {
+      warmed = true;
+      break;
+    }
+  }
+  if (!warmed) {
+    for (uint8_t idx : vd->coldReadCacheIdxs) {
+      ReadPropertyCacheEntry *entry = codeBlock->getReadCacheEntry(idx);
+      if (entry->numGoodChanges == 1 && entry->clazz.getNoBarrierUnsafe()) {
+        warmed = true;
+        break;
+      }
+    }
+  }
+  if (!warmed)
+    return;
+  recompile(runtime, codeBlock);
+}
+
 JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlock() {
   if (_sh_setjmp(errorJmpBuf_) == 0) {
     auto res = compileCodeBlockImpl();
-    // compileCodeBlockImpl returns null when it hits the memory limit, in which
-    // case the code was never installed and there is nothing for these targets
-    // to point at; computing them from a null base would store bogus pointers
-    // into the module's tables.
+    // compileCodeBlockImpl returns null when it hits the memory limit, in
+    // which case the code was never installed.
     if (!res) {
       // Nothing was installed, so the comments collected for this function
       // have no code to attach to. Drop them, or they would be attributed to
@@ -250,10 +324,19 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlock() {
 }
 
 JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
+  // The version this compile will produce: 1 for a function's first
+  // compile, otherwise one past the version installed by the compile
+  // that is being superseded (see JITContext::recompile).
+  JitFunctionData *priorData = codeBlock_->getJitData();
+  unsigned version = priorData ? priorData->version + 1u : 1u;
+
   if (jc_.dumpJITCode_ & (DumpJitCode::Code | DumpJitCode::CompileStatus)) {
     funcName_ = codeBlock_->getNameString();
     llvh::outs() << "\nJIT compilation of FunctionID "
-                 << codeBlock_->getFunctionID() << ", '" << funcName_ << "'\n";
+                 << codeBlock_->getFunctionID() << ", '" << funcName_ << "'";
+    if (version >= 2)
+      llvh::outs() << " (version " << version << ")";
+    llvh::outs() << "\n";
   }
 
   discoverBasicBlocks(codeBlock_, basicBlocks_, ofsToBBIndex_);
@@ -305,14 +388,33 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
     return nullptr;
   }
 
-  codeBlock_->setJITCompiled(em_.addToRuntime(jc_.impl_->jr));
+  JITCompiledFunctionPtr fn = em_.addToRuntime(jc_.impl_->jr);
+
+  // Install: create-or-get the function metadata (budget set on first
+  // allocation only), fill the candidate record, retire the previous
+  // current, publish. Shared by first compiles and recompiles.
+  JitFunctionData *jitData = codeBlock_->ensureJitData(jc_.getMaxRecompiles());
+  candidateVD_->coldWriteCacheIdxs = std::move(em_.coldWriteCacheIdxs_);
+  candidateVD_->coldReadCacheIdxs = std::move(em_.coldReadCacheIdxs_);
+  size_t coldTotal = candidateVD_->coldWriteCacheIdxs.size() +
+      candidateVD_->coldReadCacheIdxs.size();
+  candidateVD_->coldByIdSites =
+      coldTotal > 0xffff ? 0xffff : (uint16_t)coldTotal;
+  candidateVD_->body = fn;
+  if (jitData->current)
+    jitData->retired.push_back(std::move(jitData->current));
+  jitData->current = std::move(candidateVD_);
+  codeBlock_->setJITCompiled(jitData->current->body);
 
   if (jc_.perfJitDump_) {
     // Write the JIT dump for this function.
+    std::string perfName = codeBlock_->getNameString();
+    if (version >= 2)
+      perfName += " v" + std::to_string(version);
     jc_.perfJitDump_->writeCodeLoadRecord(
         reinterpret_cast<const char *>(codeBlock_->getJITCompiled()),
         em_.code.codeSize(),
-        codeBlock_->getNameString());
+        perfName);
   }
 
   if (LLVM_UNLIKELY(usedSize == memoryLimit)) {
@@ -340,7 +442,14 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
   if (jc_.dumpJITCode_ & (DumpJitCode::Code | DumpJitCode::CompileStatus)) {
     llvh::outs() << "\nJIT total memory usage (bytes): " << usedSize << "\n";
     llvh::outs() << "JIT successfully compiled FunctionID "
-                 << codeBlock_->getFunctionID() << ", '" << funcName_ << "'\n";
+                 << codeBlock_->getFunctionID() << ", '" << funcName_ << "'";
+    if (version >= 2)
+      llvh::outs() << " (version " << version << ")";
+    llvh::outs() << "\n";
+    if (jitData->current->coldByIdSites > 0) {
+      llvh::outs() << "JIT cold ById sites: " << jitData->current->coldByIdSites
+                   << "\n";
+    }
   }
 
   return codeBlock_->getJITCompiled();

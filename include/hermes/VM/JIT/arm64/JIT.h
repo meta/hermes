@@ -11,11 +11,13 @@
 #include "hermes/ADT/TransparentOwningPtr.h"
 #include "hermes/VM/CodeBlock.h"
 #include "hermes/VM/JIT/JitCounters.h"
+#include "hermes/VM/JIT/JitFunctionData.h"
 #include "hermes/VM/JIT/PerfJitDump.h"
 
 namespace hermes {
 namespace vm {
 struct RuntimeOffsets;
+struct JitVersionData;
 
 namespace arm64 {
 
@@ -121,6 +123,30 @@ class JITContext {
     memoryLimit_ = memoryLimit;
   }
 
+  /// Set the maximum number of recompiles per function (0 disables).
+  void setMaxRecompiles(uint8_t maxRecompiles) {
+    maxRecompiles_ = maxRecompiles;
+  }
+
+  /// \return the maximum number of recompiles per function.
+  uint8_t getMaxRecompiles() const {
+    return maxRecompiles_;
+  }
+
+  /// Set the number of ById helper declines within one compiled body
+  /// before a recompile is considered. Applies to versions compiled
+  /// from here on; each version snapshots it at its own compile.
+  /// \pre threshold >= 1.
+  void setRecompileDeclineThreshold(uint32_t threshold) {
+    assert(threshold >= 1 && "recompile decline threshold must be >= 1");
+    recompileDeclineThreshold_ = threshold;
+  }
+
+  /// \return the declines before a recompile is considered.
+  uint32_t getRecompileDeclineThreshold() const {
+    return recompileDeclineThreshold_;
+  }
+
   /// Set the largest lazy JIT id assignable to a HiddenClass. Exposed only so
   /// that tests can reach the exhaustion path without interning 65535 hidden
   /// classes; production code should leave this at the default.
@@ -166,6 +192,29 @@ class JITContext {
   /// are required to be scanned.
   void markRoots(RootAcceptorWithNames &acceptor, bool markLongLived);
 
+  /// Compile \p codeBlock again, reading the current property-cache
+  /// state, and install the new body for future invocations. The
+  /// previous body is retired (kept alive; see JitFunctionData) and the
+  /// recompile budget is decremented. On compilation failure the budget
+  /// is zeroed so the function is never retried.
+  /// \pre codeBlock has been JIT-compiled (getJITCompiled() non-null).
+  /// \return true if a new version was installed.
+  bool recompile(Runtime &runtime, CodeBlock *codeBlock);
+
+  /// Called by JIT runtime helpers when the decline counter of the body
+  /// they were called from reaches that body's own
+  /// JitVersionData::declineThreshold (from -Xjit-recompile-threshold).
+  /// \p versionData is that body's record. Resets its counter, then
+  /// gates: a record that is no longer the function's current one
+  /// describes a retired body, whose
+  /// events influence nothing, and returns immediately. Otherwise spends
+  /// budget only when progress is possible: one of the SPECIFIC sites
+  /// this version's compile recorded as cold
+  /// (JitVersionData::coldWriteCacheIdxs / coldReadCacheIdxs) has since
+  /// warmed enough to change what the next compile would emit for it --
+  /// an unrelated warm cache does not count.
+  void considerRecompile(Runtime &runtime, JitVersionData *versionData);
+
  private:
   /// Slow path that actually performs the compilation of the specified
   /// CodeBlock.
@@ -180,6 +229,11 @@ class JITContext {
   /// The memory limit for JIT'ed code in bytes.
   /// Once the limit is reached, no more code will be JIT'ed.
   uint32_t memoryLimit_{32u << 20};
+  /// Maximum number of recompiles per function. 0 disables recompilation.
+  uint8_t maxRecompiles_{1};
+  /// Declines within one compiled body before a recompile is considered.
+  uint32_t recompileDeclineThreshold_{
+      JitFunctionData::kDefaultRecompileDeclineThreshold};
   /// whether to dump JIT'ed code
   unsigned dumpJITCode_{0};
   /// whether to fatally crash on JIT compilation errors

@@ -217,7 +217,10 @@ TestRuntimeEnv createTestRuntime(
           .withEnableJIT(config.runtimeFlags->JIT != JITMode::Off)
           .withForceJIT(config.runtimeFlags->JIT == JITMode::Force)
           .withJITThreshold(config.runtimeFlags->JITThreshold)
-          .withJITMemoryLimit(config.runtimeFlags->JITMemoryLimit);
+          .withJITMemoryLimit(config.runtimeFlags->JITMemoryLimit)
+          .withJITMaxRecompiles(config.runtimeFlags->JITMaxRecompiles)
+          .withJITRecompileThreshold(
+              config.runtimeFlags->JITRecompileThreshold);
   if (disableHandleSan) {
     auto gcConfig =
         baseConfig.getGCConfig()

@@ -9,8 +9,8 @@
 // RUN: %hermes %s > %t.int && %hermes -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit2 && diff %t.int %t.jit2
 // RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error %s > %t.jit0 && diff %t.int0 %t.jit0
 // RUN: %hermes -O0 %s > %t.int0 && %hermes -O0 -Xjit=force -Xjit-crash-on-error -Xjit-emit-type-asserts %s > %t.jit3 && diff %t.int0 %t.jit3
-// RUN: %hermes -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
-// RUN: %hermes -O0 -Xjit=force -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
+// RUN: %hermes -Xjit=force -Xjit-max-recompiles=0 -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
+// RUN: %hermes -O0 -Xjit=force -Xjit-max-recompiles=0 -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // REQUIRES: jit
 
 // Globals, and the top-level function itself: DeclareGlobalVar (one per
@@ -87,14 +87,18 @@ function bumpStrict(n) {
 
 print(bump(2), bump(3), counter);
 // CHECK: JIT successfully compiled FunctionID 1, 'bump'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 2 5 5
 // CHECK0: JIT successfully compiled FunctionID 1, 'bump'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 2 5 5
 
 print(scaled(2));
 // CHECK: JIT successfully compiled FunctionID 2, 'scaled'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 205
 // CHECK0: JIT successfully compiled FunctionID 2, 'scaled'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 205
 
 print(callHook(1));
@@ -107,14 +111,18 @@ print(callHook(1));
 
 show(counter, base);
 // CHECK: JIT successfully compiled FunctionID 4, 'show'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 5 100
 // CHECK0: JIT successfully compiled FunctionID 4, 'show'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 5 100
 
 print(accumulate(1000), counter);
 // CHECK: JIT successfully compiled FunctionID 5, 'accumulate'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 499505 499505
 // CHECK0: JIT successfully compiled FunctionID 5, 'accumulate'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 499505 499505
 
 // Reassigning a global from the top level, which is itself compiled code
@@ -130,6 +138,8 @@ print(callHook(3));
 
 print(bumpStrict(4), counter);
 // CHECK: JIT successfully compiled FunctionID 6, 'bumpStrict'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 499509 499509
 // CHECK0: JIT successfully compiled FunctionID 6, 'bumpStrict'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 499509 499509

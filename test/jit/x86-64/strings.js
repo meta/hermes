@@ -240,8 +240,10 @@ print(bigConst(), bigConst() + 1n);
 
 print(reTest("xabbbcy"), reTest("ac"), reTest("abc"));
 // CHECK: JIT successfully compiled FunctionID 11, 'reTest'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: true false true
 // CHECK0: JIT successfully compiled FunctionID 11, 'reTest'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: true false true
 
 var ck = computedKey("dyn");
@@ -286,8 +288,10 @@ function churn(n) {
 }
 print(churn(2000));
 // CHECK: JIT successfully compiled FunctionID 15, 'churn'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 13783
 // CHECK0: JIT successfully compiled FunctionID 15, 'churn'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 13783
 
 // Unreachable. `new Ctor()` on a statically known class constructor makes
@@ -305,7 +309,9 @@ function mk() {
 }
 print(mk().x);
 // CHECK: JIT successfully compiled FunctionID 16, 'mk'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 1
 // CHECK0: JIT successfully compiled FunctionID 16, 'mk'
 // CHECK0: JIT successfully compiled FunctionID 17, 'Ctor'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 1

@@ -15,6 +15,7 @@
 #include "hermes/Support/PerfSection.h"
 #include "hermes/Support/SimpleDiagHandler.h"
 #include "hermes/VM/GCPointer-inline.h"
+#include "hermes/VM/JIT/JitFunctionData.h"
 #include "hermes/VM/Runtime.h"
 #include "hermes/VM/RuntimeModule.h"
 
@@ -25,6 +26,39 @@ namespace hermes {
 namespace vm {
 
 using namespace hermes::inst;
+
+CodeBlock::CodeBlock(
+    RuntimeModule *runtimeModule,
+    hbc::RuntimeFunctionHeader header,
+    const uint8_t *bytecode,
+    uint32_t functionID,
+    uint32_t readCacheSize,
+    uint32_t writeCacheSize,
+    uint32_t privateNameCacheSize)
+    : runtimeModule_(runtimeModule),
+      functionHeader_(header),
+      bytecode_(bytecode),
+      functionID_(functionID),
+      readPropertyCacheSize_(readCacheSize),
+      writePropertyCacheSize_(writeCacheSize),
+      privateNameCacheSize_(privateNameCacheSize) {
+  std::uninitialized_fill_n(
+      readPropertyCache(), readCacheSize, ReadPropertyCacheEntry{});
+  std::uninitialized_fill_n(
+      writePropertyCache(), writeCacheSize, WritePropertyCacheEntry{});
+  std::uninitialized_fill_n(
+      privateNameCache(), privateNameCacheSize, PrivateNameCacheEntry{});
+}
+
+CodeBlock::~CodeBlock() = default;
+
+#if HERMESVM_JIT
+JitFunctionData *CodeBlock::ensureJitData(uint8_t budget) {
+  if (!jitData_)
+    jitData_.reset(new JitFunctionData(budget));
+  return jitData_.get();
+}
+#endif
 
 #ifdef HERMES_SLOW_DEBUG
 

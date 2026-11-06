@@ -181,7 +181,10 @@ run_one() {
   local -a pstatus
   echo "===== $label =====" >> "$TMP"
   before=$(wc -l < "$TMP")
-  "$HERMES" "$@" -Xjit=force -Xjit-threshold=1 -Xdump-jitcode=3 "$file" 2>&1 \
+  # Recompilation would put multiple bodies per function in the dump;
+  # baselines are defined as first-compile output.
+  "$HERMES" "$@" -Xjit=force -Xjit-threshold=1 -Xjit-max-recompiles=0 \
+    -Xdump-jitcode=3 "$file" 2>&1 \
     | canonicalize >> "$TMP"
   pstatus=("${PIPESTATUS[@]}")
   after=$(wc -l < "$TMP")

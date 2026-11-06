@@ -33,7 +33,7 @@ try {
 }
 
 // CHECK: JIT successfully compiled FunctionID 1, 'printSuperProp'
-// CHECK-NEXT: 1
+// CHECK: 1
 
 // CHECK: JIT successfully compiled FunctionID 2, 'printSuperProp'
 // CHECK: Cannot read property 'prop' of null

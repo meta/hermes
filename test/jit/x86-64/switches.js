@@ -182,12 +182,13 @@ function nanOf(a, b) {
   return a / b;
 }
 
-// StringSwitchImm. The emitter's whole job is the call to
-// _jit_string_switch_imm_table_lookup plus "null means default"; the table
-// itself is filled in by the shared driver AFTER this function finishes
-// compiling, by resolving the very labels handed to stringSwitchImm. That is
-// the contract this case pins: if those labels were copies, or were resolved
-// too early, every hit below would land in the wrong place.
+// StringSwitchImm. _jit_string_switch_imm_table_lookup returns the index of
+// the matching case in the module's shared table, or a negative value for
+// "default", and the emitter turns that index into an address through a jump
+// table it emits right after the call. This case pins that agreement: if the
+// two disagreed about which slot a case owns -- the table numbers cases in
+// its own insertion order, not in bytecode order -- every hit below would
+// land in the wrong place.
 function strSwitch(s) {
   switch (s) {
     case "alpha": return 1;
@@ -211,10 +212,12 @@ say(dense(0) + " " + dense(17) + " " + dense(9));
 // CHECK: JIT successfully compiled FunctionID 0, 'global'
 // CHECK: JIT successfully compiled FunctionID 2, 'dense'
 // CHECK: JIT successfully compiled FunctionID 1, 'say'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: c0 c17 c9
 // CHECK0: JIT successfully compiled FunctionID 0, 'global'
 // CHECK0: JIT successfully compiled FunctionID 2, 'dense'
 // CHECK0: JIT successfully compiled FunctionID 1, 'say'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: c0 c17 c9
 say(dense(-1) + " " + dense(18));
 // CHECK-NEXT: def def

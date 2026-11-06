@@ -192,6 +192,7 @@ print(churn(30000));
 // one cannot be a CHECK-NEXT.
 // CHECK: JIT successfully compiled FunctionID 6, 'churn'
 // CHECK0: JIT successfully compiled FunctionID 6, 'churn'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 450043674
 var add2 = mkAdd3(1);
 // CHECK: JIT successfully compiled FunctionID 3, 'mkAdd3'
@@ -213,4 +214,5 @@ print(churnLate(30000));
 // churnLate's status line prints in between, as churn's does.
 // CHECK: JIT successfully compiled FunctionID 7, 'churnLate'
 // CHECK0: JIT successfully compiled FunctionID 7, 'churnLate'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 30000

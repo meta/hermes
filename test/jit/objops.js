@@ -38,10 +38,10 @@ function getByIndex(o) {
 
 print("foo", foo());
 // CHECK: JIT successfully compiled FunctionID 1, 'foo'
-// CHECK-NEXT: foo 30
+// CHECK: foo 30
 print("bar", bar({}, "prop"));
 // CHECK: JIT successfully compiled FunctionID 2, 'bar'
-// CHECK-NEXT: bar 103
+// CHECK: bar 103
 print("isIn", isIn({}, "prop"));
 // CHECK: JIT successfully compiled FunctionID 3, 'isIn'
 // CHECK-NEXT: isIn false

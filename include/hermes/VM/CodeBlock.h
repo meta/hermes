@@ -30,6 +30,7 @@ namespace vm {
 
 class RuntimeModule;
 class CodeBlock;
+struct JitFunctionData;
 
 /// A pointer to JIT-compiled function.
 typedef HermesValue (*JITCompiledFunctionPtr)(Runtime *runtime);
@@ -71,6 +72,11 @@ class CodeBlock final : private llvh::TrailingObjects<
   /// Ideally, a function's hotness should also include if it has a loop and how
   /// hot that loop is.
   uint32_t executionCount_ = 0;
+
+  /// Lazily allocated recompilation metadata; null until first compile.
+  /// See JitFunctionData.h. unique_ptr of an incomplete type: the
+  /// out-of-line ~CodeBlock() in CodeBlock.cpp sees the full type.
+  std::unique_ptr<JitFunctionData> jitData_;
 #endif
 
 #ifdef HERMES_ENABLE_DEBUGGER
@@ -92,21 +98,7 @@ class CodeBlock final : private llvh::TrailingObjects<
       uint32_t functionID,
       uint32_t readCacheSize,
       uint32_t writeCacheSize,
-      uint32_t privateNameCacheSize)
-      : runtimeModule_(runtimeModule),
-        functionHeader_(header),
-        bytecode_(bytecode),
-        functionID_(functionID),
-        readPropertyCacheSize_(readCacheSize),
-        writePropertyCacheSize_(writeCacheSize),
-        privateNameCacheSize_(privateNameCacheSize) {
-    std::uninitialized_fill_n(
-        readPropertyCache(), readCacheSize, ReadPropertyCacheEntry{});
-    std::uninitialized_fill_n(
-        writePropertyCache(), writeCacheSize, WritePropertyCacheEntry{});
-    std::uninitialized_fill_n(
-        privateNameCache(), privateNameCacheSize, PrivateNameCacheEntry{});
-  }
+      uint32_t privateNameCacheSize);
 
   size_t numTrailingObjects(OverloadToken<ReadPropertyCacheEntry>) const {
     return readPropertyCacheSize_;
@@ -127,6 +119,9 @@ class CodeBlock final : private llvh::TrailingObjects<
   static void operator delete(void *cb) {
     free(cb);
   }
+
+  /// Destructor.
+  ~CodeBlock();
 
   using const_iterator = const uint8_t *;
 
@@ -295,6 +290,16 @@ class CodeBlock final : private llvh::TrailingObjects<
   void clearExecutionCount() {
     executionCount_ = 0;
   }
+
+  /// \return the recompilation metadata, or null if never JIT-compiled.
+  JitFunctionData *getJitData() {
+    return jitData_.get();
+  }
+
+  /// Allocate the recompilation metadata on first use.
+  /// \param budget the initial recompile budget for this function.
+  /// \return the metadata (existing object if already allocated).
+  JitFunctionData *ensureJitData(uint8_t budget);
 #else
   /// \return true if JIT is disabled for this function.
   bool getDontJIT() const {
@@ -323,6 +328,18 @@ class CodeBlock final : private llvh::TrailingObjects<
 
   /// Reset the function executionCount_ count to 0
   void clearExecutionCount() {}
+
+  /// \return the recompilation metadata, or null if never JIT-compiled.
+  JitFunctionData *getJitData() {
+    return nullptr;
+  }
+
+  /// Allocate the recompilation metadata on first use.
+  /// \param budget the initial recompile budget for this function.
+  /// \return the metadata (existing object if already allocated).
+  JitFunctionData *ensureJitData(uint8_t budget) {
+    return nullptr;
+  }
 #endif
 
   inline ReadPropertyCacheEntry *getReadCacheEntry(uint8_t idx) {
@@ -333,6 +350,16 @@ class CodeBlock final : private llvh::TrailingObjects<
   inline WritePropertyCacheEntry *getWriteCacheEntry(uint8_t idx) {
     assert(idx < writePropertyCacheSize_ && "idx out of WriteCache bound");
     return &writePropertyCache()[idx];
+  }
+
+  /// \return the number of entries in the read property cache.
+  uint32_t getReadCacheSize() const {
+    return readPropertyCacheSize_;
+  }
+
+  /// \return the number of entries in the write property cache.
+  uint32_t getWriteCacheSize() const {
+    return writePropertyCacheSize_;
   }
 
   inline PrivateNameCacheEntry *getPrivateNameCacheEntry(uint8_t idx) {

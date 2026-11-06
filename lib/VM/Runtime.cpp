@@ -474,6 +474,10 @@ Runtime::Runtime(
   jitContext_.setForceJIT(runtimeConfig.getForceJIT());
   jitContext_.setDefaultExecThreshold(runtimeConfig.getJITThreshold());
   jitContext_.setMemoryLimit(runtimeConfig.getJITMemoryLimit());
+  jitContext_.setMaxRecompiles(
+      std::min<uint32_t>(runtimeConfig.getJITMaxRecompiles(), 255));
+  jitContext_.setRecompileDeclineThreshold(
+      std::max<uint32_t>(runtimeConfig.getJITRecompileThreshold(), 1));
   codeCoverageProfiler_->restore();
 
   // Populate JS builtins returned from internal bytecode to the builtins table.

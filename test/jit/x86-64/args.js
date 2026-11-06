@@ -184,10 +184,12 @@ say(looseLen() + " " + looseLen(1) + " " + looseLen(1, 2, 3, 4, 5, 6, 7));
 // CHECK: JIT successfully compiled FunctionID 0, 'global'
 // CHECK: JIT successfully compiled FunctionID 2, 'looseLen'
 // CHECK: JIT successfully compiled FunctionID 1, 'say'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 0 1 7
 // CHECK0: JIT successfully compiled FunctionID 0, 'global'
 // CHECK0: JIT successfully compiled FunctionID 2, 'looseLen'
 // CHECK0: JIT successfully compiled FunctionID 1, 'say'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 0 1 7
 say(strictLen() + " " + strictLen(1) + " " + strictLen(1, 2, 3, 4, 5, 6, 7));
 // CHECK: JIT successfully compiled FunctionID 4, 'strictLen'
@@ -228,8 +230,10 @@ say(withParams(1, 2, 3, 4, 5));
 say(idx(1, "a", "b", "c", "d", "e") + " " + idx(5, "a", "b", "c", "d", "e") +
     " " + idx(3, "a", "b", "c", "d", "e"));
 // CHECK: JIT successfully compiled FunctionID 7, 'idx'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: a e c
 // CHECK0: JIT successfully compiled FunctionID 7, 'idx'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: a e c
 // One past the end, negative, and fractional: all three take the slow path,
 // and all three answer undefined.
@@ -256,22 +260,27 @@ say(reifyStrict("orig"));
 // CHECK: JIT successfully compiled FunctionID 9, 'reifyStrict'
 // CHECK-NEXT: 1/orig/param-changed
 // CHECK0: JIT successfully compiled FunctionID 9, 'reifyStrict'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 1/orig/param-changed
 say(bothWays(4, "a", "b", "c", "d"));
 // The trailing "|R@5" is the reified read; the frame slot still holds 4.
 // CHECK: JIT successfully compiled FunctionID 10, 'bothWays'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 4@5 a@5 b@5 c@5 |R@5
 // CHECK0: JIT successfully compiled FunctionID 10, 'bothWays'
 // CHECK0-NEXT: 4@5 a@5 b@5 c@5 |R@5
 say(noArgs());
 // CHECK: JIT successfully compiled FunctionID 11, 'noArgs'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 0/undefined
 // CHECK0: JIT successfully compiled FunctionID 11, 'noArgs'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 0/undefined
 say(reifyTwice(1, 2));
 // CHECK: JIT successfully compiled FunctionID 12, 'reifyTwice'
 // CHECK-NEXT: true/2
 // CHECK0: JIT successfully compiled FunctionID 12, 'reifyTwice'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: true/2
 say(escapeStrict(1, 2, 3).length + "/" + escapeStrict().length + "/" +
     escapeStrict("x")[0]);
@@ -281,6 +290,7 @@ say(escapeStrict(1, 2, 3).length + "/" + escapeStrict().length + "/" +
 // CHECK0-NEXT: 3/0/x
 say(echoAll(1, "s", null, undefined, true, {}, 1.5));
 // CHECK: JIT successfully compiled FunctionID 14, 'echoAll'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: number,string,object,undefined,boolean,object,number,
 // CHECK0: JIT successfully compiled FunctionID 14, 'echoAll'
 // CHECK0-NEXT: number,string,object,undefined,boolean,object,number,

@@ -25,7 +25,7 @@ print("newObject", newObject());
 // CHECK-NEXT: newObject [object Object]
 print("newObjectWithParent", Object.getPrototypeOf(newObjectWithParent()));
 // CHECK: JIT successfully compiled FunctionID 2, 'newObjectWithParent'
-// CHECK-NEXT: newObjectWithParent [object Math]
+// CHECK: newObjectWithParent [object Math]
 var o = newObjectWithBuffer('c');
 print("newObjectWithBuffer", o.a, o.c);
 // CHECK: JIT successfully compiled FunctionID 3, 'newObjectWithBuffer'

@@ -14,6 +14,7 @@
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/CodeBlock.h"
 #include "hermes/VM/Interpreter.h"
+#include "hermes/VM/JIT/JitFunctionData.h"
 #include "hermes/VM/JSError.h"
 #include "hermes/VM/JSObject-inline.h"
 #include "hermes/VM/RuntimeModule-inline.h"
@@ -340,15 +341,26 @@ JSObject *_jit_new_empty_object_for_buffer(
 
 void _jit_put_by_id(
     SHRuntime *shr,
-    SHCodeBlock *codeBlock,
+    SHJitVersionData *versionData,
     SHLegacyValue *shBase,
     SHLegacyValue *shValue,
     uint8_t cacheIdx,
     SHSymbolID symID,
     bool strictMode,
     bool tryProp) {
+  // Recompilation trigger: every call to this helper is a decline of
+  // the inline PutById tier of the CALLING BODY, whose version record
+  // identifies it. Threshold crossings hand off to the JITContext;
+  // retired bodies' events land in their own frozen records and spend
+  // nothing. Runs before any raw object pointer is derived:
+  // recompilation may allocate.
+  JitVersionData *vd = reinterpret_cast<JitVersionData *>(versionData);
+  if (LLVM_UNLIKELY(++vd->declineCount >= vd->declineThreshold)) {
+    getRuntime(shr).getJITContext().considerRecompile(getRuntime(shr), vd);
+  }
+
   Runtime &runtime = getRuntime(shr);
-  CodeBlock *curCodeBlock = (CodeBlock *)codeBlock;
+  CodeBlock *curCodeBlock = vd->codeBlock;
   Handle<> value{toPHV(shValue)};
   SmallHermesValue shv = SmallHermesValue::encodeHermesValue(*value, runtime);
 

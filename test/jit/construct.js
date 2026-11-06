@@ -22,7 +22,7 @@ function retObject() {
 
 print("retNumber", new retNumber().x);
 // CHECK: JIT successfully compiled FunctionID 1, 'retNumber'
-// CHECK-NEXT: retNumber 3
+// CHECK: retNumber 3
 print("retObject", new retObject().x);
 // CHECK: JIT successfully compiled FunctionID 2, 'retObject'
-// CHECK-NEXT: retObject 45
+// CHECK: retObject 45

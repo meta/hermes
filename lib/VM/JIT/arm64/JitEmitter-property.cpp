@@ -1149,7 +1149,7 @@ void Emitter::putByIdImpl(
   freeAllFRTempExcept({});
 
   a.mov(a64::x0, xRuntime);
-  loadBits64InGp(a64::x1, (uint64_t)codeBlock_, "CodeBlock");
+  loadBits64InGp(a64::x1, (uint64_t)versionData_, "JitVersionData");
   loadFrameAddr(a64::x2, frTarget);
   loadFrameAddr(a64::x3, frValue);
   a.mov(a64::w4, cacheIdx);
@@ -1160,7 +1160,7 @@ void Emitter::putByIdImpl(
       *this,
       void (*)(
           SHRuntime *shr,
-          SHCodeBlock *codeBlock,
+          SHJitVersionData *versionData,
           SHLegacyValue *base,
           SHLegacyValue *value,
           uint8_t cacheIdx,

@@ -633,6 +633,109 @@ declined, so that a site which always declines can stop emitting -- or
 stop executing -- the tier at all. That is a follow-up, not part of this
 series.
 
+### Recompilation
+
+A compiled function can be compiled again later and the new body
+installed for future calls. Full rationale and the swap protocol are in
+`doc/superpowers/specs/2026-09-04-jit-recompilation-design.md`; the
+per-version feedback records described below are a later retrofit, in
+`doc/superpowers/specs/2026-09-07-jit-version-data-design.md`. This is
+the summary.
+
+**Records.** Each compiled body has its own `JitVersionData`: a
+back-pointer to the `CodeBlock`, the body's entry point, and that
+body's own observations -- `declineCount`, the cold-site lists, and
+`consumerRecords` for future per-site feedback. `JitFunctionData` keeps
+only the control state that spans versions: `recompileBudget`,
+`version`, the `current` record, and the `retired` list of previous
+ones. Splitting it this way means one version's feedback never blends
+into another's: a kind that reaches version 1's helper may be handled
+inline by version 2 and never reach its helper at all.
+
+**Trigger.** `_jit_put_by_id` is the only ById write helper that
+carries a version record, so it is the only trigger site in v1: every
+call into it is a decline of the inline PutById tier, and it bumps the
+CALLING body's own `declineCount` -- the helper receives the calling
+body's `JitVersionData` directly, and reaches the `CodeBlock` through
+its back-pointer. At that body's own decline threshold -- snapshotted
+into its `JitVersionData` when it was compiled, default 64, set by
+`-Xjit-recompile-threshold` -- it hands off to
+`JITContext::considerRecompile`, which resets the
+counter and gates in order. First, staleness: if the record is not the
+function's `current` version, the call returns immediately -- a
+retired body's declines are counted (they still bump its own frozen
+counter) but never spend budget, so its events are inert. Then the
+existing checks on the current version: budget left, `coldByIdSites >
+0` (the emitter's count, from that version's compile, of Get/PutById
+sites that declined tier emission because their cache was cold), and
+at least one of those specific caches now names a class. If that check
+fails -- a polymorphic function whose tiers are already emitted -- the
+counter resets and the budget is kept; declines from GetById alone do
+not trigger, since the shared SH GetById helper has no version record
+to carry the counter.
+
+**Install.** A passing check recompiles synchronously, right there --
+compilation never runs JS, so there is no reentrancy. The candidate
+record is filled first (cold-site lists moved from the emitter, entry
+point set), the function's current record, if any, moves onto
+`retired`, the candidate becomes the new `current`, and only then does
+`setJITCompiled()` publish the new body -- a single pointer store into
+the `CodeBlock`; every call already loads that pointer per invocation
+(JIT call sites and the interpreter alike), so there is no code
+patching and no call-site tracking. Publication comes last so
+`current` never describes a body calls cannot yet enter. Activations
+already running the old body finish on it: the old body stays valid
+and fully guarded, and its record stays on the `retired` list rather
+than being freed. Retired records, and the bodies they describe, are
+never freed in v1 -- reclaiming them needs a safepoint scan of the
+native stack(s) for return addresses, deferred as dz issue
+`01a06d06-a7d7`. That isolation has no exceptions: a compile writes no
+version-dependent RuntimeModule state -- no code address it emits ever
+reaches the module, string switches included. The module's shared
+switch tables hold only case indices, and each body resolves an index
+through a jump table of its own (see `stringSwitchImm`).
+
+**Budget.** `-Xjit-max-recompiles=N` sets the per-function recompile
+budget; default 1, and `0` restores the exact compile-once behavior
+this mechanism extends. `-Xjit-recompile-threshold=N` sets how many
+declines of one compiled body precede a recompile check; default 64,
+and `0` is clamped to 1 (there is no "off" value -- that is what
+`-Xjit-max-recompiles=0` is for). It applies to bodies compiled after
+it is set, which in practice means all of them.
+
+**Dump labels.** `-Xdump-jitcode` prints a recompile's banner and
+success lines with a `(version N)` suffix for N >= 2 (a first compile
+prints no suffix); perf jitdump symbol names get a matching ` vN`
+suffix so profiles do not conflate versions.
+
+**Non-goals.** No deopt and no speculation: every version remains
+helper-guarded and all versions are semantically interchangeable, so
+nothing is ever invalidated. No OSR: a hot loop inside a long-running
+activation keeps running its old body until it returns. No async or
+background compilation: recompiles are synchronous, like today's
+threshold compiles.
+
+Both backends pass each body's version record to its helpers, but
+arm64 stays dormant: its `Emitter` never appends to the cold-site
+lists, so a freshly compiled body's `coldByIdSites` is always zero and
+`considerRecompile`'s gate never lets a recompile fire. The tree builds
+and the jit suite passes there; live recompilation arrives with the
+arm64 port.
+
+Tests: `test/jit/x86-64/recompile-byid-warm.js` (headline: the tier is
+absent at version 1, present at version 2, and absent entirely under
+`-Xjit-max-recompiles=0`), `recompile-cold-sites.js`,
+`recompile-mid-recursion.js` (a retired body still on the native stack
+during its own replacement), `recompile-deterministic.js` (two runs
+of the headline test produce identical dumps, modulo ASLR-sensitive
+hex), `recompile-staleness-budget.js` (a two-phase pin: a retired
+body's declines during a deep unwind must not spend the current
+version's budget, and the current version must still trigger
+afterward, proving the gate suppresses the stale declines specifically
+rather than disabling recompilation), and
+`recompile-threshold-flag.js` (the same program recompiles at
+`-Xjit-recompile-threshold=8` and does not at the default 64).
+
 ### Arithmetic, comparisons and NaN handling
 
 The binary/unary arithmetic and comparison emitters share a template
@@ -1388,7 +1491,9 @@ of them.
    `jitCodeTarget` entries derived from a null base. Latent exactly as
    described: the code is never installed and the JIT disables itself,
    so nothing dereferences them in that run. **FIXED** by skipping the
-   fixup when compilation returned null.
+   fixup when compilation returned null. The fixup has since been
+   removed outright: string switches dispatch through a per-body jump
+   table, and the module's tables hold no code addresses at all.
 9. **`initHCLazyIDMayAlloc` assigns the permanent ID before the pin
    succeeds** and discards `push_back`'s status (`JitEmitter.cpp:1733-1751`).
    Unreachable today (ID cap ≪ ArrayStorage max), but the "id != 0 ⟹

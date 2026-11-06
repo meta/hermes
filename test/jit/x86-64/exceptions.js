@@ -119,10 +119,12 @@ say(classify(1) + "|" + classify(-2) + "|" + finallyRuns);
 // CHECK: JIT successfully compiled FunctionID 3, 'classify'
 // CHECK: JIT successfully compiled FunctionID 2, 'boom'
 // CHECK: JIT successfully compiled FunctionID 1, 'say'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: ok:1|caught:neg -2|2
 // CHECK0: JIT successfully compiled FunctionID 3, 'classify'
 // CHECK0: JIT successfully compiled FunctionID 2, 'boom'
 // CHECK0: JIT successfully compiled FunctionID 1, 'say'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: ok:1|caught:neg -2|2
 
 // A finally that runs while the exception is still in flight. `inner` has
@@ -151,9 +153,11 @@ function outer(x) {
 say(outer(7) + "|" + finallyRuns);
 // CHECK: JIT successfully compiled FunctionID 5, 'outer'
 // CHECK: JIT successfully compiled FunctionID 4, 'inner'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: outer got:inner 7|3
 // CHECK0: JIT successfully compiled FunctionID 5, 'outer'
 // CHECK0: JIT successfully compiled FunctionID 4, 'inner'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: outer got:inner 7|3
 
 // Catch inside a loop: the handler block is a loop body, so control returns
@@ -176,8 +180,10 @@ function loopCatch(n) {
 }
 say(loopCatch(10));
 // CHECK: JIT successfully compiled FunctionID 6, 'loopCatch'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 27/12
 // CHECK0: JIT successfully compiled FunctionID 6, 'loopCatch'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 27/12
 
 // Rethrow: catch, then throw the caught value again from inside the handler.
@@ -197,8 +203,10 @@ function rethrower(x) {
 }
 say(rethrower(4));
 // CHECK: JIT successfully compiled FunctionID 7, 'rethrower'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: rethrown:deep 4
 // CHECK0: JIT successfully compiled FunctionID 7, 'rethrower'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: rethrown:deep 4
 
 // Nested try in one function: several entries in one bytecode exception
@@ -227,8 +235,10 @@ say(
   nested(false, false) + "|" + nested(true, false) + "|" +
   nested(true, true));
 // CHECK: JIT successfully compiled FunctionID 8, 'nested'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: ABCE|AB[i:inner]DE|AB[i:inner][o:outer]
 // CHECK0: JIT successfully compiled FunctionID 8, 'nested'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: ABCE|AB[i:inner]DE|AB[i:inner][o:outer]
 
 // Two sibling try regions in one function, each with its own handler. Same
@@ -252,8 +262,10 @@ function twoTries(which) {
 }
 say(twoTries(0) + " / " + twoTries(1) + " / " + twoTries(2));
 // CHECK: JIT successfully compiled FunctionID 9, 'twoTries'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 1ok|2ok / 1c:one|2ok / 1ok|2c:two
 // CHECK0: JIT successfully compiled FunctionID 9, 'twoTries'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 1ok|2ok / 1c:one|2ok / 1ok|2c:two
 
 // A throw that crosses several compiled frames before it finds a handler:
@@ -281,11 +293,13 @@ say(deepCatch(3));
 // CHECK: JIT successfully compiled FunctionID 12, 'level1'
 // CHECK: JIT successfully compiled FunctionID 11, 'level2'
 // CHECK: JIT successfully compiled FunctionID 10, 'level3'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: deep:depth 3
 // CHECK0: JIT successfully compiled FunctionID 13, 'deepCatch'
 // CHECK0: JIT successfully compiled FunctionID 12, 'level1'
 // CHECK0: JIT successfully compiled FunctionID 11, 'level2'
 // CHECK0: JIT successfully compiled FunctionID 10, 'level3'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: deep:depth 3
 
 // A NATIVE frame in the middle. Array.prototype.map is C++, so the longjmp
@@ -305,9 +319,11 @@ say(throughNative([1, 2]) + "|" + throughNative([1, 3]));
 // FunctionID 22 is the anonymous map callback.
 // CHECK: JIT successfully compiled FunctionID 14, 'throughNative'
 // CHECK: JIT successfully compiled FunctionID 22, ''
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 2,4|native:map 3
 // CHECK0: JIT successfully compiled FunctionID 14, 'throughNative'
 // CHECK0: JIT successfully compiled FunctionID 22, ''
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 2,4|native:map 3
 
 // An error raised by the RUNTIME rather than by a Throw instruction: the
@@ -322,8 +338,10 @@ function runtimeError(o) {
 }
 say(runtimeError({x: "abc"}) + "|" + runtimeError({}));
 // CHECK: JIT successfully compiled FunctionID 15, 'runtimeError'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: len:3|type-error
 // CHECK0: JIT successfully compiled FunctionID 15, 'runtimeError'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: len:3|type-error
 
 // Allocation inside a catch handler, a lot of it. The handler runs after
@@ -345,8 +363,10 @@ function churn(n) {
 }
 say(churn(2000));
 // CHECK: JIT successfully compiled FunctionID 16, 'churn'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 1999679
 // CHECK0: JIT successfully compiled FunctionID 16, 'churn'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 1999679
 
 // ThrowIfEmpty and ThrowIfThisInitialized. Reading `this` in a derived
@@ -379,10 +399,12 @@ say(build("ok") + "|" + build("early") + "|" + build("twice"));
 // CHECK: JIT successfully compiled FunctionID 17, 'build'
 // CHECK: JIT successfully compiled FunctionID 21, 'Derived'
 // CHECK: JIT successfully compiled FunctionID 20, 'Base'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: ok|accessing an uninitialized variable|Cannot call super constructor twice
 // CHECK0: JIT successfully compiled FunctionID 17, 'build'
 // CHECK0: JIT successfully compiled FunctionID 21, 'Derived'
 // CHECK0: JIT successfully compiled FunctionID 20, 'Base'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: ok|accessing an uninitialized variable|Cannot call super constructor twice
 
 // The interpreted-thrower case, which only the threshold RUN line reaches.
@@ -406,9 +428,11 @@ for (var i = 0; i < 40; ++i) hot += hotCatcher(0);
 say(hot + "|" + hotCatcher(5));
 // CHECK: JIT successfully compiled FunctionID 19, 'hotCatcher'
 // CHECK: JIT successfully compiled FunctionID 18, 'coldThrower'
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: 0|cold 5
 // CHECK0: JIT successfully compiled FunctionID 19, 'hotCatcher'
 // CHECK0: JIT successfully compiled FunctionID 18, 'coldThrower'
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: 0|cold 5
 // COLD: JIT successfully compiled FunctionID 0, 'global'
 // COLD: JIT successfully compiled FunctionID 6, 'loopCatch'

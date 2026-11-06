@@ -58,6 +58,7 @@ Emitter::Emitter(
     bool emitCounters,
     PerfJitDump *perfJitDump,
     CodeBlock *codeBlock,
+    JitVersionData *versionData,
     const std::function<void(std::string &&message)> &longjmpError)
     : runtime_(runtime),
       jitImpl_(jitImpl),
@@ -66,7 +67,8 @@ Emitter::Emitter(
       emitTypeAsserts_(emitTypeAsserts),
       emitCounters_(emitCounters),
       frameRegs_(codeBlock->getFrameSize()),
-      codeBlock_(codeBlock) {
+      codeBlock_(codeBlock),
+      versionData_(versionData) {
   errorHandler_ = std::unique_ptr<asmjit::ErrorHandler>(
       new OurErrorHandler(expectedError_, longjmpError));
 
