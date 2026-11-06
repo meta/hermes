@@ -362,6 +362,20 @@ Value Runtime::createValueFromJsonUtf8(const uint8_t* json, size_t length) {
   return parseJson.call(*this, String::createFromUtf8(*this, json, length));
 }
 
+Value Runtime::createValueFromJsonASCII(const char* json, size_t length) {
+  Function parseJson = global()
+                           .getPropertyAsObject(*this, "JSON")
+                           .getPropertyAsFunction(*this, "parse");
+  return parseJson.call(*this, String::createFromAscii(*this, json, length));
+}
+
+Value Runtime::createValueFromJsonUtf16(const char16_t* json, size_t length) {
+  Function parseJson = global()
+                           .getPropertyAsObject(*this, "JSON")
+                           .getPropertyAsFunction(*this, "parse");
+  return parseJson.call(*this, String::createFromUtf16(*this, json, length));
+}
+
 String Runtime::createStringFromUtf16(const char16_t* utf16, size_t length) {
   if (isAllASCII(utf16, length)) {
     std::string buffer(utf16, utf16 + length);

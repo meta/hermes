@@ -22,7 +22,18 @@ CallResult<HermesValue> runtimeJSONParse(
     Handle<StringPrimitive> jsonString,
     Handle<Callable> reviver);
 
-/// Alternative interface to runtimeJSONParse for strings outside the JS heap.
+/// Parse bounded JSON outside the JS heap with the raw ASCII lexer, without a
+/// reviver. The input must contain only ASCII bytes and remain readable and
+/// unchanged across allocations until this call returns. No input is retained.
+CallResult<HermesValue> runtimeJSONParseRef(Runtime &runtime, ASCIIRef json);
+
+/// Parse bounded JSON outside the JS heap with the raw UTF-16 lexer, without a
+/// reviver. The input must remain readable and unchanged across allocations
+/// until this call returns. Lone surrogates in strings are preserved. No input
+/// is retained.
+CallResult<HermesValue> runtimeJSONParseRef(Runtime &runtime, UTF16Ref json);
+
+/// Alternative interface to runtimeJSONParse using the streaming UTF-8 lexer.
 CallResult<HermesValue> runtimeJSONParseRef(Runtime &runtime, UTF16Stream &&s);
 
 } // namespace vm

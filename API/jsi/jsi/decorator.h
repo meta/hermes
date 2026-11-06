@@ -151,6 +151,12 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   Value createValueFromJsonUtf8(const uint8_t* json, size_t length) override {
     return plain_.createValueFromJsonUtf8(json, length);
   }
+  Value createValueFromJsonASCII(const char* json, size_t length) override {
+    return plain_.createValueFromJsonASCII(json, length);
+  }
+  Value createValueFromJsonUtf16(const char16_t* json, size_t length) override {
+    return plain_.createValueFromJsonUtf16(json, length);
+  }
 
   Value createError(const String& msg) override {
     return plain().createError(msg);
@@ -906,6 +912,16 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
   Value createValueFromJsonUtf8(const uint8_t* json, size_t length) override {
     Around around{with_};
     return RD::createValueFromJsonUtf8(json, length);
+  }
+
+  Value createValueFromJsonASCII(const char* json, size_t length) override {
+    Around around{with_};
+    return RD::createValueFromJsonASCII(json, length);
+  }
+
+  Value createValueFromJsonUtf16(const char16_t* json, size_t length) override {
+    Around around{with_};
+    return RD::createValueFromJsonUtf16(json, length);
   }
 
   Object createObjectWithPrototype(const Value& prototype) override {

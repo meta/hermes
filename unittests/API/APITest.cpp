@@ -468,6 +468,129 @@ TEST_P(HermesRuntimeTest, CreateValueFromJsonUtf8IgnoresGlobalJSON) {
   EXPECT_EQ(v.getObject(*rt).getProperty(*rt, "a").getNumber(), 1);
 }
 
+TEST_P(HermesRuntimeTest, CreateValueFromJsonBuffersIgnoresGlobalJSON) {
+  // Both generators, including the thread-safe runtime, must use the native
+  // parser even if the JS fallback is unavailable.
+  eval("delete globalThis.JSON");
+  auto ascii = Value::createFromJsonASCII(*rt, "{\"a\":1}", 7).getObject(*rt);
+  EXPECT_EQ(ascii.getProperty(*rt, "a").getNumber(), 1);
+  auto utf16 =
+      Value::createFromJsonUtf16(*rt, u"[\"世界\",null]", 11).getObject(*rt);
+  auto array = utf16.getArray(*rt);
+  EXPECT_EQ(array.getValueAtIndex(*rt, 0).getString(*rt).utf16(*rt), u"世界");
+  EXPECT_TRUE(array.getValueAtIndex(*rt, 1).isNull());
+}
+
+TEST_P(HermesRuntimeTest, CreateValueFromJsonBuffersBoundsAndOwnership) {
+  // Exercise SIMD widths and string allocation/refill boundaries with exactly
+  // sized allocations, so ASan detects reads beyond the explicit buffer.
+  for (size_t length :
+       {0,
+        1,
+        7,
+        8,
+        15,
+        16,
+        17,
+        31,
+        32,
+        33,
+        255,
+        256,
+        257,
+        1023,
+        1024,
+        1025,
+        4096}) {
+    SCOPED_TRACE(length);
+    std::string json = "\"" + std::string(length, 'x') + "\"";
+    auto asciiBuffer = std::make_unique<char[]>(json.size());
+    std::copy(json.begin(), json.end(), asciiBuffer.get());
+    auto ascii =
+        Value::createFromJsonASCII(*rt, asciiBuffer.get(), json.size());
+    // Overwrite and free the input before inspecting the result.
+    std::fill_n(asciiBuffer.get(), json.size(), '!');
+    asciiBuffer.reset();
+    EXPECT_EQ(ascii.getString(*rt).utf8(*rt), std::string(length, 'x'));
+
+    std::u16string text(length, u'中');
+    if (length >= 2) {
+      text[length - 2] = 0xd83d;
+      text[length - 1] = 0xde00;
+    }
+    std::u16string utf16JSON = u"\"" + text + u"\"";
+    auto utf16Buffer = std::make_unique<char16_t[]>(utf16JSON.size());
+    std::copy(utf16JSON.begin(), utf16JSON.end(), utf16Buffer.get());
+    auto utf16 =
+        Value::createFromJsonUtf16(*rt, utf16Buffer.get(), utf16JSON.size());
+    std::fill_n(utf16Buffer.get(), utf16JSON.size(), u'!');
+    utf16Buffer.reset();
+    EXPECT_EQ(utf16.getString(*rt).utf16(*rt), text);
+  }
+
+  // Parsing must copy property names as well as string values. Repeated
+  // nested objects also exercise the parser's hidden-class cache.
+  std::u16string json = u"[{\"世界\":\"text\"},{\"世界\":\"text\"}]";
+  auto value = Value::createFromJsonUtf16(*rt, json.data(), json.size());
+  std::fill(json.begin(), json.end(), u'!');
+  rt->instrumentation().collectGarbage("JSON buffer ownership test");
+  auto array = value.getObject(*rt).getArray(*rt);
+  auto key = String::createFromUtf16(*rt, u"世界", 2);
+  for (size_t i = 0; i < 2; ++i) {
+    EXPECT_EQ(
+        array.getValueAtIndex(*rt, i)
+            .getObject(*rt)
+            .getProperty(*rt, key)
+            .getString(*rt)
+            .utf8(*rt),
+        "text");
+  }
+}
+
+TEST(HermesJSONBufferTest, ParseAcrossAllocations) {
+  auto runtime = makeHermesRuntime(
+      ::hermes::vm::RuntimeConfig::Builder()
+          .withGCConfig(
+              ::hermes::vm::GCConfig::Builder()
+                  .withSanitizeConfig(::hermes::vm::GCSanitizeConfig::Builder()
+                                          .withSanitizeRate(1)
+                                          .build())
+                  .build())
+          .build());
+  // In a handle-sanitizer build, every allocation moves the heap. The input
+  // remains outside it throughout parsing, including when an error is raised.
+  std::string ascii = "[";
+  for (unsigned i = 0; i < 64; ++i) {
+    if (i)
+      ascii += ',';
+    ascii += R"({"a":[1,true,null],"b":"text"})";
+  }
+  ascii += ']';
+  auto first = Value::createFromJsonASCII(*runtime, ascii.data(), ascii.size());
+  std::u16string utf16(ascii.begin(), ascii.end());
+  auto second =
+      Value::createFromJsonUtf16(*runtime, utf16.data(), utf16.size());
+  for (auto *value : {&first, &second}) {
+    auto array = value->getObject(*runtime).getArray(*runtime);
+    EXPECT_EQ(array.size(*runtime), 64);
+    EXPECT_EQ(
+        array.getValueAtIndex(*runtime, 63)
+            .getObject(*runtime)
+            .getProperty(*runtime, "b")
+            .getString(*runtime)
+            .utf8(*runtime),
+        "text");
+  }
+  ascii += '!';
+  utf16 += u'!';
+  EXPECT_THROW(
+      Value::createFromJsonASCII(*runtime, ascii.data(), ascii.size()),
+      JSError);
+  EXPECT_THROW(
+      Value::createFromJsonUtf16(*runtime, utf16.data(), utf16.size()),
+      JSError);
+}
+
 TEST_P(HermesRuntimeTest, DrainMicrotasksThrowsFinalizationRegistryError) {
   eval(R"(
     var target = {};

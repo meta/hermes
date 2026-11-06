@@ -730,6 +730,22 @@ CallResult<HermesValue> runtimeJSONParse(
   return parser.parse();
 }
 
+CallResult<HermesValue> runtimeJSONParseRef(Runtime &runtime, ASCIIRef json) {
+#ifndef NDEBUG
+  for (unsigned char ch : json)
+    assert(ch < 128 && "non-ASCII character in JSON input");
+#endif
+  RuntimeJSONParser<EncodingKind::ASCII> parser{
+      runtime, json, Runtime::makeNullHandle<Callable>()};
+  return parser.parse();
+}
+
+CallResult<HermesValue> runtimeJSONParseRef(Runtime &runtime, UTF16Ref json) {
+  RuntimeJSONParser<EncodingKind::UTF16> parser{
+      runtime, json, Runtime::makeNullHandle<Callable>()};
+  return parser.parse();
+}
+
 CallResult<HermesValue> runtimeJSONParseRef(
     Runtime &runtime,
     UTF16Stream &&stream) {

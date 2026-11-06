@@ -514,6 +514,27 @@ class JSI_EXPORT IRuntime : public ICast {
   // implementation creates a \c String and invokes JSON.parse.
   virtual Value createValueFromJsonUtf8(const uint8_t* json, size_t length) = 0;
 
+  /// Parse exactly \p length bytes of ASCII JSON from \p json, returning any
+  /// JSON value, including primitives. All bytes must be in [0, 127]; behavior
+  /// is undefined otherwise. The non-null buffer need not be NUL-terminated
+  /// and must remain readable and unchanged until this synchronous call
+  /// returns. No reference to it is retained. Invalid JSON throws JSError.
+  /// Like other IRuntime methods, this requires synchronized runtime access.
+  /// The default implementation creates a String and invokes JSON.parse.
+  virtual Value createValueFromJsonASCII(const char* json, size_t length) = 0;
+
+  /// Parse exactly \p length UTF-16 code units of JSON from \p json, returning
+  /// any JSON value, including primitives. The non-null buffer need not be
+  /// NUL-terminated and must remain readable and unchanged until this
+  /// synchronous call returns. No reference to it is retained. Lone surrogate
+  /// code units inside JSON strings are preserved. NUL is part of the input,
+  /// and a leading BOM or invalid JSON throws JSError. Like other IRuntime
+  /// methods, this requires synchronized runtime access. Parsing can allocate
+  /// and execute JavaScript in the default implementation, which creates a
+  /// String and invokes JSON.parse.
+  virtual Value createValueFromJsonUtf16(
+      const char16_t* json, size_t length) = 0;
+
   virtual Object createObject() = 0;
   virtual Object createObject(std::shared_ptr<HostObject> ho) = 0;
   virtual std::shared_ptr<HostObject> getHostObject(const jsi::Object&) = 0;
@@ -743,6 +764,8 @@ class JSI_EXPORT Runtime : public IRuntime {
   String createStringFromUtf16(const char16_t* utf16, size_t length) override;
 
   Value createValueFromJsonUtf8(const uint8_t* json, size_t length) override;
+  Value createValueFromJsonASCII(const char* json, size_t length) override;
+  Value createValueFromJsonUtf16(const char16_t* json, size_t length) override;
 
   Object createObjectWithPrototype(const Value& prototype) override;
   void setPrototypeOf(const Object& object, const Value& prototype) override;
@@ -1856,6 +1879,20 @@ class JSI_EXPORT Value {
   static Value
   createFromJsonUtf8(IRuntime& runtime, const uint8_t* json, size_t length) {
     return runtime.createValueFromJsonUtf8(json, length);
+  }
+
+  /// Parse a bounded ASCII buffer. See IRuntime::createValueFromJsonASCII for
+  /// the input, lifetime and error contracts.
+  static Value createFromJsonASCII(
+      IRuntime& runtime, const char* json, size_t length) {
+    return runtime.createValueFromJsonASCII(json, length);
+  }
+
+  /// Parse a bounded UTF-16 buffer. See IRuntime::createValueFromJsonUtf16 for
+  /// the input, lifetime and error contracts. Length is in UTF-16 code units.
+  static Value createFromJsonUtf16(
+      IRuntime& runtime, const char16_t* json, size_t length) {
+    return runtime.createValueFromJsonUtf16(json, length);
   }
 
   /// \return according to the Strict Equality Comparison algorithm, see:
