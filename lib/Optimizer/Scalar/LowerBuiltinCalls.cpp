@@ -18,6 +18,7 @@
 #include "llvh/Support/Debug.h"
 
 STATISTIC(NumLowered, "Number of builtin calls lowered");
+STATISTIC(NumImul, "Number of Math.imul builtin calls turned into ImulInst");
 
 /// Detect calls to builtin methods like `Object.keys()` and replace them with
 /// CallBuiltinInst.
@@ -124,8 +125,10 @@ LowerBuiltinCallsContext::findBuiltinMethod(
 /// \param callInst the call instruction to lower.
 /// \param loadProp the load property instruction that loads the builtin method.
 /// \param propLit the string literal that is the property name.
-/// \return whether a static builtin call was lowered.
-static bool tryLowerStaticBuiltin(
+/// \return the CallBuiltinInst that replaced \p callInst, or nullptr if it was
+///   left alone. The caller needs the replacement so it can run the same
+///   peephole over it as over a builtin call that was already there.
+static CallBuiltinInst *tryLowerStaticBuiltin(
     IRBuilder &builder,
     Function *F,
     CallInst *callInst,
@@ -136,13 +139,13 @@ static bool tryLowerStaticBuiltin(
   auto *loadGlobalProp =
       llvh::dyn_cast<BaseLoadPropertyInst>(loadProp->getObject());
   if (!loadGlobalProp)
-    return false;
+    return nullptr;
   if (!llvh::isa<GlobalObject>(loadGlobalProp->getObject()))
-    return false;
+    return nullptr;
   LiteralString *objLit =
       llvh::dyn_cast<LiteralString>(loadGlobalProp->getProperty());
   if (!objLit)
-    return false;
+    return nullptr;
 
   // Uncomment this to get a dump of all global calls detected during
   // compilation.
@@ -152,7 +155,7 @@ static bool tryLowerStaticBuiltin(
   auto builtinIndex =
       builtins.findBuiltinMethod(objLit->getValue(), propLit->getValue());
   if (!builtinIndex)
-    return false;
+    return nullptr;
 
   LLVM_DEBUG(
       llvh::dbgs() << "Found builtin [" << (int)*builtinIndex << "] "
@@ -162,20 +165,24 @@ static bool tryLowerStaticBuiltin(
   // -fstatic-builtins is enabled.
   if (objLit->getValue() != builtins.hermesInternalID &&
       !F->getContext().getOptimizationSettings().staticBuiltins) {
-    return false;
+    return nullptr;
   }
 
   builder.setInsertionPoint(callInst);
   builder.setLocation(callInst->getLocation());
 
+  // The rewrite discards argument 0, the receiver: getNumArguments() counts
+  // it, and a builtin call does not read it, so there is no condition on its
+  // value.
   llvh::SmallVector<Value *, 8> args{};
   unsigned numArgsExcludingThis = callInst->getNumArguments() - 1;
   args.reserve(numArgsExcludingThis);
   for (unsigned i = 0; i < numArgsExcludingThis; ++i)
     args.push_back(callInst->getArgument(i + 1));
 
-  auto *callBuiltin = builder.createCallBuiltinInst(*builtinIndex, args);
-  callInst->replaceAllUsesWith(callBuiltin);
+  CallBuiltinInst *replacement =
+      builder.createCallBuiltinInst(*builtinIndex, args);
+  callInst->replaceAllUsesWith(replacement);
   callInst->eraseFromParent();
 
   // The property access instructions are not normally optimizable since
@@ -186,6 +193,49 @@ static bool tryLowerStaticBuiltin(
     loadGlobalProp->eraseFromParent();
 
   ++NumLowered;
+  return replacement;
+}
+
+/// Replace a builtin call to Math.imul with ImulInst, which computes it
+/// inline instead of calling out to the builtin. This runs on every
+/// CallBuiltinInst the pass walks over, not only on the ones it creates
+/// itself, so a Math.imul builtin call from any producer running before this
+/// pass becomes the instruction as well. The pass runs in both backend
+/// lowering pipelines at every optimization level, which today is every
+/// producer there is.
+/// \return true if \p callBuiltin was replaced.
+static bool tryLowerImulBuiltin(
+    IRBuilder &builder,
+    CallBuiltinInst *callBuiltin) {
+  if (callBuiltin->getBuiltinIndex() != BuiltinMethod::Math_imul)
+    return false;
+
+  builder.setInsertionPoint(callBuiltin);
+  builder.setLocation(callBuiltin->getLocation());
+
+  // Argument 0 is the receiver, which Math.imul ignores. It reads exactly two
+  // arguments: a missing one is undefined and ToInt32(undefined) is 0, so pad
+  // with the literal 0 instead. Same value, but a literal number leaves the
+  // padded operand statically numeric, so ImulInst can still be idempotent
+  // when the arguments that were supplied are numbers -- padding with
+  // undefined would make it unconditionally opaque. Arguments past the second
+  // are dropped; they were already evaluated by their own instructions, which
+  // is exactly what the builtin does with them.
+  auto arg = [callBuiltin, &builder](unsigned index) -> Value * {
+    return index + 1 < callBuiltin->getNumArguments()
+        ? callBuiltin->getArgument(index + 1)
+        : builder.getLiteralNumber(0);
+  };
+  // Evaluation order of function arguments is unspecified, so read the
+  // operands into locals first.
+  Value *left = arg(0);
+  Value *right = arg(1);
+
+  auto *imul = builder.createImulInst(left, right);
+  callBuiltin->replaceAllUsesWith(imul);
+  callBuiltin->eraseFromParent();
+
+  ++NumImul;
   return true;
 }
 
@@ -309,29 +359,40 @@ static bool run(Function *F, bool optimize) {
     for (auto it = BB.begin(), e = BB.end(); it != e;) {
       // Get a pointer to the instruction and increment the iterator so we
       // can delete the instruction if we want to.
-      auto *inst = &*it++;
+      Instruction *inst = &*it++;
 
-      if (inst->getKind() != ValueKind::CallInstKind)
-        continue;
-      auto *callInst = cast<CallInst>(inst);
-      auto *loadProp =
-          llvh::dyn_cast<BaseLoadPropertyInst>(callInst->getCallee());
-      if (!loadProp)
-        continue;
-      auto propLit = llvh::dyn_cast<LiteralString>(loadProp->getProperty());
-      if (!propLit)
-        continue;
+      // CallBuiltinInst is a sibling of CallInst, not a subclass, so an
+      // existing builtin call skips this block and goes straight to the
+      // peephole below.
+      if (inst->getKind() == ValueKind::CallInstKind) {
+        auto *callInst = cast<CallInst>(inst);
+        auto *loadProp =
+            llvh::dyn_cast<BaseLoadPropertyInst>(callInst->getCallee());
+        if (!loadProp)
+          continue;
+        auto propLit = llvh::dyn_cast<LiteralString>(loadProp->getProperty());
+        if (!propLit)
+          continue;
 
-      if (tryLowerStaticBuiltin(builder, F, callInst, loadProp, propLit)) {
+        CallBuiltinInst *lowered =
+            tryLowerStaticBuiltin(builder, F, callInst, loadProp, propLit);
+        if (!lowered) {
+          if (optimize &&
+              builtins.shouldTryOptimizeCalleeName(propLit->getValue())) {
+            // Add to the worklist for later processing. We can't process it
+            // now because we don't want to alter the BasicBlock list.
+            callsToOptimize.push_back(callInst);
+          }
+          continue;
+        }
         changed = true;
-        continue;
+        // Fall through, so the builtin call we just created is peepholed
+        // exactly like one that was already here.
+        inst = lowered;
       }
-      if (optimize &&
-          builtins.shouldTryOptimizeCalleeName(propLit->getValue())) {
-        // Add to the worklist for later processing. We can't process it now
-        // because we don't want to alter the BasicBlock list.
-        callsToOptimize.push_back(callInst);
-      }
+
+      if (auto *callBuiltin = llvh::dyn_cast<CallBuiltinInst>(inst))
+        changed |= tryLowerImulBuiltin(builder, callBuiltin);
     }
   }
 

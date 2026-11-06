@@ -756,6 +756,33 @@ class InstSimplifyImpl {
     return (reduced == asUint32) ? nullptr : reduced;
   }
 
+  /// Math.imul on two literals is a pure 32-bit multiply, so evaluate it
+  /// here. Both operands must be literals that evalToInt32 can convert, and
+  /// it converts only literals whose ToInt32 runs nothing and cannot throw:
+  /// numbers, booleans, null and undefined (not yet strings). It refuses
+  /// BigInt, whose ToInt32 throws a TypeError, so that instruction is left
+  /// alone to throw at run time. Getting this wrong would be silent -- the
+  /// driver destroys the instruction as soon as we hand back a replacement, so
+  /// a coercion we skipped is a coercion nobody performs.
+  Value *simplifyImul(ImulInst *imul) {
+    auto *left = llvh::dyn_cast<Literal>(imul->getLeft());
+    auto *right = llvh::dyn_cast<Literal>(imul->getRight());
+    if (!left || !right)
+      return nullptr;
+
+    LiteralNumber *leftInt = evalToInt32(builder_, left);
+    LiteralNumber *rightInt = evalToInt32(builder_, right);
+    if (!leftInt || !rightInt)
+      return nullptr;
+
+    // Multiply as unsigned to avoid signed overflow UB, then reinterpret the
+    // result as signed: that is the product modulo 2^32 that Math.imul is
+    // defined to return.
+    uint32_t product = static_cast<uint32_t>(leftInt->truncateToInt32()) *
+        static_cast<uint32_t>(rightInt->truncateToInt32());
+    return builder_.getLiteralNumber(static_cast<int32_t>(product));
+  }
+
   Value *simplifyAddEmptyString(AddEmptyStringInst *AES) {
     auto *op = AES->getSingleOperand();
 
@@ -1087,6 +1114,8 @@ class InstSimplifyImpl {
         return simplifyAsInt32(cast<AsInt32Inst>(I));
       case ValueKind::AsUint32InstKind:
         return simplifyAsUint32(cast<AsUint32Inst>(I));
+      case ValueKind::ImulInstKind:
+        return simplifyImul(cast<ImulInst>(I));
       case ValueKind::AddEmptyStringInstKind:
         return simplifyAddEmptyString(cast<AddEmptyStringInst>(I));
       case ValueKind::ToPropertyKeyInstKind:
