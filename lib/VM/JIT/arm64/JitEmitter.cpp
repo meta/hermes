@@ -622,6 +622,27 @@ void Emitter::callRuntimeWithSavedIPIndirect(
   }
 }
 
+void Emitter::callRuntimeWithSavedIPIndirect(
+    const a64::Mem &slot,
+    const char *name) {
+  assert(
+      !(slot.hasBaseReg() && slot.baseId() == xScratch.id()) &&
+      "saving the IP clobbers xScratch");
+  // Save the current IP in the runtime.
+  getBytecodeIP(xScratch);
+  a.str(xScratch, a64::Mem(xRuntime, RuntimeOffsets::currentIP));
+
+  comment("// call %s", name);
+  a.ldr(xScratch, slot);
+  a.blr(xScratch);
+
+  if (emitAsserts_) {
+    // Invalidate the current IP to make sure it is set before the next call.
+    a.mov(xScratch, Runtime::kInvalidCurrentIP);
+    a.str(xScratch, a64::Mem(xRuntime, RuntimeOffsets::currentIP));
+  }
+}
+
 void Emitter::callRuntimeIndirect(uint64_t slotAddr, const char *name) {
   comment("// call %s", name);
   // The slot's ADDRESS is the constant baked into the code; the callee is

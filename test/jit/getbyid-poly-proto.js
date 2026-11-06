@@ -46,3 +46,5 @@ main();
 // DUMP: JIT successfully compiled FunctionID {{[0-9]+}}, 'get' (version 2)
 // DUMP-NEXT: JIT ById sites: 1 recorded, 1 polymorphic, 0 megamorphic
 // CNT: NumRecompiles: 1{{$}}
+// A chain that misses keeps declining and demotes; 0 proves the entries hit.
+// CNT: NumByIdDemotions: 0{{$}}

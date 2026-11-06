@@ -347,15 +347,16 @@ cache-hit protocol inline, in up to three tiers:
    (`Emit_sh_shv_decode` shares the multi-case decode tail across load
    sites).
 
-On x86-64, `GetById`, `GetByIdShort` and `GetByIdLong` have a fourth tier,
-the **polymorphic chain**, which replaces tiers 1 and 2 when the site's shape
-record (see "GetById shape records" under "Recompilation") holds at least one
-live entry. In practice that means a recompiled body, since a first compile
-starts from empty records. A tier 1 or tier 2 specialization is itself written
-into the record as an emitted entry, so once a site has a specialization,
-every later version emits at least a one-entry chain for it (emission is
-monotone). `TryGetById*`, `GetByIdWithReceiver*` and sites with
-`cacheIdx == PROPERTY_CACHING_DISABLED` never get a chain.
+On both backends, `GetById`, `GetByIdShort` and `GetByIdLong` have a fourth
+tier, the **polymorphic chain**, which replaces tiers 1 and 2 when the
+site's shape record (see "GetById shape records" under "Recompilation")
+holds at least one live entry. In practice that means a recompiled body,
+since a first compile starts from empty records. A tier 1 or tier 2
+specialization is itself written into the record as an emitted entry, so
+once a site has a specialization, every later version emits at least a
+one-entry chain for it (emission is monotone). `TryGetById*`,
+`GetByIdWithReceiver*` and sites with `cacheIdx == PROPERTY_CACHING_DISABLED`
+never get a chain.
 
 - **Entries.** Up to `JitByIdSiteRecord::kMaxEntries` (4). An own entry is a
   receiver class and a slot in the receiver; a prototype entry is a receiver
@@ -368,6 +369,15 @@ monotone). `TryGetById*`, `GetByIdWithReceiver*` and sites with
   entry is skipped; one that gets no ID is skipped and marked
   `unemittable`; the rest are marked `emitted`. If no entry survives, the
   site falls back to tiers 1-3 exactly as before.
+- **Registers.** The same on both backends: `temp1` = object, `temp2` =
+  compressed receiver class, `temp3` = receiver `lazyJITId`, and `temp4`
+  holds the parent in the prototype block. On arm64 only, `xTemp4` is also
+  the large-offset temporary for an out-of-line own load. ID compares on
+  arm64 go through `emit_cmp_imm32(a, reg.w(), id, xScratch.w())`: an ID
+  that `a64::Utils::isAddSubImm` rejects (above 4095 and not a multiple of
+  4096 below 2^24) is first materialized in `w16` (`mov w16, <id>; cmp wN,
+  w16`), which is free inline. The pin test uses IDs above 4095 that
+  `isAddSubImm` rejects for this.
 - **Layout.** The non-object check jumps straight to the slow call. Then
   `temp1` = object, `temp2` = compressed receiver class, `temp3` = receiver
   `lazyJITId` (decoded without clobbering `temp2`). Own entries come first,
@@ -387,8 +397,8 @@ monotone). `TryGetById*`, `GetByIdWithReceiver*` and sites with
 - The dump comments it `// Get polymorphic chain (N entries)`.
 
 Miss → out-of-line call to `_sh_ljs_get_by_id_rjs`/`_sh_ljs_try_get_by_id_rjs`
-with the cache-entry address; on x86-64, GetById-family sites that have a
-read cache entry instead call `_jit_get_by_id` (or, once demoted,
+with the cache-entry address; on both backends, GetById-family sites that
+have a read cache entry instead call `_jit_get_by_id` (or, once demoted,
 `_sh_ljs_get_by_id_rjs`) indirectly through the site's helper slot. Sites
 without one keep the direct call. Writes have an inline tier on both backends
 (`emitPutByIdInlineTier`, see "Inline write barrier" below): when
@@ -696,12 +706,11 @@ inline by version 2 and never reach its helper at all.
 
 **Trigger.** `_jit_put_by_id` is the only ById write helper that
 carries a version record, so it was the only trigger site in v1 (the
-ByVal recording helpers and, on x86-64, `_jit_get_by_id` joined later;
-see below): every
-call into it is a decline of the inline PutById tier, and it bumps the
-CALLING body's own `declineCount` -- the helper receives the calling
-body's `JitVersionData` directly, and reaches the `CodeBlock` through
-its back-pointer. At that body's own decline threshold -- snapshotted
+ByVal recording helpers and `_jit_get_by_id` joined later;
+see below): every call into it is a decline of the inline PutById tier,
+and it bumps the CALLING body's own `declineCount` -- the helper receives
+the calling body's `JitVersionData` directly, and reaches the `CodeBlock`
+through its back-pointer. At that body's own decline threshold -- snapshotted
 into its `JitVersionData` when it was compiled, default 64, set by
 `-Xjit-recompile-threshold` -- it hands off to
 `JITContext::considerRecompile`, which resets the
@@ -716,10 +725,9 @@ at least one of those specific caches now names a class. If that check
 fails -- a polymorphic function whose tiers are already emitted -- the
 counter resets and the budget is kept. In v1, declines from GetById
 alone did not trigger, since the shared SH GetById helper has no
-version record to carry the counter; on x86-64 the GetById family now
-goes through `_jit_get_by_id`, which does (see "GetById shape
-records" below). arm64 GetById still calls the SH helper directly and
-does not trigger.
+version record to carry the counter; on both backends the GetById
+family now goes through `_jit_get_by_id`, which does (see "GetById
+shape records" below).
 
 **Install.** A passing check recompiles synchronously, right there --
 compilation never runs JS, so there is no reentrancy. The candidate
@@ -1121,11 +1129,12 @@ encode step at all, so nothing it emits references
 `HERMESVM_SANITIZE_HANDLES`). Benchmark:
 `benchmarks/jit-benches/typed-array-index.js`.
 
-**GetById shape records (x86-64).** GetById now records and triggers like the
-ByVal family, with its own record type. Full design:
-`doc/superpowers/specs/2026-10-14-jit-getbyid-polymorphic-design.md`. arm64
-GetById still calls `_sh_ljs_get_by_id_rjs` directly and records nothing; its
-`byIdSites` stays empty, and the shared code below is inert there.
+**GetById shape records (x86-64 and arm64).** GetById now records and
+triggers like the ByVal family, with its own record type. Full design:
+`doc/superpowers/specs/2026-10-14-jit-getbyid-polymorphic-design.md`, with
+the arm64 port in its "arm64 addendum" and "arm64 delivered" sections. The
+shared code below runs on both backends; only the call sequence and the chain
+emitter differ.
 
 - **Records.** `JitConsumerRecords::byIdSites` is a second vector of owning
   pointers, beside `byValSites`, to `JitByIdSiteRecord`s keyed by the GetById
@@ -1144,8 +1153,14 @@ GetById still calls `_sh_ljs_get_by_id_rjs` directly and records nothing; its
   its record's helper slot, initialized (only if null) to `_jit_get_by_id`,
   which takes the plain helper's four arguments plus the version record (`r8`)
   and the site's record (`r9`). The call is `call [r9 + offset of helper]`,
-  so the helper needs no lookup to find its record. A demoted slot holds the
-  four-argument `_sh_ljs_get_by_id_rjs`, which ignores the extra registers. The helper
+  so the helper needs no lookup to find its record. On arm64 the call
+  passes `x0` runtime, `x1` &source, `w2` symbol ID, `x3` cache entry, `x4`
+  version record and `x5` the `JitByIdSiteRecord *`; the IP is saved first,
+  then `ldr x16, [x5, #ofs]` (ofs = `&site->helper - site`, 128 on HV64,
+  asserted to fit the scaled `ldr` immediate) and `blr x16`, through the
+  `callRuntimeWithSavedIPIndirect(const a64::Mem &, name)` overload. A
+  demoted slot holds the four-argument `_sh_ljs_get_by_id_rjs`, which ignores
+  the extra registers (`r8`/`r9` on x86-64, `x4`/`x5` on arm64). The helper
   forwards to `_sh_ljs_get_by_id_rjs` and pins the result in a `Locals` only
   after the call returns (a throwing lookup longjmps past the helper, which
   must not leave a `LocalsRAII` registered; see `DESIGN-PRINCIPLES.md`).
@@ -1195,7 +1210,8 @@ GetById still calls `_sh_ljs_get_by_id_rjs` directly and records nothing; its
   body emitted a chain, including one-entry chains carried forward from a
   single-shape specialization.
 
-Tests: `test/jit/x86-64/getbyid-record-{demote,demote-delay,throw}.js` and
+Tests, all in `test/jit/` and run on both backends:
+`getbyid-record-{demote,demote-delay,throw}.js` and
 `getbyid-poly-*.js` (own, prototype and mixed shapes, megamorphic, the
 threshold boundary, monotone carry-forward, invalidation of an installed
 chain, the generic-tier join, cacheable dictionaries, ID exhaustion, a dead
@@ -1204,7 +1220,13 @@ collecting recompile). The GC and rooting tests pass `-gc-sanitize-handles=1`.
 A `HERMESVM_SANITIZE_HANDLES` build moves the heap at only 1% of allocations
 by default, and the flag makes it move every live object at every allocation.
 Builds without the sanitizer ignore the flag. Run them on a MallocGC +
-`HERMESVM_SANITIZE_HANDLES` tree to get that coverage.
+`HERMESVM_SANITIZE_HANDLES` tree to get that coverage; only the x86-64 tree
+exists in that configuration, so the arm64 runs of these tests are
+functional only. The two rooted tests pin instruction text, so their pins are
+split per backend with `%jit_arch_prefix` (`DUMPX86:` / `DUMPARM64:`).
+`getbyid-poly-emitted-arm64.js` pins the arm64 recording call and the chain's
+`ldrh` and `w16` compares; `getbyid-poly-bigslot.js` covers out-of-line slots
+at 32 KiB, where the arm64 load needs its temporary register.
 
 ### Arithmetic, comparisons and NaN handling
 

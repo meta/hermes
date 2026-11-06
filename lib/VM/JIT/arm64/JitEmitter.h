@@ -501,6 +501,15 @@ class Emitter {
     return versionData_->consumerRecords->findOrCreateByValSite(siteId);
   }
 
+  /// \return the candidate version record's ById site entry for
+  /// \p siteId, creating the records and/or entry if absent. The
+  /// entry's address is stable and may be embedded in code.
+  JitByIdSiteRecord &byIdSiteRecord(uint32_t siteId) {
+    if (!versionData_->consumerRecords)
+      versionData_->consumerRecords = std::make_unique<JitConsumerRecords>();
+    return versionData_->consumerRecords->findOrCreateByIdSite(siteId);
+  }
+
   /// Create an Emitter, but do not emit any actual code.
   /// Use \c enter to set up the stack frame before emitting the actual code.
   explicit Emitter(
@@ -838,9 +847,10 @@ class Emitter {
       FR frReceiver,
       bool isStrict);
 
-#define DECL_GET_BY_ID(methodName, commentStr, shFn)                           \
+#define DECL_GET_BY_ID(methodName, commentStr, shFn, recording)                \
   void methodName(FR frRes, SHSymbolID symID, FR frSource, uint8_t cacheIdx) { \
-    getByIdImpl(frRes, symID, frSource, cacheIdx, commentStr, shFn, #shFn);    \
+    getByIdImpl(                                                               \
+        frRes, symID, frSource, cacheIdx, commentStr, shFn, #shFn, recording); \
   }
 
   void getByIdWithReceiver(
@@ -851,8 +861,8 @@ class Emitter {
       uint8_t cacheIdx);
   void getByValWithReceiver(FR frRes, FR frSource, FR frKey, FR frReceiver);
 
-  DECL_GET_BY_ID(getById, "getById", _sh_ljs_get_by_id_rjs)
-  DECL_GET_BY_ID(tryGetById, "tryGetById", _sh_ljs_try_get_by_id_rjs)
+  DECL_GET_BY_ID(getById, "getById", _sh_ljs_get_by_id_rjs, true)
+  DECL_GET_BY_ID(tryGetById, "tryGetById", _sh_ljs_try_get_by_id_rjs, false)
 
 #define DECL_PUT_BY_ID(methodName, strictMode, tryProp)                   \
   void methodName(                                                        \
@@ -1335,6 +1345,12 @@ class Emitter {
   /// \p name is used only for the disassembly comment.
   void callRuntimeWithSavedIPIndirect(uint64_t slotAddr, const char *name);
 
+  /// Like the uint64_t overload, but the helper pointer is loaded from
+  /// \p slot, a memory operand whose base register is already set up
+  /// (e.g. a site record passed as an argument). The base must not be
+  /// xScratch, which saving the IP clobbers.
+  void callRuntimeWithSavedIPIndirect(const a64::Mem &slot, const char *name);
+
   /// Indirect sibling of callRuntime: emits
   /// `mov xScratch, slotAddr; ldr xScratch, [xScratch]; blr xScratch`,
   /// calling whatever function pointer currently lives at \p slotAddr
@@ -1480,6 +1496,9 @@ class Emitter {
   void getByValImpl(FR frRes, FR frSource, FR frKey);
 
   class GetByIdImpl;
+  /// Emit a GetById-style read through the read property cache.
+  /// \param recording true for the GetById family: record shapes through
+  ///   the site's helper slot.
   void getByIdImpl(
       FR frRes,
       SHSymbolID symID,
@@ -1491,7 +1510,8 @@ class Emitter {
           const SHLegacyValue *source,
           SHSymbolID symID,
           SHReadPropertyCacheEntry *propCacheEntry),
-      const char *shImplName);
+      const char *shImplName,
+      bool recording);
 
   void putByIdImpl(
       FR frTarget,

@@ -6,7 +6,7 @@
  */
 
 // RUN: %hermes -gc-sanitize-handles=1 -fno-inline -Xjit=force -Xjit-crash-on-error -Xjit-recompile-threshold=16 %s | %FileCheck --match-full-lines %s
-// RUN: %hermes -fno-inline -Xjit=force -Xjit-crash-on-error -Xjit-recompile-threshold=16 -Xdump-jitcode=3 %s | %FileCheck --check-prefix=DUMP %s
+// RUN: %hermes -fno-inline -Xjit=force -Xjit-crash-on-error -Xjit-recompile-threshold=16 -Xdump-jitcode=3 %s | %FileCheck --check-prefixes=DUMP,DUMP%jit_arch_prefix %s
 // REQUIRES: jit
 
 // The string twin of getbyid-poly-rooted-obj.js: a heap-string result
@@ -45,5 +45,6 @@ main();
 // DUMP: JIT compilation of FunctionID {{[0-9]+}}, 'get' (version 2)
 // DUMP: // Get polymorphic chain (4 entries)
 // DUMP-NOT: cmp
-// DUMP: cmp {{[a-z0-9]+}}, 1{{$}}
+// DUMPX86: cmp {{[a-z0-9]+}}, 1{{$}}
+// DUMPARM64: cmp w{{[0-9]+}}, 1{{$}}
 // DUMP: JIT successfully compiled FunctionID {{[0-9]+}}, 'get' (version 2)

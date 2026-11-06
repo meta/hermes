@@ -712,3 +712,162 @@ for lukewarm functions would need a function-level hotness signal.
 **Deferred:** the two demotion bookkeeping items (dz `01a13df8-9739`,
 `01a13df8-974e`) showed no measurable cost and do not change behavior
 the arm64 port depends on.
+
+## arm64 addendum (2026-10-14)
+
+Ports the emitter side to lib/VM/JIT/arm64 (dz `01a13d77`). Records,
+`_jit_get_by_id`, eligibility, progress, demotion, carry-forward,
+retirement and GC tracing are shared code, already built and tested
+on arm64 (see "Matrix"). Everything in "Emission (x86-64)" applies
+unless stated below; correctness-only, since qemu timings are
+meaningless (aarch64/README.md, "Limitations").
+
+**Recording call (AAPCS64).** For the GetById family with a cache
+entry: x0 = runtime, x1 = &source, w2 = symID, x3 = cache entry
+(as today, arm64/JitEmitter-property.cpp ~873-883), x4 = version
+record, x5 = the site's `JitByIdSiteRecord *`. The call saves the IP
+first (`getBytecodeIP(xScratch)` clobbers x16), then
+`ldr x16, [x5, #helperOfs]` and `blr x16`, through a new
+`callRuntimeWithSavedIPIndirect(const a64::Mem &slot, name)` overload
+next to the uint64_t one (arm64/JitEmitter.cpp ~608), asserting the
+slot's base is not xScratch. `helperOfs` is computed from the record
+(`&site->helper - site`), as on x86 (the type is not standard-layout);
+it is 8-aligned and far below the scaled imm12 limit (32760). A
+demoted slot holds the 4-argument `_sh_ljs_get_by_id_rjs`, which
+ignores x4/x5 under AAPCS64. `TryGetById*`, `GetByIdWithReceiver*` and
+`PROPERTY_CACHING_DISABLED` sites keep the direct call.
+
+**Records and legacy recording.** `Emitter::byIdSiteRecord` on arm64
+mirrors x86's; `GetByIdImpl` gains `recording_`/`site_`;
+`emitObjectSpecialization`/`emitParentSpecialization` record their
+shape as emitted, exactly as on x86. The `DECL_GET_BY_ID` macro gains
+the recording flag (`getById` true, `tryGetById` false).
+
+**Chain register contract.** Entry: `xTemp1` = object, `xTemp2` =
+compressed receiver class. `xTemp3` = receiver lazyJITId, decoded with
+`emit_sh_cp_decode_non_null_preserve_input(a, xTemp3, xTemp2)` + `ldrh`,
+loaded even with zero own entries. Own entries: compare `xTemp3`
+against the ID, then `emitLoadFromSlot(hwRes, xTemp1, xTemp4, slot)`
+(xTemp4 is the large-offset temporary; it is otherwise unused there).
+Prototype block: `xTemp4` = parent, the receiver class's `objectParent`
+(class decoded from `xTemp2` with
+`emit_sh_cp_decode_non_null_preserve_input`; `cbz` → join), `xTemp2` =
+parent lazyJITId; each entry compares `xTemp3` then `xTemp2`, then
+`emitLoadFromSlot(hwRes, xTemp4, xTemp2, slot)` (xTemp2 is dead on the
+hit path). ID compares use `emit_cmp_imm32(a, reg.w(), id,
+xScratch.w())`: an ID that `a64::Utils::isAddSubImm` rejects (above
+4095 and not a multiple of 4096 below 2^24) cannot be a compare
+immediate, and x16 is free inline (compressed-pointer decode uses only
+xRuntime; existing emitters already pass xScratch to emit_cmp_imm32,
+arm64/JitEmitter-internal.h ~808). Join: reload `xTemp2 =
+obj->clazz` from `xTemp1` when the prototype block was emitted. hwRes
+may alias any temp; it is written only on hit paths, each ending in
+`b contLab`. One decoder per site: chain loads use `emitFirstCase` +
+`b contLab`; the generic tier's indirect `emitAll` stays the single
+rest-case emission.
+
+**Tests.** Following the arm64 parity precedent (2026-09-18 spec,
+"Tests"): every GetById test in test/jit/x86-64/ that pins only
+banners, comment strings, counters and output moves to test/jit/ with
+`git mv` (all getbyid-record-* and getbyid-poly-*; only the two
+rooted tests pin instruction text). The two rooted tests'
+`cmp ..., 1` pins become `X86:`/`ARM64:` lines via
+`%jit_arch_prefix` (asmjit's arm64 logger prints `cmp wN, 1`, no `#`).
+count.js and recompile-phased-warming.js turn their `X86-NEXT:` ById
+lines back into `CHECK-NEXT:` in the same change as the emitter (arm64
+starts printing them there). A new arch-neutral bigslot test covers
+out-of-line slots whose byte offset reaches 32 KiB, where arm64's
+load needs its temporary register. x86-64/exceptions.js
+stays put. New `getbyid-poly-emitted-arm64.js` (`REQUIRES:
+jit-arch-arm64`) pins the recording call (`ldr x16, [x5, N]`,
+`blr x16`) and a chain's `ldrh` and its compares through w16. Relocated tests carry their
+existing gates; the MallocGC/handle-sanitizer runs stay x86-only
+(there is no arm64 MallocGC tree).
+
+**Gates.** All three arm64 trees (HV64, HV32, BOXED): rebuild
+cmake-build-host first, then `aarch64/qemu-sanity.sh` and the JIT
+suite under qemu. x86-64: the JIT suite on cmake-build-x86jit with the
+same pass count after relocation, the getbyid- tests on
+cmake-build-x86jit-hsan, and no changes under lib/VM/JIT/x86-64/ or
+the shared driver. Prove-can-fail on arm64 (qemu): drop the legacy
+recording (monotone fails), skip the join reload (generic-join fails),
+break a prototype compare (proto test fails), and use `emitAll` at a
+chain load (the Debug assertion that rest cases are emitted once
+fires).
+
+## arm64 delivered (2026-10-14)
+
+The arm64 backend now emits the recording call, legacy-shape recording
+and the polymorphic chain, as the addendum above specified. The shared
+driver, the x86-64 emitter and the helper are unchanged.
+
+**Commits.**
+
+- `a66ca7335` -- the arm64 emitter, `getbyid-poly-emitted-arm64.js`,
+  `getbyid-poly-bigslot.js`, and `count.js` /
+  `recompile-phased-warming.js` back to shared `CHECK-NEXT:` ById lines.
+- `addd6b51b` -- 19 GetById tests moved from `test/jit/x86-64/` to
+  `test/jit/`; the rooted tests' instruction pins split per backend via
+  `%jit_arch_prefix`; an assert that `helperOfs` fits the scaled `ldr`
+  immediate; the `lit.local.cfg` comment updated.
+- `6049e320e` -- `getbyid-poly-proto.js` pins `NumByIdDemotions: 0`, the
+  observable that prototype entries hit (see the deviation below).
+
+**Call sequence.** `x0` runtime, `x1` &source, `w2` symbol ID, `x3`
+cache entry, `x4` version record, `x5` `JitByIdSiteRecord *`. The IP is
+saved first, then `ldr x16, [x5, #ofs]` (128 on HV64, the offset of
+`helper` in the record) and `blr x16`, through a new
+`callRuntimeWithSavedIPIndirect(const a64::Mem &, name)` overload on
+`Emitter`. It asserts the slot's base register is not `xScratch`, since
+the IP save and the slot load both use it. Chain ID compares go through
+`emit_cmp_imm32(..., xScratch.w())`, i.e. `mov w16, <id>; cmp wN, w16`
+for IDs that `a64::Utils::isAddSubImm` rejects. The pin test uses IDs
+above 4095 that `isAddSubImm` rejects. The register contract is the
+addendum's.
+
+**Results.**
+
+| Tree | qemu-sanity | JIT suite |
+|---|---|---|
+| `cmake-build-arm64` (HV64) | 9/9 | 126 pass, 31 unsupported |
+| `cmake-build-arm64-hv32` | 9/9 | 126 pass, 31 unsupported |
+| `cmake-build-arm64-boxed` | 9/9 | 126 pass, 31 unsupported |
+| `cmake-build-x86jit` | -- | 149 pass, 8 unsupported |
+| `cmake-build-x86jit-hsan` (`getbyid-`) | -- | 11 pass, 13 unsupported, 0 fail |
+
+`cmake-build-host` was rebuilt before each arm64 tree. The pin test
+takes about 8 s per RUN line under qemu.
+
+**Mutations that failed** (each reverted afterwards):
+
+- A, drop the legacy recording and `addCacheShape`:
+  `getbyid-poly-monotone.js` fails (3 entries expected, 2 emitted).
+- B, drop the join reload of `xTemp2`: `getbyid-poly-generic-join.js`
+  fails.
+- C, compare `xTemp3` (the receiver ID) against `p.protoId` in the
+  prototype loop: `getbyid-poly-proto.js` fails through
+  `NumByIdDemotions` 1 (the same mutation fails it on x86-64).
+- D, `emitAll` at an own-entry load: the Debug assertion "Rest cases
+  already emitted" fires, observed on `cmake-build-arm64-boxed`.
+- Task 1's pin mutations (`site_ = nullptr`; `xTemp2` vs `wzr`) fail the
+  pin test.
+- E, the large-offset branch of `emit_load_from_base_offset` (byte
+  offsets of 32 KiB and up, the only branch that uses the temporary)
+  materializes `offset / WIDTH + 1`: of the 24 GetById tests on
+  `cmake-build-arm64`, only `getbyid-poly-bigslot.js` fails (wrong
+  values), so it is the test that covers that branch. An off-by-one in
+  `emitLoadFromSlot`'s out-of-line slot index (all out-of-line slots)
+  fails both bigslot and `getbyid-poly-edge.js`, while the direct-slot
+  tests pass. Green again on all three arm64 trees after the revert.
+  (Passing `xTemp1` as the temporary only trips the "tmpReg must differ
+  from objReg" assertion at the top of `emitLoadFromSlot`, which any
+  own-entry chain load reaches, so it does not isolate this path.)
+
+**Deviation from the addendum.** The addendum's mutation C ("break a
+prototype compare") did not fail the prototype test as first written,
+because a chain miss falls through to the generic tier and the helper,
+which give correct results anyway. The test now pins
+`NumByIdDemotions: 0`. A chain whose prototype compares always miss
+keeps declining to the helper and demotes the site, so the counter
+reads 1 under the mutation (on arm64 and x86-64) and 0 when the entries
+hit. Commit `6049e320e`. Nothing else differed from the addendum.
