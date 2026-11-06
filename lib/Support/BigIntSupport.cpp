@@ -1777,6 +1777,23 @@ static OperationStatus compute(
     return OperationStatus::DIVISION_BY_ZERO;
   }
 
+  // Fast path: if lhs < rhs (in absolute value), then quotient is 0 and
+  // remainder is lhs. This avoids expensive division computation.
+  if (lhs.numDigits < rhs.numDigits) {
+    // Quotient is 0
+    if (quoc.digits != nullptr) {
+      quoc.numDigits = 1;
+      quoc.digits[0] = 0;
+    }
+    // Remainder is lhs (with sign preserved)
+    if (rem.digits != nullptr) {
+      auto res = initNonCanonicalWithReadOnlyBigInt(rem, lhs);
+      assert(res == OperationStatus::RETURNED && "rem array is too small");
+      (void)res;
+    }
+    return OperationStatus::RETURNED;
+  }
+
   // tcDivide operates on unsigned number, so just like multiply, the operands
   // must be negated (and the result as well, if appropriate) if they are
   // negative.
