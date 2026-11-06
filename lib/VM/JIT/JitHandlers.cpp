@@ -749,10 +749,74 @@ JitChainWalk jitWalkChain(Runtime &runtime, JSObject *obj, SymbolID name) {
   return res;
 }
 
+/// \return String.prototype's current hidden class. A raw pointer, valid
+/// only until the next GC point. Never allocates.
+static HiddenClass *stringProtoClass(Runtime &runtime) {
+  return vmcast<JSObject>(runtime.stringPrototype.getHermesValue())
+      ->getClass(runtime);
+}
+
+JitByIdStringTier prepareByIdString(
+    Runtime &runtime,
+    JitByIdSiteRecord &site,
+    SymbolID name,
+    llvh::function_ref<uint16_t(HiddenClass *)> lazyId,
+    SlotIndex &slot) {
+  site.stringProtoId = 0;
+  site.stringProtoCount = 0;
+  // 1. The only own property of a primitive string a GetById can name
+  // (Lowering.cpp:240-256 turns index names into numbers).
+  if (name == Predefined::getSymbolID(Predefined::length)) {
+    site.stringTier = JitByIdStringTier::Length;
+    return site.stringTier;
+  }
+  // 2. The only GC point: the class is read immediately before it, and
+  // no raw pointer is held across it.
+  uint16_t id = lazyId(stringProtoClass(runtime));
+  // 3. Re-read the class; nothing below allocates.
+  NoAllocScope noAlloc(runtime);
+  HiddenClass *clazz = stringProtoClass(runtime);
+  site.stringProtoId = id;
+  NamedPropertyDescriptor desc;
+  if (id == 0 || !isEligibleByIdShape(clazz, nullptr)) {
+    site.stringTier = JitByIdStringTier::Ineligible;
+  } else if (!chainClassLookup(runtime, clazz, name, desc)) {
+    site.stringTier = JitByIdStringTier::Absent;
+    site.stringProtoCount = clazz->getNumProperties();
+  } else if (desc.flags.accessor) {
+    site.stringTier = JitByIdStringTier::Ineligible;
+  } else {
+    site.stringTier = JitByIdStringTier::Method;
+    slot = desc.slot;
+  }
+  return site.stringTier;
+}
+
+bool byIdStringCanProgress(Runtime &runtime, const JitByIdSiteRecord &site) {
+  if (!site.sawString)
+    return false;
+  if (site.stringTier == JitByIdStringTier::NotPrepared)
+    return true;
+  if (site.stringTier == JitByIdStringTier::Length)
+    return false;
+  NoAllocScope noAlloc(runtime);
+  const HiddenClass *clazz = stringProtoClass(runtime);
+  // Reads the class's ID without assigning one: 0 if it has none.
+  if (clazz->getLazyJITId() != site.stringProtoId)
+    return true;
+  // A cacheable dictionary adds properties in place, keeping its class
+  // (HiddenClass.cpp:455-482); while it stays current its count only
+  // grows, so a different count means an addition.
+  return site.stringTier == JitByIdStringTier::Absent &&
+      clazz->isDictionary() && !clazz->isDictionaryNoCache() &&
+      clazz->getNumProperties() != site.stringProtoCount;
+}
+
 /// Step 3 of the recording helper: record what \p shEntry now describes
 /// for the object in \p source. Allocates nothing on the GC heap.
 /// \return true if the read cache described the receiver as an own or
-///   prototype hit whose shape was offered to addByIdShape.
+///   prototype hit whose shape was offered to addByIdShape, or if this is
+///   the site's first string receiver (nothing to walk either way).
 static bool recordByIdObservation(
     Runtime &runtime,
     JitByIdSiteRecord &site,
@@ -764,6 +828,13 @@ static bool recordByIdObservation(
     site.changed = 1;
   }
   HermesValue src = *toPHV(source);
+  // A string receiver marks the site once; later ones change nothing
+  // (spec: "Recording"; flags mark transitions, not repeats).
+  if (src.isString() && !site.sawString) {
+    site.sawString = 1;
+    site.changed = 1;
+    return true;
+  }
   if (!src.isObject())
     return false;
   auto *entry = reinterpret_cast<ReadPropertyCacheEntry *>(shEntry);

@@ -259,9 +259,26 @@ inline bool JitByIdShapeEntry::sameIdentity(
   return true;
 }
 
+/// What a body prepared for string receivers at a GetById site.
+enum class JitByIdStringTier : uint8_t {
+  /// The body did not prepare the site: it was compiled before the site
+  /// saw a string.
+  NotPrepared,
+  /// Prepared, nothing emitted: the name is not an own property of
+  /// String.prototype's class, which is eligible and has a lazy ID.
+  Absent,
+  /// Prepared, nothing emitted: the name is an accessor, the class is not
+  /// eligible, or no lazy ID could be assigned.
+  Ineligible,
+  /// The length block.
+  Length,
+  /// A method block guarded by stringProtoId.
+  Method,
+};
+
 /// One GetById site's observed shapes and what the owning body emitted
-/// for it. _jit_get_by_id records observed shapes and sets seen and
-/// changed. It and, once the site is demoted, _jit_get_by_id_refresh
+/// for it. _jit_get_by_id records observed shapes and sets seen, changed
+/// and sawString. It and, once the site is demoted, _jit_get_by_id_refresh
 /// also write chain entries' epoch and refreshFailedAt. The emitter
 /// also adds entries: the read cache's current shape, and the shapes
 /// it emits, marked emitted. Both add through addByIdShape, so either
@@ -293,6 +310,19 @@ struct JitByIdSiteRecord {
   /// The owning body emitted at least one chain entry here. Emitted-tier
   /// field: reset on carry-forward; feeds the dump line only.
   uint8_t chainEntryEmitted = 0;
+  /// At least one string receiver completed a recording call here.
+  /// Observed-tier: carried forward, never cleared.
+  uint8_t sawString = 0;
+  /// What the owning body prepared for string receivers at this site.
+  /// Emitted-tier: reset to NotPrepared on carry-forward.
+  JitByIdStringTier stringTier = JitByIdStringTier::NotPrepared;
+  /// Method, Absent and Ineligible only: lazy JIT ID of String.prototype's
+  /// class when the owning body prepared the site; 0 if none could be
+  /// assigned. Emitted-tier: reset to 0 on carry-forward.
+  uint16_t stringProtoId = 0;
+  /// Absent only: that class's property count when the owning body
+  /// prepared the site. Emitted-tier: reset to 0 on carry-forward.
+  uint32_t stringProtoCount = 0;
   /// Per-site mutable helper slot: _jit_get_by_id while recording; after
   /// demotion, _jit_get_by_id_refresh if the owning body emitted a chain
   /// entry here, else _sh_ljs_get_by_id_rjs. Retirement sets

@@ -287,11 +287,27 @@ function churn(n) {
   return total;
 }
 print(churn(2000));
+// `acc.length` reads a string primitive. Version 1 was compiled before
+// the site saw a string, so its declines into the GetById recording
+// helper reach the recompile threshold (default 64) with the site's
+// string state unprepared (the NotPrepared progress term): version 2
+// compiles mid-loop and prepares the site as a Length site, which never
+// progresses again, so no version 3 follows.
 // CHECK: JIT successfully compiled FunctionID 15, 'churn'
 // CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
+// CHECK-EMPTY:
+// CHECK-NEXT: JIT compilation of FunctionID 15, 'churn' (version 2)
+// CHECK: JIT successfully compiled FunctionID 15, 'churn' (version 2)
+// CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
+// CHECK-NEXT: JIT ById string sites: 1 length, 0 method
 // CHECK-NEXT: 13783
 // CHECK0: JIT successfully compiled FunctionID 15, 'churn'
 // CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
+// CHECK0-EMPTY:
+// CHECK0-NEXT: JIT compilation of FunctionID 15, 'churn' (version 2)
+// CHECK0: JIT successfully compiled FunctionID 15, 'churn' (version 2)
+// CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
+// CHECK0-NEXT: JIT ById string sites: 1 length, 0 method
 // CHECK0-NEXT: 13783
 
 // Unreachable. `new Ctor()` on a statically known class constructor makes

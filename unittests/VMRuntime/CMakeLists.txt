@@ -43,6 +43,7 @@ set(RTSources
   InternalPropertiesTest.cpp
   InterpreterTest.cpp
   JitChainWalkTest.cpp
+  JitStringPrepTest.cpp
   JSLibTest.cpp
   JSONParseTest.cpp
   JSTypedArrayTest.cpp

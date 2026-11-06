@@ -834,6 +834,13 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
   /// The candidate version's record for this site; null unless
   /// recording_ and the instruction has a property cache entry.
   JitByIdSiteRecord *site_ = nullptr;
+  /// The instruction's bytecode offset; set together with site_.
+  uint32_t siteId_ = 0;
+  /// What prepareByIdString() prepared for string receivers here;
+  /// NotPrepared if it was not called (no record, or no string seen).
+  JitByIdStringTier strTier_ = JitByIdStringTier::NotPrepared;
+  /// Method only: the property's slot in String.prototype.
+  SlotIndex strSlot_ = 0;
 
   /// The entries emitPolyChain() emits: own entries, then chain entries,
   /// then prototype entries.
@@ -883,13 +890,24 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
         symID);
 
     if (recording_ && cacheIdx != hbc::PROPERTY_CACHING_DISABLED) {
-      uint32_t siteId = (uint32_t)((const char *)_.emittingIP -
-                                   (const char *)_.codeBlock_->begin());
-      site_ = &_.byIdSiteRecord(siteId);
+      siteId_ = (uint32_t)((const char *)_.emittingIP -
+                           (const char *)_.codeBlock_->begin());
+      site_ = &_.byIdSiteRecord(siteId_);
       // Only a never-flipped slot is initialized; a demoted value
       // carried forward stays demoted.
       if (!site_->helper)
         site_->helper = (void *)_jit_get_by_id;
+      // String receivers (2026-10-26 string spec, "Preparation"): before
+      // any code for this instruction, since a Length block needs a
+      // vector temporary in the planning phase. A GC point.
+      if (site_->sawString) {
+        strTier_ = prepareByIdString(
+            _.runtime_,
+            *site_,
+            SymbolID::unsafeCreate(symID),
+            [this](HiddenClass *hc) { return _.initHCLazyIDMayAlloc(hc); },
+            strSlot_);
+      }
     }
 
     // All temporaries will potentially be clobbered by the slow path.
@@ -1030,6 +1048,10 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
     xTemp2 = hwTemp2Gpx.a64GpX();
     xTemp3 = hwTemp3Gpx.a64GpX();
     xTemp4 = hwTemp4Gpx.a64GpX();
+    // The Length block converts in a vector temporary. Allocating it
+    // emits no code: after the frees above no vector temp holds an FR.
+    HWReg hwStrVTmp =
+        strTier_ == JitByIdStringTier::Length ? _.allocTempVecD() : HWReg{};
 
     // Now that we have recorded their registers, mark all temp registers as
     // free.
@@ -1037,6 +1059,8 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
     _.freeReg(hwTemp2Gpx);
     _.freeReg(hwTemp3Gpx);
     _.freeReg(hwTemp4Gpx);
+    if (hwStrVTmp.isValid())
+      _.freeReg(hwStrVTmp);
 
     // Allocate the result register. Note that it can overlap the temps we
     // just freed.
@@ -1044,9 +1068,25 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
 
     // Finally we begin code generation for the fast path.
 
-    // Is the input an object.
-    emit_sh_ljs_is_object(a, xTemp1, hwSourceGpx.a64GpX());
-    a.b_ne(slowPathLab);
+    if (strTier_ == JitByIdStringTier::Length ||
+        strTier_ == JitByIdStringTier::Method) {
+      // String receivers first (2026-10-26 string spec, "Emission"): one
+      // tag extraction serves both compares, and the block never falls
+      // through.
+      asmjit::Label objCheckLab = a.newLabel();
+      emit_sh_ljs_is_string(a, xTemp1, hwSourceGpx.a64GpX());
+      a.b_ne(objCheckLab);
+      emitStringBlock(hwSourceGpx.a64GpX(), hwStrVTmp);
+      a.bind(objCheckLab);
+      // As at the plain object check: the tag in xTemp1, the source
+      // register intact, xTemp2-xTemp4 unwritten.
+      emit_sh_ljs_tag_is_object(a, xTemp1);
+      a.b_ne(slowPathLab);
+    } else {
+      // Is the input an object.
+      emit_sh_ljs_is_object(a, xTemp1, hwSourceGpx.a64GpX());
+      a.b_ne(slowPathLab);
+    }
     // xTemp1 is the pointer to the object.
     emit_sh_ljs_get_pointer(a, xTemp1, hwSourceGpx.a64GpX());
 
@@ -1148,6 +1188,57 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
         a64::Mem(
             xTemp1, xTemp4, a64::Shift(a64::ShiftOp::kLSL, kPropShiftAmt)));
     shvDecode.emitAll(a);
+    a.b(contLab);
+  }
+
+  /// Emit the string block (2026-10-26 string spec, "Emission") for a
+  /// string receiver whose tag is in xTemp1. The Length block reads
+  /// \p xSrc only in its first instruction; the Method block never reads
+  /// it. Both write hwRes only on a hit, as the last write before
+  /// `b contLab`. A Method miss branches to slowPathLab having written
+  /// only xTemp2, xTemp3, x16 and NZCV. Never falls through.
+  /// \param hwVTmp the Length block's vector temporary; invalid for Method.
+  void emitStringBlock(const a64::GpX &xSrc, HWReg hwVTmp) {
+    if (strTier_ == JitByIdStringTier::Length) {
+      _.comment("// Get string length (site %u)", siteId_);
+      // xTemp1 = lengthAndFlags; the 32-bit load zero-extends.
+      emit_stringprim_get_length_and_flags(a, xTemp1, xSrc);
+      a.and_(xTemp1, xTemp1, RuntimeOffsets::stringPrimitiveLengthMask);
+      // Saves and restores x0/x1 itself; writes no flags.
+      _.emitIncrementCounter(JitCounter::NumByIdStringHits);
+      // Exact: the length is below 2^30.
+      a.ucvtf(hwVTmp.a64VecD(), xTemp1.w());
+      // A number HermesValue is the double's bit pattern in every heap
+      // mode (see emitGetByValTypedArrayTier).
+      a.fmov(hwRes.a64GpX(), hwVTmp.a64VecD());
+      a.b(contLab);
+      return;
+    }
+    assert(
+        strTier_ == JitByIdStringTier::Method &&
+        "a string block needs a Length or Method tier");
+    _.comment(
+        "// Get string method (site %u, slot %u)", siteId_, (unsigned)strSlot_);
+    // xTemp2 = String.prototype, reloaded on every execution: root marking
+    // updates runtime.stringPrototype when the object moves. x16 is the
+    // temporary for an offset of 32768 or more.
+    emit_load_from_base_offset<8>(
+        a, xTemp2, xRuntime, xScratch, RuntimeOffsets::stringPrototype);
+    emit_sh_ljs_get_pointer(a, xTemp2, xTemp2);
+    // xTemp3 = its class's lazy JIT ID.
+    emit_load_cp(a, xTemp3, a64::Mem(xTemp2, offsetof(SHJSObject, clazz)));
+    emit_sh_cp_decode_non_null(a, xTemp3);
+    a.ldrh(xTemp3.w(), a64::Mem(xTemp3, RuntimeOffsets::hiddenClassLazyJITId));
+    emit_cmp_imm32(a, xTemp3.w(), site_->stringProtoId, xScratch.w());
+    a.b_ne(slowPathLab);
+    _.emitIncrementCounter(JitCounter::NumByIdStringHits);
+    // May rewrite xTemp2 (out-of-line slot) and xTemp4 (large offset);
+    // hwRes may be either.
+    emitLoadFromSlot(hwRes.a64GpX(), xTemp2, xTemp4, strSlot_);
+    // Its own decoder: the object path's rest cases are emitted once, by
+    // the object path.
+    Emit_sh_shv_decode strDecode(a, hwRes.a64GpX(), contLab);
+    strDecode.emitAll(a);
     a.b(contLab);
   }
 

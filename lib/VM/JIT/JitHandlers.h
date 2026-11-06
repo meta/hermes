@@ -298,6 +298,28 @@ bool prepareByIdPolyChain(
     llvh::function_ref<uint16_t(HiddenClass *)> lazyId,
     llvh::SmallVectorImpl<JitByIdPolyEntry> &out);
 
+/// Prepare GetById site \p site, whose name is \p name, for string
+/// receivers. Reset site.stringProtoId and site.stringProtoCount to 0,
+/// then record the result in site.stringTier, site.stringProtoId (the
+/// lazy JIT ID of String.prototype's class, 0 for Length or if none can
+/// be assigned) and, for Absent, site.stringProtoCount (the class's
+/// property count). \p lazyId is as for prepareByIdPolyChain.
+/// \return the tier; for Method, also \p slot.
+JitByIdStringTier prepareByIdString(
+    Runtime &runtime,
+    JitByIdSiteRecord &site,
+    SymbolID name,
+    llvh::function_ref<uint16_t(HiddenClass *)> lazyId,
+    SlotIndex &slot);
+
+/// \return true if \p site's string receivers give a recompile something
+/// to do (spec: "Progress"): it saw a string and its body did not prepare
+/// it, or it prepared Method, Absent or Ineligible against a
+/// String.prototype class whose lazy JIT ID is not the current one, or it
+/// prepared Absent against a cacheable dictionary that has since gained a
+/// property in place. Never allocates.
+bool byIdStringCanProgress(Runtime &runtime, const JitByIdSiteRecord &site);
+
 /// The result of jitWalkChain(): whether a GetById of a name on an object
 /// can be answered by a chain entry, and with what. A POD.
 struct JitChainWalk {

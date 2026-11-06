@@ -149,6 +149,9 @@ class JITContext::Compiler {
           r->unchangedCrossings = 0;
           r->chainEmitted = 0;
           r->chainEntryEmitted = 0;
+          r->stringTier = JitByIdStringTier::NotPrepared;
+          r->stringProtoId = 0;
+          r->stringProtoCount = 0;
           for (auto &e : r->entries) {
             e.unemittable = 0;
             e.refreshFailedAt = 0;
@@ -313,22 +316,23 @@ static bool byValShapeProgress(const JitVersionData *vd) {
 }
 
 /// \return true if \p s holds a live shape that the owning body did not
-/// emit and that a compile could still emit.
-static bool byIdSiteCanProgress(const JitByIdSiteRecord &s) {
+/// emit and that a compile could still emit, or if its string receivers
+/// can progress (byIdStringCanProgress).
+static bool byIdSiteCanProgress(Runtime &runtime, const JitByIdSiteRecord &s) {
   for (const auto &e : s.entries)
     if (e.isLive() && !e.emitted && !e.unemittable)
       return true;
-  return false;
+  return byIdStringCanProgress(runtime, s);
 }
 
 /// \return true if some GetById site can progress (spec: "Progress
-/// term").
-static bool byIdShapeProgress(const JitVersionData *vd) {
+/// term"; 2026-10-26 string spec: "Progress").
+static bool byIdShapeProgress(Runtime &runtime, const JitVersionData *vd) {
   const JitConsumerRecords *cr = vd->consumerRecords.get();
   if (!cr)
     return false;
   for (const auto &s : llvh::make_pointee_range(cr->byIdSites))
-    if (byIdSiteCanProgress(s))
+    if (byIdSiteCanProgress(runtime, s))
       return true;
   return false;
 }
@@ -453,7 +457,8 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
       for (auto &s : llvh::make_pointee_range(cr->byIdSites)) {
         if (s.helper != (void *)_jit_get_by_id)
           continue;
-        bool canProgress = actionablePossible && byIdSiteCanProgress(s);
+        bool canProgress =
+            actionablePossible && byIdSiteCanProgress(runtime, s);
         if (!s.seen || canProgress || s.changed) {
           s.unchangedCrossings = 0;
         } else if (++s.unchangedCrossings >= kDemotionStableCrossings) {
@@ -475,8 +480,9 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
   // Progress check, three sources, any qualifies: a specific cold
   // ById site whose cache has since warmed, a ByVal site whose
   // observed shape the current body's tiers do not cover, or a GetById
-  // site holding a live shape the current body did not emit. The
-  // recompile emits everything all of them know.
+  // site holding a live shape the current body did not emit or string
+  // state it did not prepare for. The recompile emits everything all of
+  // them know.
   bool progress = false;
   if (vd->coldByIdSites != 0) {
     // Has one of the SPECIFIC sites the most recent compile recorded as
@@ -506,7 +512,7 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
   if (!progress)
     progress = byValShapeProgress(vd);
   if (!progress)
-    progress = byIdShapeProgress(vd);
+    progress = byIdShapeProgress(runtime, vd);
   if (!progress)
     return;
   recompile(runtime, codeBlock);
@@ -748,6 +754,17 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
         llvh::outs() << "JIT ById sites: " << recorded << " recorded, " << poly
                      << " polymorphic, " << chain << " chain, " << mega
                      << " megamorphic\n";
+      }
+      // String receivers: sites this body prepared with a string block.
+      // A separate line, so existing `JIT ById sites` checks keep matching.
+      size_t strLength = 0, strMethod = 0;
+      for (const auto &s : llvh::make_pointee_range(cr->byIdSites)) {
+        strLength += s.stringTier == JitByIdStringTier::Length;
+        strMethod += s.stringTier == JitByIdStringTier::Method;
+      }
+      if (strLength || strMethod) {
+        llvh::outs() << "JIT ById string sites: " << strLength << " length, "
+                     << strMethod << " method\n";
       }
     }
   }

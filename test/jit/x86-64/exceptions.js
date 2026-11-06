@@ -369,13 +369,14 @@ say(churn(2000));
 // version 1 was force-compiled, warm since its first call -- is a
 // warmed cold site, and the shape that first call recorded through the
 // helper is a live entry version 1 did not emit; either makes version 2
-// compile. Version 2 emits `boom` as a one-entry polymorphic chain (the
-// `JIT ById sites` line counts it as polymorphic). Every churn site has
-// at most one shape (`o.c.length` reads a string primitive and records
-// none), so version 2 has nothing left to learn and no version 3
-// follows. The result is unchanged. The -O0 body has more GetById
-// sites, each with one recorded shape and so one chain, but recompiles
-// by the same mechanism.
+// compile, and so does the string site's NotPrepared term. Version 2
+// emits `boom` as a one-entry polymorphic chain (the `JIT ById sites`
+// line counts it as polymorphic). Every churn site has at most one shape
+// (`o.c.length` reads a string primitive: version 2 prepares it as a
+// Length site, which never progresses again), so version 2 has nothing
+// left to learn and no version 3 follows. The result is unchanged. The
+// -O0 body has more GetById sites, each with one recorded shape and so
+// one chain, but recompiles by the same mechanism.
 // CHECK: JIT successfully compiled FunctionID 16, 'churn'
 // CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-EMPTY:
@@ -383,6 +384,7 @@ say(churn(2000));
 // CHECK: JIT successfully compiled FunctionID 16, 'churn' (version 2)
 // CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK-NEXT: JIT ById sites: {{[0-9]+}} recorded, {{[0-9]+}} polymorphic, 0 chain, 0 megamorphic
+// CHECK-NEXT: JIT ById string sites: 1 length, 0 method
 // CHECK-NEXT: 1999679
 // CHECK0: JIT successfully compiled FunctionID 16, 'churn'
 // CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
@@ -391,6 +393,7 @@ say(churn(2000));
 // CHECK0: JIT successfully compiled FunctionID 16, 'churn' (version 2)
 // CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
 // CHECK0-NEXT: JIT ById sites: {{[0-9]+}} recorded, {{[0-9]+}} polymorphic, 0 chain, 0 megamorphic
+// CHECK0-NEXT: JIT ById string sites: 1 length, 0 method
 // CHECK0-NEXT: 1999679
 
 // ThrowIfEmpty and ThrowIfThisInitialized. Reading `this` in a derived

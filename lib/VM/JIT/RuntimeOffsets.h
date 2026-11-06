@@ -30,6 +30,17 @@ struct RuntimeOffsets {
   static constexpr uint32_t currentFrame = offsetof(SHRuntime, currentFrame);
   static constexpr uint32_t currentIP = offsetof(Runtime, currentIP_);
   static constexpr uint32_t globalObject = offsetof(Runtime, global_);
+  /// Runtime::stringPrototype, a PinnedValue<JSString>: a full 64-bit
+  /// HermesValue in every heap mode. GetById string Method blocks reload
+  /// it on every execution, so they follow String.prototype when it moves.
+  static constexpr uint32_t stringPrototype =
+      offsetof(Runtime, stringPrototype);
+  static_assert(
+      sizeof(Runtime::stringPrototype) == 8,
+      "string Method blocks load String.prototype as one 64-bit value");
+  static_assert(
+      stringPrototype % 8 == 0,
+      "arm64's emit_load_from_base_offset<8> needs an 8-aligned offset");
   static constexpr uint32_t thrownValue = offsetof(Runtime, thrownValue_);
   static constexpr uint32_t identifierTable =
       offsetof(Runtime, identifierTable_);

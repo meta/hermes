@@ -385,9 +385,11 @@ never get a chain.
   above 4095 that `isAddSubImm` rejects for this. A chain entry also uses `r11`
   on x86-64 (the entry's epoch address, dead after the load) and `x16`/`x17` on
   arm64 (the runtime's epoch and the entry's epoch address).
-- **Layout.** The non-object check jumps straight to the slow call. Then
-  `temp1` = object, `temp2` = compressed receiver class, `temp3` = receiver
-  `lazyJITId` (decoded without clobbering `temp2`). Own entries come first,
+- **Layout.** The non-object check jumps straight to the slow call; at a
+  site with a string block (see "String receivers" below) it is a compare
+  of the tag the string compare already extracted. Then `temp1` = object,
+  `temp2` = compressed receiver class, `temp3` = receiver `lazyJITId`
+  (decoded without clobbering `temp2`). Own entries come first,
   each `cmp temp3, ID; jne next`, slot load, `jmp done`. Chain entries come
   next, before the prototype block, so they leave its state untouched. Each
   is `cmp temp3, ID; jne next`, then the entry's epoch is loaded through its
@@ -411,25 +413,51 @@ never get a chain.
   the generic tier. Every chain load uses `emitFirstCase` and `jmp done`; the
   remaining decode cases are emitted once, by the generic tier's indirect-slot
   `emitAll`, and fall through to `done`. Prototype entries therefore do not
-  use `emitAll`, unlike tier 2.
+  use `emitAll`, unlike tier 2. A string Method block, which sits before
+  the chain, constructs and completes its own decoder.
 - The dump comments it `// Get polymorphic chain (N entries)`; N counts
   chain entries too.
 
+**String receivers**
+(`doc/superpowers/specs/2026-10-26-jit-getbyid-string-design.md`). A GetById
+site with a read cache entry whose record has seen a string (`sawString`) is
+prepared for strings before any of its code is emitted (`prepareByIdString`,
+shared): `length` is the Length tier; a data property of `String.prototype`'s
+own class is the Method tier, guarded by that class's lazy JIT ID; an absent
+name is Absent, and an accessor, a no-cache dictionary or a class without an
+ID is Ineligible. Length and Method sites put a string block in front of the
+object path: `get_tag temp1, src; cmp temp1, STRING_TAG; jne objCheck;
+<block>; objCheck: cmp temp1, OBJECT_TAG; jne slow`, so strings fall through
+untaken and objects pay one compare and one taken branch. The Length block
+masks the header's `lengthAndFlags` with `StringPrimitive::LENGTH_MASK`,
+converts it (`vcvtsi2sd` on x86-64, `ucvtf` on arm64) in a vector temporary
+planned with the GP temps, and moves the bits to the result. The Method block
+loads `Runtime::stringPrototype` (`RuntimeOffsets::stringPrototype`; on every
+execution, so it follows the object when the GC moves it), compares its
+class's `lazyJITId` with the prepared ID (arm64: through `w16` when the ID is
+not an add/sub immediate), loads the slot and decodes it with its own
+`Emit_sh_shv_decode`. It never reads the receiver. Both end in a jump to
+`contLab`; a guard miss goes to the slow call, so nothing new lies between the
+object path and the helper. Each hit counts `NumByIdStringHits` under
+`-Xjit-emit-counters`; the blocks are commented
+`// Get string length (site N)` and `// Get string method (site N, slot M)`.
+Other sites emit exactly the code above.
+
 Miss → out-of-line call to `_sh_ljs_get_by_id_rjs`/`_sh_ljs_try_get_by_id_rjs`
-with the cache-entry address; on both backends, GetById-family sites that
-have a read cache entry instead call `_jit_get_by_id` indirectly through the
-site's helper slot. Once demoted, the slot holds `_sh_ljs_get_by_id_rjs`, or
+with the cache-entry address; on both backends, GetById sites (not TryGetById)
+that have a read cache entry instead call `_jit_get_by_id` indirectly through
+the site's helper slot. Once demoted, the slot holds `_sh_ljs_get_by_id_rjs`, or
 `_jit_get_by_id_refresh` if the body emitted a chain entry at the site. Sites
 without one keep the direct call. Writes have an inline tier on both backends
-(`emitPutByIdInlineTier`, see "Inline write barrier" below): when
-the site's write cache already names a hidden class at compile time, the
-emitter bakes in a class/slot check and an inline store guarded by the
-safe-store barrier predicate. A cold cache -- in particular every function
-compiled under `-Xjit=force`, which compiles on the first call before any
-site has run interpreted -- emits the helper call only, exactly as before.
-Either way the fallback is `_jit_put_by_id`, unchanged: it implements
-cache-hit, cached-add-transition (checking the RuntimeModule
-`AddPropertyCacheEntry`, parent epoch and parent pointer) and falls back to
+(`emitPutByIdInlineTier`, see "Inline write barrier" below): when the site's
+write cache already names a hidden class at compile time, the emitter bakes in a
+class/slot check and an inline store guarded by the safe-store barrier
+predicate. A cold cache -- in particular every function compiled under
+`-Xjit=force`, which compiles on the first call before any site has run
+interpreted -- emits the helper call only, exactly as before. Either way the
+fallback is `_jit_put_by_id`, unchanged: it implements cache-hit,
+cached-add-transition (checking the RuntimeModule `AddPropertyCacheEntry`,
+parent epoch and parent pointer) and falls back to
 `Interpreter::putByIdSlowPath_RJS`.
 
 ### Inline allocation
@@ -1163,23 +1191,29 @@ emitter differ.
   `refreshFailedAt` for a chain entry; slot; `depth`; the explicit `kind`,
   `Own`, `Proto` or `Chain`, set when recorded; and the `emitted` and
   `unemittable` bytes), plus `seen`, `megamorphic`, `changed`,
-  `unchangedCrossings`, `chainEmitted`, `chainEntryEmitted` and the mutable
-  `helper` slot. Classes are held as `WeakRoot<HiddenClass>`: lazy JIT IDs,
-  which pin a class forever, are assigned only when a compile emits the entry.
-  The emitter creates the record when it emits the site's helper call, so the
-  recording helper never adds one. Cost: each cached GetById site in a compiled
-  body takes one allocation of `sizeof(JitByIdSiteRecord)` (200 B on HV64, 168 B
-  on HV32; a `JitByIdShapeEntry` is 40 B and 32 B) plus an 8-byte vector slot; a
-  function with no recorded sites allocates nothing for them.
-- **Trigger.** Every GetById-family site with a read cache entry calls through
-  its record's helper slot, initialized (only if null) to `_jit_get_by_id`,
-  which takes the plain helper's four arguments plus the version record (`r8`)
-  and the site's record (`r9`). The call is `call [r9 + offset of helper]`, so
-  the helper needs no lookup to find its record. On arm64 the call passes `x0`
-  runtime, `x1` &source, `w2` symbol ID, `x3` cache entry, `x4` version record
-  and `x5` the `JitByIdSiteRecord *`; the IP is saved first, then
-  `ldr x16, [x5, #ofs]` (ofs = `&site->helper - site`, 192 on HV64, 160 on HV32,
-  asserted to fit the scaled `ldr` immediate) and `blr x16`, through the
+  `unchangedCrossings`, `chainEmitted`, `chainEntryEmitted`, `sawString`,
+  `stringTier` (`NotPrepared`, `Absent`, `Ineligible`, `Length` or `Method`),
+  `stringProtoId`, `stringProtoCount` and the mutable `helper` slot. Classes are
+  held as `WeakRoot<HiddenClass>`: lazy JIT IDs, which pin a class forever, are
+  assigned only when a compile emits the entry. String preparation is the
+  exception: it assigns, and so pins, an ID for String.prototype's class at
+  every site that saw a string, other than a `length` site, even an Absent or
+  Ineligible one that emits nothing. The emitter creates the record when it
+  emits the site's helper call, so the recording helper never adds one. Cost:
+  each cached GetById site in a compiled body takes one allocation of
+  `sizeof(JitByIdSiteRecord)` (208 B on HV64, 176 B on HV32; a
+  `JitByIdShapeEntry` is 40 B and 32 B) plus an 8-byte vector slot; a function
+  with no recorded sites allocates nothing for them.
+- **Trigger.** Every GetById site (not TryGetById) with a read cache entry calls
+  through its record's helper slot, initialized (only if null) to
+  `_jit_get_by_id`, which takes the plain helper's four arguments plus the
+  version record (`r8`) and the site's record (`r9`). The call is
+  `call [r9 + offset of helper]`, so the helper needs no lookup to find its
+  record. On arm64 the call passes `x0` runtime, `x1` &source, `w2` symbol ID,
+  `x3` cache entry, `x4` version record and `x5` the `JitByIdSiteRecord *`; the
+  IP is saved first, then `ldr x16, [x5, #ofs]` (ofs = `&site->helper - site`,
+  200 on HV64, 168 on HV32, asserted to fit the scaled `ldr` immediate) and
+  `blr x16`, through the
   `callRuntimeWithSavedIPIndirect(const a64::Mem &, name)` overload. A demoted
   slot holds the four-argument `_sh_ljs_get_by_id_rjs`, which ignores the extra
   registers (`r8`/`r9` on x86-64, `x4`/`x5` on arm64), or, at a site where the
@@ -1195,10 +1229,11 @@ emitter differ.
   recorded under a `NoAllocScope`: an own hit when the cache entry's `clazz` is
   the receiver's class, a prototype hit when its `negMatchClazz` is and `clazz`
   is the parent's class, each filtered by the read cache's own eligibility
-  predicates; if neither, the chain walk follows. Last, the decline is counted
-  toward the shared threshold and `considerRecompile`. A throwing lookup is
-  neither recorded nor counted. `TryGetById*`, `GetByIdWithReceiver*` and
-  uncached sites keep the direct call.
+  predicates; if neither, the chain walk follows. A string receiver's first
+  recording call sets `sawString` and `changed`; later string receivers record
+  nothing. Last, the decline is counted toward the shared threshold and
+  `considerRecompile`. A throwing lookup is neither recorded nor counted.
+  `TryGetById*`, `GetByIdWithReceiver*` and uncached sites keep the direct call.
 - **Recording rule.** An equal live entry absorbs the shape; otherwise it
   overwrites a dead entry (one the GC cleared) that was never emitted, else
   is appended, else marks
@@ -1208,7 +1243,13 @@ emitter differ.
 - **Progress term.** `considerRecompile` ORs a third source into its progress
   check, `byIdShapeProgress`: some site holds a live entry with `emitted` and
   `unemittable` both clear. The budget and threshold are shared with the
-  other two sources.
+  other two sources. A site also progresses on its string state
+  (`byIdStringCanProgress`): it saw a string its body did not prepare
+  (`NotPrepared`); or it prepared `Method`, `Absent` or `Ineligible` and
+  `String.prototype`'s class now has another lazy ID (read without assigning
+  one; 0 if none); or it prepared `Absent`, the class is a cacheable
+  dictionary, and its property count changed (a dictionary gains properties in
+  place). `Length` never progresses.
 - **Demotion.** The same pass and rule as ByVal, with `seen` as the "observed"
   test and the progress term above as "can still progress". A flip sets the
   slot to `_sh_ljs_get_by_id_rjs` and counts `NumByIdDemotions` (retirement
@@ -1217,9 +1258,10 @@ emitter differ.
   `recordingSites` and counts both kinds of recording site.
 - **Carry-forward and retirement.** The `Compiler` constructor copies
   `byIdSites` from `current`: entries, `seen`, `megamorphic` and the helper
-  value carry; `changed`, `unchangedCrossings`, `chainEmitted`,
-  `chainEntryEmitted` and every entry's `unemittable` and `refreshFailedAt`
-  reset. `emitted` must carry, because it is what makes
+  value carry, as does `sawString`; `changed`, `unchangedCrossings`,
+  `chainEmitted`, `chainEntryEmitted`, `stringTier` (to `NotPrepared`),
+  `stringProtoId`, `stringProtoCount` and every entry's `unemittable` and
+  `refreshFailedAt` reset. `emitted` must carry, because it is what makes
   emission monotone. Retirement flips the retired body's still-recording ById
   slots, and its refresh slots, to the plain helper, and nulls the weak
   roots of every ById record's entries.
@@ -1273,7 +1315,9 @@ emitter differ.
   counts sites with a live entry or the megamorphic flag; P counts sites
   where this body emitted a chain, including one-entry chains carried
   forward from a single-shape specialization; C counts sites where this
-  body emitted at least one chain entry.
+  body emitted at least one chain entry. When this body prepared any site as
+  Length or Method, it also prints `JIT ById string sites: L length, M
+  method`, whether or not R > 0.
 
 Tests, all in `test/jit/` and run on both backends:
 `getbyid-record-{demote,demote-delay,throw}.js` and
@@ -1298,6 +1342,16 @@ revalidation, a mapless flags-transition holder, unflagged verdicts,
 overflow, exclusions, ID exhaustion, a retired body on the stack and rooted
 results; `unittests/VMRuntime/JitChainWalkTest.cpp` covers the walk's slot
 limit, its `findPropertyNoAlloc` fallback and its verdicts.
+`getbyid-string-*.js` cover the Length block over every string kind and both
+length-flag bits, Method blocks for every value kind and both slot
+placements, a site mixing a string block with a poly chain, a replaced
+method, collections between hits, redefinition, deletion, class changes and
+in-place dictionary additions, cacheable dictionaries, absent and inherited
+names, ID exhaustion, a large lazy ID (the arm64 compare through `w16`),
+an accessor that keeps a site Ineligible until it demotes, demoted sites,
+and receivers that must not take the block;
+`unittests/VMRuntime/JitStringPrepTest.cpp` covers the preparation, including
+a collection inside the lazy-ID callback.
 
 ### Arithmetic, comparisons and NaN handling
 
@@ -1379,11 +1433,11 @@ function don't-JIT.
 - Counters (`JIT_COUNTERS` in include/hermes/VM/JIT/JitCounters.h:
   NumCall, NumCallSlow, NumRecompileChecks, NumRecompiles,
   NumByValDemotions, NumByIdDemotions, NumByIdChainRefreshes,
-  NumByIdChainHits), with `-Xjit-emit-counters`. Emitted code increments
-  NumCall, NumCallSlow and NumByIdChainHits inline; the runtime increments
-  the rest. Only the chain refreshes (NumByIdChainRefreshes) go through
-  `JITContext::incrementCounter`; the other runtime counters increment the
-  counter array directly.
+  NumByIdChainHits, NumByIdStringHits), with `-Xjit-emit-counters`. Emitted
+  code increments NumCall, NumCallSlow, NumByIdChainHits and
+  NumByIdStringHits inline; the runtime increments the rest. Only the chain
+  refreshes (NumByIdChainRefreshes) go through `JITContext::incrementCounter`;
+  the other runtime counters increment the counter array directly.
 - Linux `perf` jitdump + source-comment sidecar via `PerfJitDump`.
 - `utils/jit/jit-dump.sh` / `jit-diff.sh`: capture a canonicalized dump of
   all JIT-emitted code from a `hermes` binary and diff two binaries'
