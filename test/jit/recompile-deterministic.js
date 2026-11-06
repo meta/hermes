@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes -fno-inline -Xjit=force -Xjit-crash-on-error -Xjit-recompile-threshold=64 -Xdump-jitcode=3 %s | sed 's/0x[0-9A-Fa-f]*//g' > %t.1
-// RUN: %hermes -fno-inline -Xjit=force -Xjit-crash-on-error -Xjit-recompile-threshold=64 -Xdump-jitcode=3 %s | sed 's/0x[0-9A-Fa-f]*//g' > %t.2
+// RUN: %hermes -fno-inline -Xjit=force -Xjit-crash-on-error -Xjit-recompile-threshold=64 -Xdump-jitcode=3 %s | %S/../../utils/jit/jit-canon.sh > %t.1
+// RUN: %hermes -fno-inline -Xjit=force -Xjit-crash-on-error -Xjit-recompile-threshold=64 -Xdump-jitcode=3 %s | %S/../../utils/jit/jit-canon.sh > %t.2
 // RUN: grep -q "(version 2)" %t.1
 // RUN: diff %t.1 %t.2
 // REQUIRES: jit
@@ -20,10 +20,12 @@
 // The dumps embed absolute addresses (e.g. helper-call targets
 // `mov r11, 0x...`) that ASLR moves independently between the two
 // separate processes below, even though both run the same binary in
-// the same lit invocation. Confirmed empirically: without the sed
-// filter, every diffing line has that shape. The filter strips hex
-// literals so the comparison stays structural (instructions, registers,
-// ordering, version-2 bodies) without hiding a real emission change.
+// the same lit invocation. Confirmed empirically: without canonicalizing,
+// every diffing line has that shape. jit-canon.sh (utils/jit/jit-canon.sh,
+// the same canonicalization jit-dump.sh uses) strips hex literals and
+// other run-to-run noise so the comparison stays structural (instructions,
+// registers, ordering, version-2 bodies) without hiding a real emission
+// change.
 
 function f(o, v) {
   o.p = v;

@@ -680,6 +680,10 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
         // If it emitted nothing, fall through to the generic tier below
         // rather than leaving the site with no inline cache at all.
       }
+    } else if (!cacheEntry->clazz.getNoBarrierUnsafe()) {
+      // Cold cache: no specialization possible yet. A recompile after
+      // the cache warms can upgrade this site.
+      _.coldReadCacheIdxs_.push_back(cacheIdx);
     }
 
     _.comment("// Read property cache");
@@ -1120,12 +1124,22 @@ void Emitter::putByIdImpl(
     WritePropertyCacheEntry *cacheEntry =
         codeBlock_->getWriteCacheEntry(cacheIdx);
     slot = cacheEntry->getSlot();
+    HiddenClass *cachedClazz =
+        cacheEntry->clazz.get(runtime_, runtime_.getHeap());
+    // A valid cache index with no cached class is a site a recompile can
+    // upgrade once the cache warms. Cold means the cache names no class
+    // yet -- do NOT use clazzID for this: initHCLazyIDMayAlloc() also
+    // returns 0 for a warm class when the lazy-ID space is exhausted, and
+    // such a site can never be specialized by a recompile; advertising it
+    // as a warming opportunity burns the recompile budget on identical
+    // bodies.
+    if (!cachedClazz)
+      coldWriteCacheIdxs_.push_back(cacheIdx);
     // NOTE: initHCLazyIDMayAlloc() is a GC safepoint -- it may create or grow
     // the usedHCs ArrayStorage -- so the class pointer it is handed must not
     // be used afterwards. Only the returned id is, and a non-zero id means
     // the class is pinned in usedHCs and will outlive this compiled function.
-    clazzID = initHCLazyIDMayAlloc(
-        cacheEntry->clazz.get(runtime_, runtime_.getHeap()));
+    clazzID = initHCLazyIDMayAlloc(cachedClazz);
   }
   asmjit::Label helperLab;
   asmjit::Label contLab;
