@@ -895,8 +895,8 @@ TEST_F(ObjectModelTest, ParentCacheEpochTest) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  // Start with setting the epoch to 1, which is the same value it will have
-  // after overflowing.
+  // Start with setting the epoch to 1, which matches the low 24 bits the add
+  // cache sees after the epoch wraps.
   runtime.testSetParentCacheEpoch(1);
   runtime.setArrayFastPathParentEpoch();
   EXPECT_TRUE(runtime.checkArrayFastPathParentEpoch());
@@ -917,6 +917,16 @@ TEST_F(ObjectModelTest, ParentCacheEpochTest) {
   EXPECT_TRUE(entry.startClazz);
   EXPECT_EQ(1, runtime.incParentCacheEpoch());
   EXPECT_FALSE(entry.startClazz);
+  EXPECT_FALSE(runtime.checkArrayFastPathParentEpoch());
+  // The full counter did not wrap: it went from kMaxParentEpoch - 1
+  // straight to kMaxParentEpoch + 2, whose low 24 bits are 1.
+  EXPECT_EQ(
+      (uint64_t)AddPropertyCacheEntry::kMaxParentEpoch + 2,
+      runtime.getFullParentCacheEpoch());
+  // The array fast path compares full counters.
+  runtime.setArrayFastPathParentEpoch();
+  EXPECT_TRUE(runtime.checkArrayFastPathParentEpoch());
+  EXPECT_EQ(2, runtime.incParentCacheEpoch());
   EXPECT_FALSE(runtime.checkArrayFastPathParentEpoch());
 }
 

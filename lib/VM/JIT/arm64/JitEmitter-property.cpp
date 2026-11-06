@@ -804,6 +804,15 @@ void Emitter::putOwnPrivateBySym(
       _sh_ljs_put_own_private_by_sym);
 }
 
+// GetById chain entries load the full parent cache epoch with LDR's
+// unsigned-offset form, whose immediate is a 12-bit multiple of 8. The
+// offset is an offsetof() into Runtime, which grows: pin it so that
+// outgrowing the encoding breaks the build rather than every compile.
+static_assert(
+    RuntimeOffsets::runtimeParentCacheEpoch % 8 == 0 &&
+        RuntimeOffsets::runtimeParentCacheEpoch < kMaxInlineBaseOffset,
+    "the parent cache epoch must be reachable by an unsigned-offset LDR");
+
 class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
   Emitter &_;
   a64::Assembler &a;

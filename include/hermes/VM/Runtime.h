@@ -692,8 +692,15 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   /// Returns trailing data for all runtime modules.
   std::vector<llvh::ArrayRef<uint8_t>> getEpilogues();
 
-  /// \return the parent cache epoch.
+  /// \return the low 24 bits of the parent cache epoch: the part an
+  /// AddPropertyCacheEntry stores. Never 0.
   uint32_t getParentCacheEpoch() const {
+    return parentCacheEpoch_ & AddPropertyCacheEntry::kMaxParentEpoch;
+  }
+
+  /// \return the full parent cache epoch. It only increases and, being
+  /// 64-bit, never wraps in practice; GetById chain entries compare it.
+  uint64_t getFullParentCacheEpoch() const {
     return parentCacheEpoch_;
   }
 
@@ -702,7 +709,7 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   bool checkArrayFastPathParentEpoch() const {
     assert(
         arrayFastPathParentCacheEpoch_ <= parentCacheEpoch_ &&
-        "Epoch overflowed without invalidating the cache");
+        "parent cache epoch went backwards");
     return arrayFastPathParentCacheEpoch_ == parentCacheEpoch_;
   }
 
@@ -712,27 +719,28 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   }
 
 #ifdef UNIT_TEST
-  /// Unsafe function to use for testing the overflow mechanism.
-  void testSetParentCacheEpoch(uint32_t epoch) {
+  /// Unsafe function to use for testing the overflow mechanism. Sets the
+  /// full counter.
+  void testSetParentCacheEpoch(uint64_t epoch) {
     parentCacheEpoch_ = epoch;
   }
 #endif
 
-  /// Increment the parent cache epoch.
-  /// If this causes overflow, invalidate ALL PutById cache entries that have
-  /// stored an epoch (i.e. represent a HiddenClass transition).
-  /// \return the new value of the parent cache epoch.
+  /// Increment the parent cache epoch. When its low 24 bits reach
+  /// kMaxParentEpoch, invalidate ALL PutById cache entries that have stored
+  /// an epoch (i.e. represent a HiddenClass transition), and skip ahead so
+  /// the low bits restart at 1 (0 is never a valid add cache epoch). The
+  /// full counter keeps increasing.
+  /// \return the new low 24 bits, as getParentCacheEpoch() returns them.
   uint32_t incParentCacheEpoch() {
     ++parentCacheEpoch_;
     if (LLVM_UNLIKELY(
-            parentCacheEpoch_ == AddPropertyCacheEntry::kMaxParentEpoch)) {
-      // Overflow.
+            (parentCacheEpoch_ & AddPropertyCacheEntry::kMaxParentEpoch) ==
+            AddPropertyCacheEntry::kMaxParentEpoch)) {
       invalidateAllAddCacheEntries();
-      // Clear the array fast path epoch so it is guaranteed to fail.
-      arrayFastPathParentCacheEpoch_ = 0;
-      parentCacheEpoch_ = 1;
+      parentCacheEpoch_ += 2;
     }
-    return parentCacheEpoch_;
+    return getParentCacheEpoch();
   }
 
   /// Iterate all AddPropertyCacheEntry in all RuntimeModules,
@@ -1466,21 +1474,23 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   /// ScriptIDs to use for new RuntimeModules coming in.
   facebook::hermes::debugger::ScriptID nextScriptId_{1};
 
-  /// An epoch used to invalidate property write cache entries.
-  /// Incremented whenever a cached object's parent changes its parent or its
-  /// HiddenClass, because those operations could introduce parent chain changes
-  /// that prevent adding the property the way that was cached.
+  /// An epoch used to invalidate property write cache entries and GetById
+  /// chain entries. Incremented whenever a cached object's parent changes
+  /// its parent or its HiddenClass, because those operations could
+  /// introduce parent chain changes that prevent adding the property the
+  /// way that was cached.
   ///
-  /// If this number rolls over from kMaxParentEpoch to 0 (unlikely),
-  /// invalidate ALL property write caches.
-  /// Start at 1 so we are guaranteed that 0 is never used and can be used to
-  /// ensure the check fails.
-  uint32_t parentCacheEpoch_ = 1;
+  /// 64-bit and monotonic, so it never wraps in practice. The add cache
+  /// stores only its low 24 bits (getParentCacheEpoch()); when those wrap,
+  /// ALL property write caches are invalidated. Starts at 1, and the low
+  /// bits are never 0, so 0 can be used to ensure an add cache check
+  /// fails.
+  uint64_t parentCacheEpoch_ = 1;
 
-  /// The epoch when the array prototype was verified to allow us to use fast
-  /// paths in array JSLib functions. If parentCacheEpoch_ is different, we must
-  /// reverify the prototype chain.
-  uint32_t arrayFastPathParentCacheEpoch_ = 0;
+  /// The full epoch when the array prototype was verified to allow us to
+  /// use fast paths in array JSLib functions. If parentCacheEpoch_ is
+  /// different, we must reverify the prototype chain.
+  uint64_t arrayFastPathParentCacheEpoch_ = 0;
 
   /// Store a key for the function that is executed if a crash occurs.
   /// This key will be unregistered in the destructor.

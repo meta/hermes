@@ -381,6 +381,14 @@ struct RuntimeOffsets {
 
   static constexpr uint32_t runtimeJitCounters =
       offsetof(Runtime, jitContext_.counters_);
+
+  /// The full 64-bit parent cache epoch. Emitted GetById chain entries
+  /// compare it with the epoch stored in their record entry.
+  static constexpr uint32_t runtimeParentCacheEpoch =
+      offsetof(Runtime, parentCacheEpoch_);
+  static_assert(
+      sizeof(Runtime::parentCacheEpoch_) == 8,
+      "chain entries compare the full 64-bit parent cache epoch");
 };
 
 #pragma GCC diagnostic pop
