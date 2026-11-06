@@ -699,8 +699,9 @@ void Emitter::stringSwitchImm(
     RuntimeModule *runtimeModule,
     uint32_t tableIndex,
     const asmjit::Label &defaultLabel,
-    llvh::ArrayRef<StringSwitchCase> cases) {
-  comment("// stringSwitchImm r%u, size %zu", frInput.index(), cases.size());
+    llvh::ArrayRef<const asmjit::Label *> caseLabels) {
+  comment(
+      "// stringSwitchImm r%u, size %zu", frInput.index(), caseLabels.size());
 
   // End of the basic block.
   syncAllFRTempExcept({});
@@ -716,25 +717,39 @@ void Emitter::stringSwitchImm(
   // string and reads the table the shared driver populated.
   EMIT_RUNTIME_CALL_WITHOUT_SAVED_IP(
       *this,
-      void *(*)(RuntimeModule *, uint32_t, SHLegacyValue *),
+      int64_t (*)(RuntimeModule *, uint32_t, SHLegacyValue *),
       _jit_string_switch_imm_table_lookup);
 
-  // The lookup returns null when the value is not a string, or is a string
-  // that no case matches.
+  // The lookup returns a case index, or -1 when the value is not a string, or
+  // is a string that no case matches.
   a.test(x86::rax, x86::rax);
-  a.je(defaultLabel);
-  // Otherwise, branch to the address that was returned.
-  a.jmp(x86::rax);
+  a.js(defaultLabel);
 
-  // The `cases` labels are NOT resolved here: this emitter only has to make
-  // sure they end up bound in this function's code. The shared driver
-  // (JITContext::Compiler::compileCodeBlock) walks the same StringSwitchCase
-  // list after compilation succeeds and writes each label's resolved address
-  // into the runtime module's string switch table, which is what the lookup
-  // above returns. That is why the labels must stay valid -- i.e. must be the
-  // basic block labels, not copies -- until compilation of this code block
-  // completes. Same contract as arm64.
-  (void)cases;
+  // The index selects a slot in the jump table below, which belongs to this
+  // body alone. The shared runtime table maps strings to case indices only,
+  // so a switch executed in an older version of this function still lands in
+  // that older version's code. See _jit_string_switch_imm_table_lookup().
+  //
+  // The table holds deltas from its own start rather than absolute addresses,
+  // exactly as in uintSwitchImm() above; see the commentary there for why the
+  // load has to sign-extend.
+  asmjit::Label tableLab = a.newLabel();
+
+  // rdi and rax are both dead here: rdi is an argument register this sequence
+  // itself clobbered above, and rax holds the index we are about to consume.
+  a.lea(x86::rdi, x86::ptr(tableLab));
+  a.movsxd(x86::rax, x86::dword_ptr(x86::rdi, x86::rax, 2));
+  a.add(x86::rdi, x86::rax);
+  a.jmp(x86::rdi);
+
+  // As in uintSwitchImm(), the table goes immediately after the unconditional
+  // jmp that reads it -- nothing falls into it -- and is aligned by hand
+  // because a jmp is variable length.
+  a.align(asmjit::AlignMode::kData, 4);
+  a.bind(tableLab);
+  for (const asmjit::Label *label : caseLabels) {
+    a.embedLabelDelta(*label, tableLab, /* size */ 4);
+  }
 
   // Do this always, since this could be the end of the BB.
   freeAllFRTempExcept({});

@@ -69,9 +69,13 @@ struct SwitchTargets {
   // The offset of the basic block target corresponding to this switch case.
   // The offset is relative to the address of the StringSwitchImm instruction.
   int32_t bytecodeOffset = 0;
-  // The (absolute) address of the JIT code for the basic block target
-  // corresponding to this switch case.
-  void *jitCodeTarget = 0;
+  // The index of this case in the switch: dense in [0, table size), assigned
+  // in the order the cases are inserted by initializeStringSwitchImmTable().
+  // This is what the JIT lookup helper returns. It is a property of the
+  // bytecode, not of any compiled body, so the table remains valid across
+  // recompilations; each compiled body carries its own table mapping case
+  // index to a code address inside that body.
+  uint32_t caseIndex = 0;
 };
 
 /// This DenseMap specialization is used at runtime to map string values
@@ -486,7 +490,8 @@ class RuntimeModule final : public llvh::ilist_node<RuntimeModule> {
   /// table for a StringSwitchImm instruction; \p size is the size of that
   /// table. Initializes \p table, which must be the runtime table dedicated to
   /// this instruction, to map the case labels to the right (bytecode) branch
-  /// offsets.  (JIT branch targets are left as 0.)
+  /// offsets and to a dense case index, assigned in insertion order, which the
+  /// JIT uses to index the per-body jump table of the code that is running.
   void initializeStringSwitchImmTable(
       StringSwitchDenseMap &table,
       const hbc::StringSwitchTableCase *cases,

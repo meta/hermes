@@ -189,10 +189,16 @@ void _jit_put_by_id(
 /// runtime table. Pass the runtimeModule+index in order to avoid relying on
 /// potentially reallocating storage in RuntimeModule.
 ///
-/// If \p switchValue is found as a case in that table, returns the
-/// corresponding JIT code target for that case.  Otherwise, returns nullptr.
-/// (This assumes that nullptr is not a valid branch target.)
-void *_jit_string_switch_imm_table_lookup(
+/// If \p switchValue is found as a case in that table, returns that case's
+/// index, which is dense in [0, table size). Otherwise -- \p switchValue is
+/// not a string, or is a string no case matches -- returns -1, meaning the
+/// default case.
+///
+/// The result deliberately identifies the case rather than a code address:
+/// the table is shared by every compiled version of the function, while the
+/// address of a case's code is specific to one body. The caller turns the
+/// index into an address using the jump table embedded in its own body.
+int64_t _jit_string_switch_imm_table_lookup(
     RuntimeModule *runtimeModule,
     uint32_t tableIndex,
     SHLegacyValue *switchValue);

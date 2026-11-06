@@ -596,8 +596,9 @@ void Emitter::stringSwitchImm(
     RuntimeModule *runtimeModule,
     uint32_t tableIndex,
     const asmjit::Label &defaultLabel,
-    llvh::ArrayRef<StringSwitchCase> cases) {
-  comment("// stringSwitchImm r%u, size %zu", frInput.index(), cases.size());
+    llvh::ArrayRef<const asmjit::Label *> caseLabels) {
+  comment(
+      "// stringSwitchImm r%u, size %zu", frInput.index(), caseLabels.size());
 
   // End of the basic block.
   syncAllFRTempExcept({});
@@ -611,12 +612,36 @@ void Emitter::stringSwitchImm(
 
   EMIT_RUNTIME_CALL_WITHOUT_SAVED_IP(
       *this,
-      void *(*)(RuntimeModule *, uint32_t, SHLegacyValue *),
+      int64_t (*)(RuntimeModule *, uint32_t, SHLegacyValue *),
       _jit_string_switch_imm_table_lookup);
 
-  a.cbz(a64::x0, defaultLabel);
-  // Otherwise, branch to the address that was returned.
-  a.br(a64::x0);
+  // The lookup returns a case index, or a negative value when the operand is
+  // not a string, or is a string that no case matches.
+  a.cmp(a64::x0, 0);
+  a.b_lt(defaultLabel);
+
+  // The index selects a slot in the jump table below, which belongs to this
+  // body alone. The shared runtime table maps strings to case indices only,
+  // so a switch executed in an older version of this function still lands in
+  // that older version's code. See _jit_string_switch_imm_table_lookup().
+  //
+  // The table holds deltas from its own start, and the adr that materializes
+  // that start doubles as the base of the br, exactly as in uintSwitchImm().
+  asmjit::Label tableLab = a.newLabel();
+
+  // x1 and w2 are dead here: they are argument registers this sequence itself
+  // clobbered above.
+  a.adr(a64::x1, tableLab);
+  a.ldr(a64::w2, a64::Mem(a64::x1, a64::x0, a64::Shift(a64::ShiftOp::kLSL, 2)));
+  a.add(a64::x1, a64::x1, a64::x2, a64::sxtw(0));
+  a.br(a64::x1);
+
+  // Emit the jump table. As in uintSwitchImm(), it goes immediately after the
+  // br that reads it; nothing falls into it.
+  a.bind(tableLab);
+  for (const asmjit::Label *label : caseLabels) {
+    a.embedLabelDelta(*label, tableLab, /* size */ 4);
+  }
 
   // Do this always, since this could be the end of the BB.
   freeAllFRTempExcept({});

@@ -895,28 +895,21 @@ class Emitter {
       uint32_t minVal,
       uint32_t maxVal);
 
-  /// Information for a case of a StringSwitchImm instruction.
-  struct StringSwitchCase {
-    // The string id of the case label.
-    uint32_t caseLabelStringId;
-    // A JIT label for the start of JITted code for the the basic block
-    // corresponding to the case.
-    const asmjit::Label *target;
-
-    StringSwitchCase(uint32_t caseLabelStringId, const asmjit::Label *target)
-        : caseLabelStringId(caseLabelStringId), target(target) {}
-  };
-
   /// Emit a string switch. The lookup table is identified at runtime by
   /// (\p runtimeModule, \p tableIndex) rather than by baking its address into
   /// the code, since the module's table vector may be reallocated after this
   /// code is compiled (e.g. by lazy compilation).
+  ///
+  /// \p caseLabels is indexed by the case index the lookup helper returns --
+  /// so it has one entry per distinct case string, in the order the runtime
+  /// table numbered them, not in bytecode order. Any index with no case in
+  /// this body must be filled with \p defaultLabel by the caller.
   void stringSwitchImm(
       FR frInput,
       RuntimeModule *runtimeModule,
       uint32_t tableIndex,
       const asmjit::Label &defaultLabel,
-      llvh::ArrayRef<StringSwitchCase> cases);
+      llvh::ArrayRef<const asmjit::Label *> caseLabels);
 
   void getByVal(FR frRes, FR frSource, FR frKey);
   void getByIndex(FR frRes, FR frSource, uint32_t key);

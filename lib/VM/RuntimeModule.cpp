@@ -465,11 +465,23 @@ void RuntimeModule::initializeStringSwitchImmTable(
   assert(
       table.empty() &&
       "precondition -- should only be called with empty table.");
+  // The index handed to the next case string seen for the first time. Cases
+  // are numbered densely in [0, table.size()), which is what lets a compiled
+  // body use the index to select a slot in its own jump table.
+  uint32_t nextCaseIndex = 0;
   for (unsigned i = 0; i < size; i++) {
     const hbc::StringSwitchTableCase &switchCase = cases[i];
+    // May run a GC, which visits this table as a root and updates the keys
+    // already in it. strPrim is used below without an intervening allocation.
     StringPrimitive *strPrim =
         getStringPrimFromStringIDMayAllocate(switchCase.caseLabelStringID);
-    table[strPrim].bytecodeOffset = switchCase.target;
+    auto [it, inserted] = table.try_emplace(strPrim);
+    // A repeated case label cannot occur in a well-formed switch, but if it
+    // did, the last one would win -- as it did when this was a plain
+    // table[strPrim] assignment -- and both would share one case index.
+    it->second.bytecodeOffset = switchCase.target;
+    if (inserted)
+      it->second.caseIndex = nextCaseIndex++;
   }
 }
 

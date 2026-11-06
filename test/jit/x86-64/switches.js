@@ -295,7 +295,7 @@ say(dense(4294967296) + " " + big(4294967296) + " " + big(2147483648));
 // CHECK0-NEXT: def bdef bdef
 
 // String switch: every case, a miss, and operands that are not strings at
-// all (the lookup returns null for those too).
+// all (the lookup returns -1, the default case, for those too).
 var strs = ["alpha", "bravo", "charlie", "delta", "echo",
             "foxtrot", "golf", "hotel", "india", "juliet"];
 var acc = "";

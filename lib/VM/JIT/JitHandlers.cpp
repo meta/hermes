@@ -541,14 +541,14 @@ SHLegacyValue _jit_call_builtin(
   return res->getHermesValue();
 }
 
-void *_jit_string_switch_imm_table_lookup(
+int64_t _jit_string_switch_imm_table_lookup(
     RuntimeModule *runtimeModule,
     uint32_t tableIndex,
     SHLegacyValue *switchValueLegacy) {
   PinnedHermesValue *switchValue = toPHV(switchValueLegacy);
   if (!switchValue->isString()) {
     // Not a string; should branch to the default case.
-    return nullptr;
+    return -1;
   }
 
   assert(
@@ -560,9 +560,9 @@ void *_jit_string_switch_imm_table_lookup(
   auto iter = table->find(switchValue->getString());
   if (iter == table->end()) {
     // Not found; branch to the default case.
-    return nullptr;
+    return -1;
   }
-  return iter->second.jitCodeTarget;
+  return iter->second.caseIndex;
 }
 
 const char *typePredName(TypePred pred) {

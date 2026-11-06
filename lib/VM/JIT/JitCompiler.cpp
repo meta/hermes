@@ -79,13 +79,6 @@ class JITContext::Compiler {
   /// In case of "other" error, the error message is recorded here.
   std::string otherErrorMessage_{};
 
-  /// For string switch imm instructions, the labels to be resolved, and fixed
-  /// up in the switch's runtime table, when compilation is complete.
-  llvh::DenseMap<
-      const inst::StringSwitchImmInst *,
-      std::vector<Emitter::StringSwitchCase>>
-      stringSwitchImmTargetLabels_;
-
   /// Scratch buffers owned by the compiler rather than by the frame that
   /// fills them. An emitter can abandon compilation with a longjmp back to
   /// compileCodeBlock() -- on a genuine AsmJit error, or when a backend
@@ -213,25 +206,11 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlock() {
       return res;
     }
 
-    // Translate now-bound labels to targets.
-    uint64_t funcStart = reinterpret_cast<uint64_t>(res);
-    RuntimeModule *runtimeModule = codeBlock_->getRuntimeModule();
-    for (const auto &[inst, cases] : stringSwitchImmTargetLabels_) {
-      assert(
-          inst->op2 < runtimeModule->numStringSwitchImmTables() &&
-          "String Switch index out of range.");
-      StringSwitchDenseMap &table =
-          runtimeModule->getStringSwitchImmTables()[inst->op2];
-      for (const auto &switchCase : cases) {
-        StringPrimitive *strPrim =
-            runtimeModule->getStringPrimFromStringIDMayAllocate(
-                switchCase.caseLabelStringId);
-        table.at(strPrim).jitCodeTarget =
-            reinterpret_cast<uint8_t *>(funcStart) +
-            em_.code.labelOffset(*switchCase.target);
-      }
-    }
-
+    // NOTE: a successful compile writes no code address into the
+    // RuntimeModule. In particular the string switch tables hold case indices,
+    // not code addresses -- each body resolves an index against its own jump
+    // table -- so recompiling a function cannot redirect a switch running in
+    // an older body of it. See emitStringSwitchImm().
     return res;
   } else {
     // We arrive here on error.
@@ -684,37 +663,45 @@ inline void JITContext::Compiler::emitStringSwitchImm(
         table, tablestart, inst->op5);
   }
 
-  // Build the case list straight into the map that keeps it -- so that we can
-  // record the labels in the runtime table when compilation completes -- and
-  // not in a local: the emitter call below may longjmp past a local's
-  // destructor. See jumpTableLabels_.
-  auto [it, res] = stringSwitchImmTargetLabels_.try_emplace(inst);
-  (void)res;
-  assert(res);
-  std::vector<Emitter::StringSwitchCase> &switchTableLabels = it->second;
-  // Mirrors jumpTableLabels_.clear() above: on the (impossible in a
-  // well-formed codeblock) path where this inst was already a key -- so
-  // try_emplace left the existing entry alone and assert(res) is compiled
-  // out -- this drops the stale entries instead of appending to them. On
-  // the normal path try_emplace just default-constructed an empty vector,
-  // so clearing it here is a no-op.
-  switchTableLabels.clear();
-  switchTableLabels.reserve(entries);
+  const asmjit::Label &defaultLabel = bbLabelFromInst(inst, inst->op4);
 
-  // Add a label for each offset in the table.
+  // Build this body's jump table: one slot per distinct case string, indexed
+  // by the case index the runtime table assigned, holding the label of that
+  // case's basic block in the code being emitted now. The lookup helper
+  // returns the index, so this is where a case index becomes an address, and
+  // the address never leaves this body.
+  //
+  // The case indices come from the runtime table rather than from the
+  // position of a case in the bytecode list, so no ordering agreement between
+  // the two is assumed. A slot could in principle go unclaimed only if a case
+  // string were interned to a different StringPrimitive here than when the
+  // table was built, which cannot happen; the default label fills any such
+  // slot rather than leaving it to run into whatever follows.
+  //
+  // See jumpTableLabels_: this cannot be a local, because the emitter call
+  // below may longjmp past a local's destructor.
+  jumpTableLabels_.clear();
+  jumpTableLabels_.resize(table.size(), &defaultLabel);
+
+  RuntimeModule *runtimeModule = codeBlock_->getRuntimeModule();
   for (uint32_t i = 0; i < entries; ++i) {
     const hbc::StringSwitchTableCase &stringSwitchCase = tablestart[i];
-    switchTableLabels.emplace_back(
-        stringSwitchCase.caseLabelStringID,
-        &bbLabelFromInst(inst, stringSwitchCase.target));
+    // May run a GC, which visits the table above as a root and updates its
+    // keys. strPrim is consumed below with no allocation in between.
+    StringPrimitive *strPrim =
+        runtimeModule->getStringPrimFromStringIDMayAllocate(
+            stringSwitchCase.caseLabelStringID);
+    auto it = table.find(strPrim);
+    if (LLVM_UNLIKELY(it == table.end()))
+      hermes_fatal("jit: case string missing from switch table");
+    if (LLVM_UNLIKELY(it->second.caseIndex >= jumpTableLabels_.size()))
+      hermes_fatal("jit: case index out of range of switch table");
+    jumpTableLabels_[it->second.caseIndex] =
+        &bbLabelFromInst(inst, stringSwitchCase.target);
   }
 
   em_.stringSwitchImm(
-      FR(inst->op1),
-      codeBlock_->getRuntimeModule(),
-      inst->op2,
-      bbLabelFromInst(inst, inst->op4),
-      switchTableLabels);
+      FR(inst->op1), runtimeModule, inst->op2, defaultLabel, jumpTableLabels_);
 }
 
 inline void JITContext::Compiler::emitTryGetByIdLong(
