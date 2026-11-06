@@ -337,12 +337,22 @@ void Emitter::emitSafeStoreOrSlow(
   assert(t2 != loc && t2 != value && "t2 must not alias loc or value");
   assert(t1 != t2 && "the two temporaries must differ");
   // The single store below writes the whole slot. In this build state a
-  // SmallHermesValue is a HermesValue, which is what lets a value the
-  // emitters carry in a GP register be stored without any re-encoding; that
-  // is exactly what HERMES_JIT_INLINE_SAFE_STORE selects for.
+  // SmallHermesValue IS a HermesValue -- SmallHermesValueAdaptor -- which is
+  // what lets a value the emitters carry in a GP register be stored without
+  // any re-encoding; that is exactly what HERMES_JIT_INLINE_SAFE_STORE
+  // selects for on arm64.
+  //
+  // The type, not its size, is what has to be asserted. Both of the modes
+  // stage 5c of the inline-write spec has to teach this code about need an
+  // encode, and only one of them is narrower: under
+  // HERMESVM_COMPRESSED_POINTERS a slot is a 4-byte HermesValue32, but under
+  // HERMESVM_BOXED_DOUBLES alone it is an 8-byte HermesValue32 whose tag
+  // lives in the LOW bits. A size comparison would pass there and let
+  // wrongly-encoded bits reach the heap.
   static_assert(
-      sizeof(SmallHermesValue) == sizeof(HermesValue),
-      "the inline store writes a 64-bit HermesValue");
+      std::is_same_v<SmallHermesValue, SmallHermesValueAdaptor>,
+      "the inline store writes a HermesValue verbatim; compressed pointers "
+      "and boxed doubles both need an encode first");
 
   // The two 64-bit runtime words below are loaded with LDR's unsigned-offset
   // form, whose immediate is a 12-bit multiple of the access width. Both

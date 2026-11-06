@@ -12,6 +12,13 @@
 // RUN: %hermes -fno-inline -Xjit -Xjit-threshold=4 -Xjit-crash-on-error -Xjit-emit-asserts -Xjit-emit-type-asserts %s > %t.warma && diff %t.int %t.warma
 // RUN: %hermes -fno-inline %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
+// UNSUPPORTED: handle_san
+
+// UNSUPPORTED under HERMESVM_SANITIZE_HANDLES (the `handle_san` lit feature):
+// that build moves the heap on every allocation, so growing `big` to 600000
+// elements is quadratic, and one -Xjit=force run takes over 25 minutes on a
+// MallocGC tree. The behavioral coverage this file adds is the old-to-young
+// store, which handle sanitization does not exercise any differently.
 
 // The PutByVal inline fast array store: an element write that lands in an
 // existing, non-hole slot of a fast JSArray is performed inline, guarded by
@@ -42,6 +49,12 @@
 // site, and -Xjit=force exercises it just as threshold mode does. Both are
 // run above anyway, since the two modes reach the emitter with different
 // register assignments.
+//
+// ARCHITECTURE-INDEPENDENT. This file checks values, never instructions, so
+// it lives here and runs on every backend, including one whose element store
+// still goes through the helper. That the tier is emitted at all is pinned
+// separately, per backend: x86-64/putbyval-inline-emitted.js and
+// putbyval-inline-emitted-arm64.js.
 //
 // EVERY CHECK THE RUNTIME MAKES IS MADE HERE TOO, or the store declines to
 // the helper. The list, from putByValWithReceiver_RJS (StaticH.cpp), which

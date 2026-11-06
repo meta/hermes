@@ -1551,6 +1551,54 @@ class Emitter {
       uint16_t clazzID,
       SlotIndex slot,
       const asmjit::Label &helperLab);
+
+  /// Emit the PutByVal inline fast array store: a chain of guards that the
+  /// target is a fast JSArray and the key an existing element of it,
+  /// followed by an inline store into that element through
+  /// emitSafeStoreOrSlow(). Falling through means the store is done; every
+  /// guard that fails jumps to \p helperLab.
+  ///
+  /// The guards replicate, one for one, the fast path
+  /// putByValWithReceiver_RJS() takes in StaticH.cpp -- which is itself
+  /// JSObject::putComputedWithReceiver_RJS()'s first branch. Anything the
+  /// runtime would not have handled there is declined:
+  ///   - the target is an object;
+  ///   - of CellKind JSArray exactly, which is what pins haveOwnIndexed()
+  ///     and setOwnIndexed() to ArrayImpl's implementations (Arguments,
+  ///     FastArray, JSTypedArray and friends have their own);
+  ///   - hasFastIndexProperties() holds and the class is not frozen, the
+  ///     latter because ArrayImpl::_setOwnIndexedImpl() refuses a frozen
+  ///     array and freezing does not make the index properties slow;
+  ///   - the key is a double that converts to a uint32 and back unchanged
+  ///     and is not 0xFFFFFFFF -- exactly toArrayIndexFastPath();
+  ///   - `index - beginIndex_ < elemCount_` unsigned, the storage range test
+  ///     of _haveOwnIndexedImpl() and of _setOwnIndexedImpl()'s in-range
+  ///     branch;
+  ///   - the element is not a hole. _haveOwnIndexedImpl() reports false for
+  ///     an `empty` element, so a write to a hole is NOT a fast-path write:
+  ///     the runtime resolves the property normally and may find a setter on
+  ///     the prototype chain.
+  /// The receiver-equals-target test of putByValWithReceiver_RJS() needs no
+  /// code: PutByVal passes the target as the receiver.
+  ///
+  /// One further guard has no counterpart in the runtime and exists only for
+  /// emitSafeStoreOrSlow()'s precondition: the indexed storage cell's
+  /// allocated size must be at most RuntimeOffsets::kMaxInlineStorage, which
+  /// is what proves the cell -- and therefore the element address -- lies in
+  /// a one-unit FixedSizeHeapSegment. A large array's indexed storage
+  /// genuinely is a multi-unit jumbo cell whose card status array is out of
+  /// line, and for an element more than one unit into it the predicate's own
+  /// segment-size test would read object payload instead of SHSegmentInfo.
+  ///
+  /// On entry all three operands must already be synced to the frame,
+  /// because \p helperLab reads them from there. On return every temp this
+  /// used is free again and no FR is registered in one, so the helper call
+  /// that follows is safe (see the free-after-call invariant in doc/JIT.md).
+  void emitPutByValFastArrayTier(
+      FR frTarget,
+      FR frKey,
+      FR frValue,
+      const asmjit::Label &helperLab);
 #endif // HERMES_JIT_INLINE_SAFE_STORE
 
   void getArgumentsPropByValImpl(

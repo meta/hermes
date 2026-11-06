@@ -22,6 +22,226 @@ STATISTIC(
 
 namespace hermes::vm::arm64 {
 
+#if HERMES_JIT_INLINE_SAFE_STORE
+void Emitter::emitPutByValFastArrayTier(
+    FR frTarget,
+    FR frKey,
+    FR frValue,
+    const asmjit::Label &helperLab) {
+  comment("// Inline fast array store");
+
+  // All three operands are already synced to the frame by the caller, so any
+  // temp holding another FR is dead weight here.
+  freeAllFRTempExcept(frTarget);
+
+  // The target and the value are needed as raw HermesValues in GP registers.
+  // The key is needed as the double it has to be, which is what
+  // emit_double_is_uint32() consumes; getOrAllocFRInVecD() only moves the
+  // raw 64 bits -- fmov or ldr, never a conversion -- so this is safe for a
+  // key of any type: a non-number is NaN-encoded and the conversion below
+  // rejects it, which is precisely how toArrayIndexFastPath() itself gets
+  // away with reading key->f64 unconditionally.
+  static_assert(
+      HERMESVALUE_VERSION == 2,
+      "non-numbers must be NaN-encoded for the key test below");
+  HWReg hwTarget = getOrAllocFRInGpX(frTarget, true);
+  HWReg hwValue = getOrAllocFRInGpX(frValue, true);
+  HWReg hwKey = getOrAllocFRInVecD(frKey, true);
+
+  // As in emitPutByIdInlineTier(), the allocs and frees below emit no code at
+  // all: they only decide which registers this sequence may use. Once every
+  // register is recorded, all of them are marked free, which is what leaves
+  // the helper path with no temp registered as an FR location.
+  HWReg hwLoc = allocTempGpX();
+  HWReg hwIdx = allocTempGpX();
+  HWReg hwTemp1 = allocTempGpX();
+  HWReg hwTemp2 = allocTempGpX();
+  HWReg hwKeyTmp = allocTempVecD();
+  const a64::GpX xTarget = hwTarget.a64GpX();
+  const a64::GpX xValue = hwValue.a64GpX();
+  const a64::VecD dKey = hwKey.a64VecD();
+  // Holds the object, then the indexed storage, then the element address.
+  const a64::GpX xLoc = hwLoc.a64GpX();
+  const a64::GpX xIdx = hwIdx.a64GpX();
+  const a64::GpX xTemp1 = hwTemp1.a64GpX();
+  const a64::GpX xTemp2 = hwTemp2.a64GpX();
+  const a64::VecD dKeyTmp = hwKeyTmp.a64VecD();
+  freeReg(hwLoc);
+  freeReg(hwIdx);
+  freeReg(hwTemp1);
+  freeReg(hwTemp2);
+  freeReg(hwKeyTmp);
+  freeFRTemp(frTarget);
+  freeFRTemp(frKey);
+  freeFRTemp(frValue);
+  assert(dKeyTmp != dKey && "emit_double_is_uint32() needs a distinct temp");
+
+  // Unlike x86-64 there is no SmallHermesValue encode ahead of the guards:
+  // HERMES_JIT_INLINE_SAFE_STORE excludes compressed pointers and boxed
+  // doubles on arm64 until that encoder is ported (spec stage 5c), so a slot
+  // holds the HermesValue in xValue verbatim. The static_assert at the hole
+  // test below is what fails the build when that gate opens.
+
+  // Code generation starts here.
+
+  // Is the target an object?
+  emit_sh_ljs_is_object(a, xTemp1, xTarget);
+  a.b_ne(helperLab);
+  // xLoc is the pointer to the object.
+  emit_sh_ljs_get_pointer(a, xLoc, xTarget);
+
+  // Is it a JSArray, and nothing else? The runtime reaches ArrayImpl's
+  // haveOwnIndexed/setOwnIndexed through the object's ObjectVTable; the
+  // exact kind is what lets this code skip that dispatch. ArrayImplKind
+  // would be the wrong test: Arguments is in that range and shares the
+  // storage layout, but restricting to JSArray is what the rest of this
+  // sequence was verified against.
+  // That the kind fits the byte emit_gccell_get_kind() loads is pinned
+  // upstream, by GCCell.h's `kNumCellKinds < 256` static_assert; a value that
+  // narrow always encodes as a compare immediate.
+  emit_gccell_get_kind(a, xTemp1, xLoc);
+  a.cmp(xTemp1.w(), (uint32_t)CellKind::JSArrayKind);
+  a.b_ne(helperLab);
+
+  // Fast index properties (indexedStorage set, hasIndexLikeProperties clear)
+  // and frozen clear, in one masked compare of the hidden class's flags.
+  //
+  // arm64: the mask is three non-adjacent bits, which is not a run of ones
+  // and therefore not an AArch64 logical immediate, so it has to be
+  // materialized in a register first. The value it is compared against is a
+  // single bit and encodes directly.
+  static_assert(
+      RuntimeOffsets::hiddenClassFlags % 2 == 0 &&
+          RuntimeOffsets::hiddenClassFlags < maxNaturalBaseOffset(2),
+      "the class flags must be reachable by an unsigned-offset LDRH");
+  const uint32_t flagsMask = RuntimeOffsets::classFlagsFastArrayMask();
+  const uint32_t flagsValue = RuntimeOffsets::classFlagsFastArrayValue();
+  assert(
+      flagsMask == 0x884 && flagsValue == 0x800 &&
+      "unexpected ClassFlags bit layout");
+  assert(
+      a64::Utils::isAddSubImm(flagsValue) &&
+      "the flags value must encode as a compare immediate");
+  emit_load_cp(a, xTemp1, a64::Mem(xLoc, offsetof(SHJSObject, clazz)));
+  emit_sh_cp_decode_non_null(a, xTemp1);
+  a.ldrh(xTemp1.w(), a64::Mem(xTemp1, RuntimeOffsets::hiddenClassFlags));
+  a.mov(xTemp2.w(), flagsMask);
+  a.and_(xTemp1.w(), xTemp1.w(), xTemp2.w());
+  a.cmp(xTemp1.w(), flagsValue);
+  a.b_ne(helperLab);
+
+  // toArrayIndexFastPath(): the key must be a double that survives a round
+  // trip through uint32, and must not be 0xFFFFFFFF, which JS arrays do not
+  // accept as an index.
+  //
+  // arm64 needs no second exit for a NaN key, unlike x86-64's parity check:
+  // fcmp sets NZCV to 0b0011 for an unordered compare, so Z is clear and the
+  // b.ne below already takes it. A key too large, negative or fractional
+  // fails the same comparison, fcvtzu having saturated or truncated it.
+  emit_double_is_uint32(a, xIdx.w(), dKeyTmp, dKey);
+  a.b_ne(helperLab);
+  // idx == 0xFFFFFFFF, as one instruction: cmn adds, so Z is set exactly when
+  // idx + 1 wraps to zero.
+  a.cmn(xIdx.w(), 1);
+  a.b_eq(helperLab);
+
+  // _haveOwnIndexedImpl()'s and _setOwnIndexedImpl()'s range test:
+  // `index - beginIndex_ < elemCount_`, unsigned, which is one comparison
+  // for both ends. xIdx becomes the index into the storage. The 32-bit
+  // subtract zeroes the upper half of xIdx, which is what makes the scaled
+  // 64-bit index below the uint32 one.
+  static_assert(
+      RuntimeOffsets::arrayImplBeginIndex % 4 == 0 &&
+          RuntimeOffsets::arrayImplElemCount % 4 == 0 &&
+          RuntimeOffsets::arrayImplBeginIndex < maxNaturalBaseOffset(4) &&
+          RuntimeOffsets::arrayImplElemCount < maxNaturalBaseOffset(4),
+      "the array range fields must be reachable by unsigned-offset LDRs");
+  a.ldr(xTemp1.w(), a64::Mem(xLoc, RuntimeOffsets::arrayImplBeginIndex));
+  a.sub(xIdx.w(), xIdx.w(), xTemp1.w());
+  a.ldr(xTemp1.w(), a64::Mem(xLoc, RuntimeOffsets::arrayImplElemCount));
+  a.cmp(xIdx.w(), xTemp1.w());
+  a.b_hs(helperLab);
+
+  // The storage. It cannot be null here: elemCount_ is 0 whenever
+  // indexedStorage_ is, which the comparison above has already ruled out --
+  // the same reasoning that lets _setOwnIndexedImpl() call
+  // getIndexedStorageUnsafe() on this path.
+  static_assert(
+      RuntimeOffsets::arrayImplIndexedStorage % sizeof(CompressedPointer) ==
+              0 &&
+          RuntimeOffsets::arrayImplIndexedStorage <
+              maxNaturalBaseOffset(sizeof(CompressedPointer)),
+      "the indexed storage must be reachable by an unsigned-offset LDR");
+  emit_load_cp(
+      a, xLoc, a64::Mem(xLoc, RuntimeOffsets::arrayImplIndexedStorage));
+  emit_sh_cp_decode_non_null(a, xLoc);
+
+  // The storage cell must not be a jumbo cell, or emitSafeStoreOrSlow()'s
+  // precondition (see its declaration) is violated. A cell allocated in a
+  // JumboHeapSegment has a size greater than kMaxInlineStorage, or 0 if it
+  // is too large to be represented at all, so a single unsigned compare of
+  // `size - 1` rejects both.
+  //
+  // KindAndSize packs the size below the kind, in a word as wide as a
+  // compressed pointer, so the size occupies the low 32 bits of an 8-byte
+  // header and only the low 24 of a 4-byte one. The 32-bit load is right in
+  // both cases; the narrow one needs the kind masked off first.
+  static_assert(
+      RuntimeOffsets::kindAndSizeNumSizeBits <= 32,
+      "the size field must fit the 32-bit load below");
+  static_assert(
+      offsetof(SHGCCell, kindAndSize) % 4 == 0 &&
+          offsetof(SHGCCell, kindAndSize) < maxNaturalBaseOffset(4),
+      "the cell header must be reachable by an unsigned-offset 32-bit LDR");
+  a.ldr(xTemp1.w(), a64::Mem(xLoc, offsetof(SHGCCell, kindAndSize)));
+  if constexpr (RuntimeOffsets::kindAndSizeNumSizeBits < 32) {
+    constexpr uint32_t kSizeMask =
+        (uint32_t)(((uint64_t)1 << RuntimeOffsets::kindAndSizeNumSizeBits) - 1);
+    // A run of low ones is a logical immediate, so this needs no scratch.
+    assert(
+        a64::Utils::isLogicalImm(kSizeMask, 32) &&
+        "the size mask must encode as a logical immediate");
+    a.and_(xTemp1.w(), xTemp1.w(), kSizeMask);
+  }
+  a.sub(xTemp1.w(), xTemp1.w(), 1);
+  emit_cmp_imm32(
+      a, xTemp1.w(), RuntimeOffsets::kMaxInlineStorage - 1, xTemp2.w());
+  a.b_hi(helperLab);
+
+  // The address of the element. The scale is the width of a heap value slot,
+  // which is four bytes under compressed pointers and eight otherwise -- an
+  // element index is not a byte offset in any mode.
+  a.add(xLoc, xLoc, xIdx, a64::lsl(RuntimeOffsets::kLogSmallHermesValueSize));
+  static_assert(
+      offsetof(SHArrayStorageSmall, storage) <= 0xFFFFFF,
+      "the element base offset must fit emit_add_imm_u24()");
+  emit_add_imm_u24(a, xLoc, offsetof(SHArrayStorageSmall, storage));
+
+  // _haveOwnIndexedImpl() reports false for an `empty` element, so a write
+  // over a hole is not a fast-path write at all: the runtime resolves the
+  // property normally, and may find an accessor on the prototype chain.
+  // Decline, and let the helper do that.
+  //
+  // In this build state a slot holds the HermesValue's bits unshifted, so
+  // the test is HermesValue's own ETag test. The static_assert is what fails
+  // the build when the arm64 gate opens to either of the two modes stage 5c
+  // adds: under HERMESVM_COMPRESSED_POINTERS a slot is a 4-byte
+  // HermesValue32, and under HERMESVM_BOXED_DOUBLES alone it is an 8-byte
+  // one -- same width as here, but with the tag in the LOW bits, so a size
+  // comparison would not have caught it. Both need the whole encoded empty
+  // value compared instead, as emit_shv_load_is_empty() does on x86-64.
+  static_assert(
+      std::is_same_v<SmallHermesValue, SmallHermesValueAdaptor>,
+      "an element slot holds a HermesValue verbatim in this build state");
+  a.ldr(xTemp1, a64::Mem(xLoc));
+  emit_sh_ljs_is_empty(a, xTemp1, xTemp1);
+  a.b_eq(helperLab);
+
+  // Store, if the write barrier for it is a no-op or a card-dirty.
+  emitSafeStoreOrSlow(xLoc, xValue, xTemp1, xTemp2, helperLab);
+}
+#endif // HERMES_JIT_INLINE_SAFE_STORE
+
 void Emitter::putByValImpl(
     FR frTarget,
     FR frKey,
@@ -44,6 +264,21 @@ void Emitter::putByValImpl(
   syncToFrame(frTarget);
   syncToFrame(frKey);
   syncToFrame(frValue);
+
+#if HERMES_JIT_INLINE_SAFE_STORE
+  // Unlike the PutById tier this needs nothing from a property cache: the
+  // guards are all on the values themselves, so the tier goes ahead of the
+  // helper call unconditionally. PutByVal passes the target as the receiver,
+  // which is the one precondition of the runtime fast path that is satisfied
+  // by construction rather than by a guard.
+  asmjit::Label helperLab = a.newLabel();
+  asmjit::Label contLab = a.newLabel();
+  emitPutByValFastArrayTier(frTarget, frKey, frValue, helperLab);
+  // Falling out of the inline tier means the store is done.
+  a.b(contLab);
+  a.bind(helperLab);
+#endif
+
   freeAllFRTempExcept({});
 
   a.mov(a64::x0, xRuntime);
@@ -51,6 +286,10 @@ void Emitter::putByValImpl(
   loadFrameAddr(a64::x2, frKey);
   loadFrameAddr(a64::x3, frValue);
   callRuntimeWithSavedIP((void *)shImpl, shImplName);
+
+#if HERMES_JIT_INLINE_SAFE_STORE
+  a.bind(contLab);
+#endif
 }
 
 void Emitter::putByValWithReceiver(
