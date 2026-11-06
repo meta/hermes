@@ -248,7 +248,7 @@ struct VMOnlyRuntimeFlags {
       llvh::cl::desc(
           "maximum number of recompiles per function "
           "(0 disables recompilation)"),
-      llvh::cl::init(1)};
+      llvh::cl::init(2)};
 
   llvh::cl::opt<uint32_t> JITRecompileThreshold{
       "Xjit-recompile-threshold",

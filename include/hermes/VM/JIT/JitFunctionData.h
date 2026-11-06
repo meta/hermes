@@ -12,10 +12,12 @@
 
 #if HERMESVM_JIT
 
+#include "hermes/VM/CellKind.h"
 #include "hermes/VM/HermesValue.h"
 #include "llvh/ADT/SmallVector.h"
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 
 namespace hermes {
@@ -24,6 +26,91 @@ namespace vm {
 class Runtime;
 class CodeBlock;
 typedef HermesValue (*JITCompiledFunctionPtr)(Runtime *runtime);
+
+/// True for the typed-array kinds the inline PutByVal store tier can
+/// specialize on. Uint8Clamped (round-half-to-even), Float16, and the
+/// BigInt kinds are excluded and record as "other".
+inline bool isJitSupportedTypedArrayStoreKind(CellKind kind) {
+  switch (kind) {
+    case CellKind::Uint8ArrayKind:
+    case CellKind::Int8ArrayKind:
+    case CellKind::Uint16ArrayKind:
+    case CellKind::Int16ArrayKind:
+    case CellKind::Uint32ArrayKind:
+    case CellKind::Int32ArrayKind:
+    case CellKind::Float32ArrayKind:
+    case CellKind::Float64ArrayKind:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/// One PutByVal site's observed shape and what the owning body emitted
+/// for it. Observed fields are written by the recording helper alone --
+/// no emitted tier instruments itself, so a hit is silent; emitted
+/// fields are filled during emission. See the 2026-09-09 monotone
+/// emission spec.
+struct JitByValSiteRecord {
+  /// Sentinel for taKind/specializedTAKind: no kind recorded/emitted.
+  static constexpr uint8_t kTAKindNone = 0xff;
+
+  /// Bytecode offset of the PutByVal instruction: unique within the
+  /// function, stable across versions.
+  uint32_t siteId;
+  /// JSArray traffic observed here. Selects no tier -- the JSArray tier
+  /// is a static prior emitted everywhere it is possible at all -- but
+  /// it feeds diagnostics and the demotion stability rule.
+  uint8_t jsArraySeen = 0;
+  /// A non-JSArray, non-supported-typed-array target declined here.
+  uint8_t otherSeen = 0;
+  /// The FIRST supported typed-array kind observed here, as a CellKind
+  /// value, or kTAKindNone. Never un-learned and never replaced: a
+  /// second kind sets taPoisoned instead.
+  uint8_t taKind = kTAKindNone;
+  /// The typed-array kind the owning body emitted a tier for.
+  uint8_t specializedTAKind = kTAKindNone;
+  /// A supported kind DIFFERENT from taKind was observed. taKind keeps
+  /// the first kind permanently; a poisoned site still gets its first
+  /// kind's tier, and poison marks that no further kind can be added.
+  uint8_t taPoisoned = 0;
+  /// Set by recordByValObservation when a field actually transitions;
+  /// cleared by the demotion pass each threshold crossing.
+  uint8_t changed = 0;
+  /// Consecutive crossings with no transition and nothing actionable;
+  /// at kDemotionStableCrossings the site's helper slot is flipped.
+  uint8_t unchangedCrossings = 0;
+  /// The helper this site's emitted call goes through, as per-site
+  /// MUTABLE state: initialized by the emitter to the recording
+  /// _jit_put_by_val_{loose,strict}, flipped to the matching plain
+  /// _sh_ljs helper on demotion. The emitted call is
+  /// `movabs xScratch, &helper; call [xScratch]`. Never flipped back.
+  void *helper = nullptr;
+};
+
+/// The version-local consumer feedback records, owned by (and destroyed
+/// with) the JitVersionData. byValSites is a deque, NOT a vector:
+/// emitted code embeds the address of an entry's helper slot, so
+/// entries must never relocate once created. Lookup is a linear scan;
+/// functions have a handful of ByVal sites.
+struct JitConsumerRecords {
+  std::deque<JitByValSiteRecord> byValSites;
+
+  /// Number of sites whose helper slot still holds a recording
+  /// helper. Gates the demotion pass constant-time once zero. 32-bit:
+  /// site counts are bounded by bytecode size, which is 32-bit.
+  uint32_t recordingByValSites = 0;
+
+  /// \return the entry for \p siteId, creating it if absent.
+  JitByValSiteRecord &findOrCreateByValSite(uint32_t siteId) {
+    for (auto &s : byValSites)
+      if (s.siteId == siteId)
+        return s;
+    byValSites.emplace_back();
+    byValSites.back().siteId = siteId;
+    return byValSites.back();
+  }
+};
 
 /// Everything known about ONE compiled body: its code, and the feedback
 /// recorded about that body's own execution. A version IS {its code, its
@@ -64,13 +151,10 @@ struct JitVersionData {
   /// because the cache was cold. Same role as coldWriteCacheIdxs, for
   /// GetById sites.
   llvh::SmallVector<uint8_t, 4> coldReadCacheIdxs;
-  /// Reserved for consumer-specific feedback records (e.g. the future
-  /// PutByVal per-site observed-kind records), which are version-local
-  /// by construction. Always null in v1; typed and owned by the consumer
-  /// that allocates it. JitVersionData has no destructor for this field,
-  /// so the consumer that allocates through this pointer must also own
-  /// releasing it -- otherwise the records leak once per version.
-  void *consumerRecords = nullptr;
+  /// Version-local consumer feedback (PutByVal per-site shape
+  /// records). Null until the first entry is created; destroyed with
+  /// this record, which outlives every possible execution of the body.
+  std::unique_ptr<JitConsumerRecords> consumerRecords{};
 
   /// \param cb the function this body is compiled from.
   /// \param declineThreshold declines before considering a recompile.

@@ -190,6 +190,27 @@ void _jit_put_by_id(
     bool strictMode,
     bool tryProp);
 
+/// Slow path of PutByVal (loose), and the recording site for ByVal
+/// tier declines: records the observed target shape into
+/// \p versionData's entry for \p siteId, counts the decline (possibly
+/// triggering a recompile), then forwards to the plain SH helper.
+/// \param siteId the PutByVal instruction's bytecode offset.
+void _jit_put_by_val_loose(
+    SHRuntime *shr,
+    SHLegacyValue *target,
+    SHLegacyValue *key,
+    SHLegacyValue *value,
+    SHJitVersionData *versionData,
+    uint32_t siteId);
+/// Strict-mode variant of _jit_put_by_val_loose.
+void _jit_put_by_val_strict(
+    SHRuntime *shr,
+    SHLegacyValue *target,
+    SHLegacyValue *key,
+    SHLegacyValue *value,
+    SHJitVersionData *versionData,
+    uint32_t siteId);
+
 /// Assumes that table  at index \p tableIndex is an initialized string switch
 /// runtime table. Pass the runtimeModule+index in order to avoid relying on
 /// potentially reallocating storage in RuntimeModule.

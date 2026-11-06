@@ -416,6 +416,83 @@ void _jit_put_by_id(
   }
 }
 
+/// Record one PutByVal decline's observed target shape into \p vd's
+/// entry for \p siteId. Reads the target's kind as a scalar and
+/// retains no raw pointer; allocates only native memory.
+static void recordByValObservation(
+    JitVersionData *vd,
+    uint32_t siteId,
+    SHLegacyValue *target) {
+  if (!vd->consumerRecords)
+    vd->consumerRecords = std::make_unique<JitConsumerRecords>();
+  JitByValSiteRecord &site = vd->consumerRecords->findOrCreateByValSite(siteId);
+  HermesValue t = *toPHV(target);
+  if (!t.isObject()) {
+    if (!site.otherSeen)
+      site.changed = 1;
+    site.otherSeen = 1;
+    return;
+  }
+  CellKind kind = static_cast<GCCell *>(t.getObject())->getKind();
+  if (kind == CellKind::JSArrayKind) {
+    if (!site.jsArraySeen)
+      site.changed = 1;
+    site.jsArraySeen = 1;
+  } else if (isJitSupportedTypedArrayStoreKind(kind)) {
+    uint8_t k8 = (uint8_t)kind;
+    if (site.taKind == JitByValSiteRecord::kTAKindNone) {
+      site.taKind = k8;
+      site.changed = 1;
+    } else if (site.taKind != k8) {
+      // Poison keeps the first kind: the site still gets (or keeps) its
+      // taKind tier, and the poison flag records that no further kind
+      // can ever be added, i.e. that the site cannot progress again.
+      if (!site.taPoisoned)
+        site.changed = 1;
+      site.taPoisoned = 1;
+    }
+  } else {
+    if (!site.otherSeen)
+      site.changed = 1;
+    site.otherSeen = 1;
+  }
+}
+
+void _jit_put_by_val_loose(
+    SHRuntime *shr,
+    SHLegacyValue *target,
+    SHLegacyValue *key,
+    SHLegacyValue *value,
+    SHJitVersionData *versionData,
+    uint32_t siteId) {
+  JitVersionData *vd = reinterpret_cast<JitVersionData *>(versionData);
+  recordByValObservation(vd, siteId, target);
+  // Recompilation trigger, as in _jit_put_by_id: every call is a
+  // decline of the calling body's ByVal tiers; the shared counter and
+  // threshold pool ById and ByVal declines. Runs after recording (see
+  // above) but before the store logic derives raw pointers.
+  if (LLVM_UNLIKELY(++vd->declineCount >= vd->declineThreshold)) {
+    getRuntime(shr).getJITContext().considerRecompile(getRuntime(shr), vd);
+  }
+  _sh_ljs_put_by_val_loose_rjs(shr, target, key, value);
+}
+
+/// Strict-mode variant of _jit_put_by_val_loose; see its documentation.
+void _jit_put_by_val_strict(
+    SHRuntime *shr,
+    SHLegacyValue *target,
+    SHLegacyValue *key,
+    SHLegacyValue *value,
+    SHJitVersionData *versionData,
+    uint32_t siteId) {
+  JitVersionData *vd = reinterpret_cast<JitVersionData *>(versionData);
+  recordByValObservation(vd, siteId, target);
+  if (LLVM_UNLIKELY(++vd->declineCount >= vd->declineThreshold)) {
+    getRuntime(shr).getJITContext().considerRecompile(getRuntime(shr), vd);
+  }
+  _sh_ljs_put_by_val_strict_rjs(shr, target, key, value);
+}
+
 #ifdef HERMESVM_PROFILER_BB
 void _interpreter_register_bb_execution(SHRuntime *shr, uint16_t pointIndex) {
   Runtime &runtime = getRuntime(shr);

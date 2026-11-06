@@ -237,6 +237,10 @@ class JSTypedArrayBase : public JSObject {
   friend void TypedArrayBaseBuildMeta(
       const GCCell *cell,
       Metadata::Builder &mb);
+  /// The x86-64 JIT emits an inline typed-array element store that reads the
+  /// three fields above directly; RuntimeOffsets is where their offsets are
+  /// derived with offsetof().
+  friend struct RuntimeOffsets;
 };
 
 #ifdef NDEBUG

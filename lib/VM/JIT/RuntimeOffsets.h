@@ -11,6 +11,7 @@
 #include "hermes/VM/ArrayStorage.h"
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/JSArray.h"
+#include "hermes/VM/JSTypedArray.h"
 #include "hermes/VM/Runtime.h"
 #include "hermes/VM/RuntimeModule.h"
 #include "hermes/VM/sh_runtime.h"
@@ -294,6 +295,15 @@ struct RuntimeOffsets {
       offsetof(ArrayImpl, elemCount_);
   static constexpr uint32_t arrayImplIndexedStorage =
       offsetof(ArrayImpl, indexedStorage_);
+  /// @}
+#endif
+
+  /// \name Indexed store class flags.
+  ///
+  /// Deliberately outside the Hades-only block above: these depend only on
+  /// ClassFlags, and the inline typed-array store tier -- which needs no
+  /// write barrier and is therefore emitted under every GC -- uses them too.
+  /// @{
 
   /// Offset of the 16-bit ClassFlags word in a HiddenClass.
   static constexpr uint32_t hiddenClassFlags = offsetof(HiddenClass, flags_);
@@ -328,7 +338,23 @@ struct RuntimeOffsets {
     return f._flags;
   }
   /// @}
-#endif
+
+  /// \name Typed array element store.
+  ///
+  /// The layout the inline PutByVal typed-array tier reads out of a
+  /// JSTypedArrayBase and its JSArrayBuffer. See
+  /// Emitter::emitPutByValTypedArrayTier(). Like the class flags above,
+  /// these are unconditional: the tier stores no GC pointers and so exists
+  /// under every GC.
+  /// @{
+  static constexpr uint32_t jsTypedArrayBaseBuffer =
+      offsetof(JSTypedArrayBase, buffer_);
+  static constexpr uint32_t jsTypedArrayBaseLength =
+      offsetof(JSTypedArrayBase, length_);
+  static constexpr uint32_t jsTypedArrayBaseOffset =
+      offsetof(JSTypedArrayBase, offset_);
+  static constexpr uint32_t jsArrayBufferData = offsetof(JSArrayBuffer, data_);
+  /// @}
 
 #ifndef NDEBUG
   static constexpr uint32_t runtimeDebugAllocCounter =

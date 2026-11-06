@@ -230,7 +230,7 @@ class JITContext {
   /// Once the limit is reached, no more code will be JIT'ed.
   uint32_t memoryLimit_{32u << 20};
   /// Maximum number of recompiles per function. 0 disables recompilation.
-  uint8_t maxRecompiles_{1};
+  uint8_t maxRecompiles_{2};
   /// Declines within one compiled body before a recompile is considered.
   uint32_t recompileDeclineThreshold_{
       JitFunctionData::kDefaultRecompileDeclineThreshold};

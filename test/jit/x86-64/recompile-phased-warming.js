@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes -fno-inline -Xjit -Xjit-threshold=4 -Xjit-recompile-threshold=64 -Xdump-jitcode=2 %s | %FileCheck %s
+// RUN: %hermes -fno-inline -Xjit -Xjit-threshold=4 -Xjit-recompile-threshold=64 -Xjit-max-recompiles=1 -Xdump-jitcode=2 %s | %FileCheck %s
 // REQUIRES: jit
 // UNSUPPORTED: handle_san
 

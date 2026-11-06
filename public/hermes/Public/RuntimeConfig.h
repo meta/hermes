@@ -141,7 +141,7 @@ using ThreadRunner = std::function<void(std::function<void()>)>;
   F(constexpr, uint32_t, JITMemoryLimit, 32u << 20)                    \
                                                                        \
   /* Maximum recompiles per function; 0 disables recompilation. */     \
-  F(constexpr, uint32_t, JITMaxRecompiles, 1)                          \
+  F(constexpr, uint32_t, JITMaxRecompiles, 2)                          \
                                                                        \
   /* ById declines in one body before a recompile is considered.  */   \
   /* 0 is clamped to 1. Mirrors kDefaultRecompileDeclineThreshold. */  \

@@ -15,6 +15,8 @@
 #if HERMESVM_JIT
 #include "JitCurArch.h"
 
+#include "JitHandlers.h"
+
 #include "hermes/Inst/InstDecode.h"
 #include "hermes/VM/JIT/DiscoverBB.h"
 #include "hermes/VM/JIT/JitFunctionData.h"
@@ -117,7 +119,30 @@ class JITContext::Compiler {
               _sh_longjmp(errorJmpBuf_, 1);
             }),
         codeBlock_(codeBlock),
-        funcStart_((const char *)codeBlock->begin()) {}
+        funcStart_((const char *)codeBlock->begin()) {
+    // Carry forward the observed shape feedback from the version this
+    // candidate is compiled to replace: what any version learned, the
+    // next version knows. Emitted-tier fields start empty and are
+    // filled by this compile. First compiles start with no records.
+    // taPoisoned and the helper slot's VALUE also carry forward: a
+    // demoted site stays demoted in the candidate, and a
+    // still-recording value is fine to copy since the emitter only
+    // initializes null slots. recordingByValSites is NOT copied --
+    // it is computed at install.
+    if (JitFunctionData *jd = codeBlock->getJitData()) {
+      if (jd->current && jd->current->consumerRecords) {
+        auto copy = std::make_unique<JitConsumerRecords>();
+        for (const auto &s : jd->current->consumerRecords->byValSites) {
+          JitByValSiteRecord r = s;
+          r.specializedTAKind = JitByValSiteRecord::kTAKindNone;
+          r.changed = 0;
+          r.unchangedCrossings = 0;
+          copy->byValSites.push_back(r);
+        }
+        candidateVD_->consumerRecords = std::move(copy);
+      }
+    }
+  }
 
   /// Compile the codeblock that this object was instantiated for. On failure,
   /// set the "don't JIT" flag of the codeblock.
@@ -224,6 +249,68 @@ bool JITContext::recompile(Runtime &runtime, CodeBlock *codeBlock) {
   return true;
 }
 
+/// \return true if some ByVal site's observed typed-array kind is not
+/// covered by the current body's emitted tier and a recompile could
+/// cover it. Under monotone emission this is the ONLY ByVal progress
+/// source: the JSArray tier is a static prior emitted wherever it is
+/// possible, so it can never be missing where evidence would want it,
+/// and taPoisoned is deliberately not consulted -- a poisoned site
+/// still earns its first kind's tier.
+static bool byValShapeProgress(const JitVersionData *vd) {
+  const JitConsumerRecords *cr = vd->consumerRecords.get();
+  if (!cr)
+    return false;
+  for (const auto &s : cr->byValSites) {
+    if (s.taKind != JitByValSiteRecord::kTAKindNone &&
+        isJitSupportedTypedArrayStoreKind((CellKind)s.taKind) &&
+        s.taKind != s.specializedTAKind)
+      return true;
+  }
+  return false;
+}
+
+/// A site is demoted after this many consecutive threshold crossings on
+/// which its record neither changed nor had anything actionable left to
+/// learn. Note the schedule for a site observed from cold: its first
+/// crossing is a "changed" crossing, so demotion lands at the fourth.
+static constexpr uint8_t kDemotionStableCrossings = 3;
+
+/// \return true if \p h is one of the recording PutByVal helpers, i.e.
+/// the site has not been demoted yet.
+static bool isRecordingHelper(void *h) {
+  return h == (void *)_jit_put_by_val_loose ||
+      h == (void *)_jit_put_by_val_strict;
+}
+
+/// Flip \p s to the plain helper matching its strictness, which is
+/// derived from the slot's current value rather than stored separately.
+/// Terminal: nothing ever flips a slot back (spec: "Terminal is
+/// terminal").
+static void demoteSite(JitByValSiteRecord &s) {
+  s.helper = s.helper == (void *)_jit_put_by_val_strict
+      ? (void *)_sh_ljs_put_by_val_strict_rjs
+      : (void *)_sh_ljs_put_by_val_loose_rjs;
+}
+
+/// Flip every still-recording site of \p vd to the plain helper, without
+/// counting the flips: retirement IS the terminal state for that body.
+/// A retired body's observations influence nothing by construction (the
+/// staleness gate), so its recording is pure waste -- and without this
+/// sweep a long-running old activation would record forever, since its
+/// own threshold crossings die at the staleness gate before any demotion
+/// pass could run. These flips are bookkeeping rather than policy
+/// decisions, so they deliberately do not increment NumByValDemotions.
+static void demoteAllSitesOnRetirement(JitVersionData *vd) {
+  JitConsumerRecords *cr = vd->consumerRecords.get();
+  if (!cr)
+    return;
+  for (auto &s : cr->byValSites) {
+    if (isRecordingHelper(s.helper))
+      demoteSite(s);
+  }
+  cr->recordingByValSites = 0;
+}
+
 void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
   if (counters_.get())
     ++counters_.get()[(unsigned)JitCounter::NumRecompileChecks];
@@ -236,32 +323,73 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
   // crossing on an already slow path.
   if (vd != data->current.get())
     return;
-  if (!enabled_ || !data->recompileBudget || vd->coldByIdSites == 0)
-    return;
-  // Progress check: has one of the SPECIFIC sites the most recent compile
-  // recorded as cold -- not just some unrelated cache -- warmed enough to
-  // change what the next compile would emit for it? A write site warms
-  // when its cache now names a class. A read site warms only when its
-  // cache satisfies the specialization gate emitGetById itself uses
-  // (numGoodChanges == 1 && a class is recorded); a merely non-null but
-  // still-polymorphic read cache would not change anything if recompiled.
-  bool warmed = false;
-  for (uint8_t idx : vd->coldWriteCacheIdxs) {
-    if (codeBlock->getWriteCacheEntry(idx)->clazz.getNoBarrierUnsafe()) {
-      warmed = true;
-      break;
-    }
-  }
-  if (!warmed) {
-    for (uint8_t idx : vd->coldReadCacheIdxs) {
-      ReadPropertyCacheEntry *entry = codeBlock->getReadCacheEntry(idx);
-      if (entry->numGoodChanges == 1 && entry->clazz.getNoBarrierUnsafe()) {
-        warmed = true;
-        break;
+  // Demotion pass (spec: "The demotion rule"). It sits ahead of the
+  // enabled_/budget early-outs on purpose: demotion needs no budget, and
+  // it is precisely when no recompile can ever happen again that a still
+  // recording site is paying for knowledge nobody can act on.
+  if (JitConsumerRecords *cr = vd->consumerRecords.get()) {
+    if (cr->recordingByValSites != 0) {
+      bool actionablePossible = enabled_ && data->recompileBudget != 0;
+      for (auto &s : cr->byValSites) {
+        if (!isRecordingHelper(s.helper))
+          continue;
+        // An empty record means the site's helper has not been called at
+        // all; flipping it would silence a site that might still learn.
+        bool observed = s.jsArraySeen || s.otherSeen ||
+            s.taKind != JitByValSiteRecord::kTAKindNone;
+        // The ByVal progress term, against the CURRENT body's emitted
+        // kind, and only while a recompile could still act on it.
+        bool canProgress = actionablePossible &&
+            s.taKind != JitByValSiteRecord::kTAKindNone &&
+            isJitSupportedTypedArrayStoreKind((CellKind)s.taKind) &&
+            s.taKind != s.specializedTAKind;
+        if (!observed || canProgress || s.changed) {
+          s.unchangedCrossings = 0;
+        } else if (++s.unchangedCrossings >= kDemotionStableCrossings) {
+          demoteSite(s);
+          --cr->recordingByValSites;
+          if (counters_.get())
+            ++counters_.get()[(unsigned)JitCounter::NumByValDemotions];
+        }
+        s.changed = 0;
       }
     }
   }
-  if (!warmed)
+  if (!enabled_ || !data->recompileBudget)
+    return;
+  // Progress check, two sources, either qualifies: a specific cold
+  // ById site whose cache has since warmed, or a ByVal site whose
+  // observed shape the current body's tiers do not cover. The
+  // recompile emits everything both sources know.
+  bool progress = false;
+  if (vd->coldByIdSites != 0) {
+    // Has one of the SPECIFIC sites the most recent compile recorded as
+    // cold -- not just some unrelated cache -- warmed enough to change
+    // what the next compile would emit for it? A write site warms when
+    // its cache now names a class. A read site warms only when its
+    // cache satisfies the specialization gate emitGetById itself uses
+    // (numGoodChanges == 1 && a class is recorded); a merely non-null
+    // but still-polymorphic read cache would not change anything if
+    // recompiled.
+    for (uint8_t idx : vd->coldWriteCacheIdxs) {
+      if (codeBlock->getWriteCacheEntry(idx)->clazz.getNoBarrierUnsafe()) {
+        progress = true;
+        break;
+      }
+    }
+    if (!progress) {
+      for (uint8_t idx : vd->coldReadCacheIdxs) {
+        ReadPropertyCacheEntry *entry = codeBlock->getReadCacheEntry(idx);
+        if (entry->numGoodChanges == 1 && entry->clazz.getNoBarrierUnsafe()) {
+          progress = true;
+          break;
+        }
+      }
+    }
+  }
+  if (!progress)
+    progress = byValShapeProgress(vd);
+  if (!progress)
     return;
   recompile(runtime, codeBlock);
 }
@@ -401,8 +529,21 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
   candidateVD_->coldByIdSites =
       coldTotal > 0xffff ? 0xffff : (uint16_t)coldTotal;
   candidateVD_->body = fn;
-  if (jitData->current)
+  // How many of the candidate's sites still call a recording helper.
+  // Derived here rather than carried forward: the carry copies each
+  // slot's VALUE (so demotions survive), and the emitter fills the null
+  // slots of the sites it emits, so only now is the set final. It gates
+  // the demotion pass constant-time once every site is demoted.
+  if (JitConsumerRecords *cr = candidateVD_->consumerRecords.get()) {
+    uint32_t recording = 0;
+    for (const auto &s : cr->byValSites)
+      recording += isRecordingHelper(s.helper);
+    cr->recordingByValSites = recording;
+  }
+  if (jitData->current) {
+    demoteAllSitesOnRetirement(jitData->current.get());
     jitData->retired.push_back(std::move(jitData->current));
+  }
   jitData->current = std::move(candidateVD_);
   codeBlock_->setJITCompiled(jitData->current->body);
 
@@ -449,6 +590,23 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
     if (jitData->current->coldByIdSites > 0) {
       llvh::outs() << "JIT cold ById sites: " << jitData->current->coldByIdSites
                    << "\n";
+    }
+    // The ByVal shape records this body was compiled from: how many sites had
+    // been observed at all, and how many of those this body specialized with
+    // the typed-array tier. This is what makes tier selection pinnable.
+    if (auto *cr = jitData->current->consumerRecords.get()) {
+      size_t observed = 0, specialized = 0;
+      for (const auto &s : cr->byValSites) {
+        if (s.jsArraySeen || s.otherSeen ||
+            s.taKind != JitByValSiteRecord::kTAKindNone)
+          ++observed;
+        if (s.specializedTAKind != JitByValSiteRecord::kTAKindNone)
+          ++specialized;
+      }
+      if (observed) {
+        llvh::outs() << "JIT ByVal sites: " << observed << " observed, "
+                     << specialized << " specialized\n";
+      }
     }
   }
 

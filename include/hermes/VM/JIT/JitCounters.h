@@ -22,7 +22,11 @@ namespace vm {
    * exhaustion and from retired bodies (the gates run inside     \
    * considerRecompile), so it grows where it used to plateau. */ \
   X(NumRecompileChecks)                                           \
-  X(NumRecompiles)
+  X(NumRecompiles)                                                \
+  /* PutByVal sites whose helper slot the demotion pass flipped   \
+   * from the recording helper to the plain one. Retirement-time  \
+   * flips are bookkeeping, not policy, and are NOT counted. */   \
+  X(NumByValDemotions)
 
 /// Enum with an entry for each JIT counter. This is used to index into the
 /// list of counters.

@@ -178,6 +178,11 @@ class JSArrayBuffer final : public JSObject {
   bool external_;
   bool attached_;
 
+  /// The x86-64 JIT emits an inline typed-array element store that reads
+  /// data_ directly; RuntimeOffsets is where its offset is derived with
+  /// offsetof().
+  friend struct RuntimeOffsets;
+
  public:
   JSArrayBuffer(
       Runtime &runtime,

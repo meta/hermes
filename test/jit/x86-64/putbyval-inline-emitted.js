@@ -120,6 +120,12 @@ print(a[1]);
 // SPEC-BOXED: mov qword ptr {{.*}}
 // SPEC: mov byte ptr {{.*}}, 1
 //
-// And the unchanged helper call the guards fall back to.
+// And the helper call the guards fall back to: an indirect call through
+// the site's mutable helper slot (spec: "Slow-path demotion: the pointer
+// flip"), which currently holds the recording helper that forwards to
+// _sh_ljs_put_by_val_loose_rjs after recording this site's observed
+// shape.
 // SPEC: [[SLOW]]:
-// SPEC: call _sh_ljs_put_by_val_loose_rjs
+// SPEC: // call _jit_put_by_val_loose [indirect]
+// SPEC: mov r11, {{.*}}
+// SPEC: call qword ptr [r11]

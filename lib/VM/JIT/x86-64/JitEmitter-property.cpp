@@ -27,7 +27,8 @@ void Emitter::emitPutByValFastArrayTier(
     FR frTarget,
     FR frKey,
     FR frValue,
-    const asmjit::Label &helperLab) {
+    const asmjit::Label &helperLab,
+    bool targetKnownObject) {
   comment("// Inline fast array store");
 
   // All three operands are already synced to the frame by the caller, so any
@@ -88,9 +89,13 @@ void Emitter::emitPutByValFastArrayTier(
   const x86::Gp &shv =
       emit_shv_encode_for_slot_or_slow(a, temp2, value, temp1, helperLab);
 
-  // Is the target an object?
-  emit_sh_ljs_is_object(a, temp1, target);
-  a.jne(helperLab);
+  // Is the target an object? At a duo site the typed-array tier ahead of this
+  // one has already proved that, and nothing runs between the two tiers that
+  // could change the answer.
+  if (!targetKnownObject) {
+    emit_sh_ljs_is_object(a, temp1, target);
+    a.jne(helperLab);
+  }
   // loc is the pointer to the object.
   emit_sh_ljs_get_pointer(a, loc, target);
 
@@ -196,17 +201,206 @@ void Emitter::emitPutByValFastArrayTier(
 }
 #endif // HERMES_JIT_INLINE_SAFE_STORE
 
+void Emitter::emitPutByValTypedArrayTier(
+    FR frTarget,
+    FR frKey,
+    FR frValue,
+    CellKind kind,
+    const asmjit::Label &kindMissLab,
+    const asmjit::Label &helperLab) {
+  comment("// Inline typed array store (kind %u)", (unsigned)kind);
+
+  const bool isFloat64 = kind == CellKind::Float64ArrayKind;
+  const bool isFloat32 = kind == CellKind::Float32ArrayKind;
+  // The element width, as a log2 byte count: also the scale of the store's
+  // index operand, since the index is an element count.
+  uint32_t logWidth;
+  switch (kind) {
+    case CellKind::Uint8ArrayKind:
+    case CellKind::Int8ArrayKind:
+      logWidth = 0;
+      break;
+    case CellKind::Uint16ArrayKind:
+    case CellKind::Int16ArrayKind:
+      logWidth = 1;
+      break;
+    case CellKind::Uint32ArrayKind:
+    case CellKind::Int32ArrayKind:
+    case CellKind::Float32ArrayKind:
+      logWidth = 2;
+      break;
+    case CellKind::Float64ArrayKind:
+      logWidth = 3;
+      break;
+    default:
+      llvm_unreachable("unsupported typed-array tier kind");
+  }
+
+  // All three operands are already synced to the frame by the caller, so any
+  // temp holding another FR is dead weight here.
+  freeAllFRTempExcept(frTarget);
+
+  // The target is needed as a raw HermesValue in a GP register. The key and
+  // the value are needed as the doubles they have to be; getOrAllocFRInVecD()
+  // only moves the raw 64 bits, so this is safe for an operand of any type --
+  // a non-number is NaN-encoded, and both the key test and the value
+  // conversion below reject every NaN-encoded pattern.
+  static_assert(
+      HERMESVALUE_VERSION == 2,
+      "non-numbers must be NaN-encoded for the tests below");
+  HWReg hwTarget = getOrAllocFRInGpX(frTarget, true);
+  HWReg hwValue = getOrAllocFRInVecD(frValue, true);
+  HWReg hwKey = getOrAllocFRInVecD(frKey, true);
+
+  // As in emitPutByValFastArrayTier(), the allocs and frees below emit no
+  // code: they only decide which registers this sequence may use, and then
+  // leave the helper path with no temp registered as an FR location.
+  HWReg hwLoc = allocTempGpX();
+  HWReg hwIdx = allocTempGpX();
+  HWReg hwTemp1 = allocTempGpX();
+  HWReg hwTemp2 = allocTempGpX();
+  HWReg hwKeyTmp = allocTempVecD();
+  HWReg hwValTmp = allocTempVecD();
+  const x86::Gp target = hwTarget.gpq();
+  const x86::Xmm value = hwValue.xmm();
+  const x86::Xmm key = hwKey.xmm();
+  // Holds the object, then the buffer, then the element base address.
+  const x86::Gp loc = hwLoc.gpq();
+  const x86::Gp idx = hwIdx.gpq();
+  const x86::Gp temp1 = hwTemp1.gpq();
+  // Holds the truncated integer value from the conversion to the store.
+  const x86::Gp temp2 = hwTemp2.gpq();
+  const x86::Xmm keyTmp = hwKeyTmp.xmm();
+  const x86::Xmm valTmp = hwValTmp.xmm();
+  freeReg(hwLoc);
+  freeReg(hwIdx);
+  freeReg(hwTemp1);
+  freeReg(hwTemp2);
+  freeReg(hwKeyTmp);
+  freeReg(hwValTmp);
+  freeFRTemp(frTarget);
+  freeFRTemp(frKey);
+  freeFRTemp(frValue);
+
+  // Code generation starts here.
+
+  // The object and exact-kind checks come FIRST, before any value-based
+  // decline: at a duo site a kind miss must reach the JSArray tier, which
+  // handles the non-number values the checks below would decline.
+  emit_sh_ljs_is_object(a, temp1, target);
+  a.jne(helperLab);
+  emit_sh_ljs_get_pointer(a, loc, target);
+  a.cmp(
+      x86::byte_ptr(
+          loc,
+          (int32_t)(offsetof(SHGCCell, kindAndSize) +
+                    RuntimeOffsets::kindAndSizeKind)),
+      asmjit::Imm((uint8_t)kind));
+  a.jne(kindMissLab);
+
+  // Class flags: fast index properties (indexedStorage set,
+  // hasIndexLikeProperties clear), frozen clear -- the same masked compare
+  // the fast array tier emits, and for the same reason. An out-of-range
+  // defineProperty() gives the class index-like properties, and a frozen
+  // typed array must throw on a strict store rather than be written.
+  const uint32_t flagsMask = RuntimeOffsets::classFlagsFastArrayMask();
+  const uint32_t flagsValue = RuntimeOffsets::classFlagsFastArrayValue();
+  assert(
+      flagsMask == 0x884 && flagsValue == 0x800 &&
+      "unexpected ClassFlags bit layout");
+  emit_load_cp(a, temp1, x86::ptr(loc, offsetof(SHJSObject, clazz)));
+  emit_sh_cp_decode_non_null(a, temp1);
+  a.movzx(temp1.r32(), x86::word_ptr(temp1, RuntimeOffsets::hiddenClassFlags));
+  a.and_(temp1.r32(), asmjit::Imm(flagsMask));
+  a.cmp(temp1.r32(), asmjit::Imm(flagsValue));
+  a.jne(helperLab);
+
+  // The value conversion, which is also the "is it a number this element type
+  // can hold" guard. Non-numbers are NaN-encoded, so:
+  //  - integer kinds: the 64-bit vcvttsd2si does not saturate, it produces
+  //    the "integer indefinite" 0x8000...0 for a NaN (i.e. for any
+  //    non-number), for either infinity, and for |x| >= 2^63. One compare
+  //    declines all of those; for everything else, truncate-then-keep-the-
+  //    low-bits is exactly truncateToInt32()'s modular semantics. The one
+  //    number that is declined although the sentinel is its true conversion
+  //    is -2^63 itself, whose low bits are zero either way -- the helper
+  //    computes it correctly.
+  //  - float kinds: a self-compare's parity flag declines every NaN bit
+  //    pattern, a real NaN value included, because the helper stores the
+  //    canonical NaN and these raw bits need not be it. This is sound only
+  //    because a non-number is always a NaN and never an infinity: the
+  //    lowest tag is HVTag_First == 0xf9, so bits 51:48 of any tagged value
+  //    are at least 9, i.e. its mantissa is never zero.
+  if (isFloat64 || isFloat32) {
+    a.vucomisd(value, value);
+    a.jp(helperLab);
+    if (isFloat32)
+      a.vcvtsd2ss(valTmp, value, value);
+  } else {
+    a.vcvttsd2si(temp2, value);
+    loadBits64InGp(temp1, (uint64_t)1 << 63, "int conversion sentinel");
+    a.cmp(temp2, temp1);
+    a.je(helperLab);
+  }
+
+  // The key must be a double that survives a round trip through uint32. As in
+  // the fast array tier, vucomisd reports an unordered compare (a NaN
+  // operand, i.e. any non-number key) as EQUAL, so the parity flag is a
+  // second, separate exit. Unlike JS arrays, typed arrays need no 0xFFFFFFFF
+  // exclusion: the bounds check below rejects it.
+  emit_double_is_uint32(a, idx, keyTmp, key);
+  a.jne(helperLab);
+  a.jp(helperLab);
+
+  // Bounds: idx < length_, one unsigned 32-bit compare. This tree has no
+  // resizable ArrayBuffers, so length_ is fixed for the object's lifetime.
+  a.cmp(idx.r32(), x86::dword_ptr(loc, RuntimeOffsets::jsTypedArrayBaseLength));
+  a.jae(helperLab);
+
+  // The element base address: the buffer's data_, plus the view's byte
+  // offset_ into it. A detached buffer has a null data_, so the attached
+  // check is free with a load the store needs anyway. xScratch carries the
+  // offset -- it is dead here (never handed out by TempRegAlloc) -- so no
+  // fifth allocatable temp is needed. Nothing between the two uses of it
+  // touches xScratch: emit_load_cp() is a mov and the decode is an add of
+  // xRuntime.
+  a.mov(
+      xScratch.r32(),
+      x86::dword_ptr(loc, RuntimeOffsets::jsTypedArrayBaseOffset));
+  emit_load_cp(a, loc, x86::ptr(loc, RuntimeOffsets::jsTypedArrayBaseBuffer));
+  emit_sh_cp_decode_non_null(a, loc);
+  a.mov(loc, x86::qword_ptr(loc, RuntimeOffsets::jsArrayBufferData));
+  a.test(loc, loc);
+  a.jz(helperLab);
+  a.add(loc, xScratch);
+
+  // The store. idx is a scaled element index: emit_double_is_uint32() leaves
+  // its upper 32 bits zero, so the 64-bit addressing mode is the uint32 one.
+  if (isFloat64) {
+    a.vmovsd(x86::qword_ptr(loc, idx, 3), value);
+  } else if (isFloat32) {
+    a.vmovss(x86::dword_ptr(loc, idx, 2), valTmp);
+  } else if (logWidth == 0) {
+    a.mov(x86::byte_ptr(loc, idx, 0), temp2.r8());
+  } else if (logWidth == 1) {
+    a.mov(x86::word_ptr(loc, idx, 1), temp2.r16());
+  } else {
+    a.mov(x86::dword_ptr(loc, idx, 2), temp2.r32());
+  }
+}
+
 void Emitter::putByValImpl(
     FR frTarget,
     FR frKey,
     FR frValue,
     const char *name,
-    void (*shImpl)(
-        SHRuntime *shr,
-        SHLegacyValue *target,
-        SHLegacyValue *key,
-        SHLegacyValue *value),
-    const char *shImplName) {
+    bool strict) {
+  // The PutByVal instruction's own bytecode offset, unique within this
+  // function and stable across recompiles: identifies this site's entry
+  // in versionData_'s consumer records (see JitFunctionData.h).
+  uint32_t siteId =
+      (uint32_t)((const char *)emittingIP - (const char *)codeBlock_->begin());
+
   comment(
       "// %s r%u, r%u, r%u",
       name,
@@ -219,19 +413,74 @@ void Emitter::putByValImpl(
   syncToFrame(frKey);
   syncToFrame(frValue);
 
+  // Monotone tier selection (spec: "Monotone emission: tiers are only ever
+  // added"). Unlike the PutById tier these need nothing from a property
+  // cache: the guards are all on the values themselves, so the tiers go
+  // ahead of the helper call unconditionally. PutByVal passes the target as
+  // the receiver, which is the one precondition of the runtime fast path
+  // that is satisfied by construction rather than by a guard.
+  //
+  // The JSArray tier is a static prior, not a decision: it is emitted at
+  // every site this build can emit one at, in every version, exactly the
+  // pre-feedback behavior. Nothing observes its hits, so no evidence about
+  // it could ever be honest; dropping it is what made a pure-JSArray
+  // function pay a permanent instrumentation tax.
+  //
+  // The typed-array tier is emitted iff the record holds an observed
+  // supported kind. taKind never un-learns (a second kind sets taPoisoned
+  // and leaves the first in place), so selecting from the observed field
+  // alone is already monotone: no previously-emitted set needs consulting,
+  // and a poisoned site keeps running its first kind's traffic inline.
+  JitByValSiteRecord &site = byValSiteRecord(siteId);
 #if HERMES_JIT_INLINE_SAFE_STORE
-  // Unlike the PutById tier this needs nothing from a property cache: the
-  // guards are all on the values themselves, so the tier goes ahead of the
-  // helper call unconditionally. PutByVal passes the target as the receiver,
-  // which is the one precondition of the runtime fast path that is satisfied
-  // by construction rather than by a guard.
-  asmjit::Label helperLab = a.newLabel();
-  asmjit::Label contLab = a.newLabel();
-  emitPutByValFastArrayTier(frTarget, frKey, frValue, helperLab);
-  // Falling out of the inline tier means the store is done.
-  a.jmp(contLab);
-  a.bind(helperLab);
+  const bool emitJSArray = true;
+#else
+  // The fast array tier needs the inline write barrier, which this build does
+  // not have; the typed-array tier stores no GC pointers and remains
+  // available.
+  const bool emitJSArray = false;
 #endif
+  const bool emitTA = site.taKind != JitByValSiteRecord::kTAKindNone &&
+      isJitSupportedTypedArrayStoreKind((CellKind)site.taKind);
+  site.specializedTAKind =
+      emitTA ? site.taKind : JitByValSiteRecord::kTAKindNone;
+
+  asmjit::Label helperLab{};
+  asmjit::Label contLab{};
+  if (emitJSArray || emitTA) {
+    helperLab = a.newLabel();
+    contLab = a.newLabel();
+  }
+  if (emitTA) {
+    // The recorded kind is compared first: it is what the site was observed
+    // declining on. At a duo site its kind miss chains into the JSArray tier
+    // rather than into the helper.
+    asmjit::Label kindMissLab = emitJSArray ? a.newLabel() : helperLab;
+    emitPutByValTypedArrayTier(
+        frTarget,
+        frKey,
+        frValue,
+        (CellKind)site.taKind,
+        kindMissLab,
+        helperLab);
+    // Falling out of the inline tier means the store is done.
+    a.jmp(contLab);
+    if (emitJSArray)
+      a.bind(kindMissLab);
+  }
+#if HERMES_JIT_INLINE_SAFE_STORE
+  if (emitJSArray) {
+    emitPutByValFastArrayTier(
+        frTarget,
+        frKey,
+        frValue,
+        helperLab,
+        /* targetKnownObject */ emitTA);
+    a.jmp(contLab);
+  }
+#endif
+  if (emitJSArray || emitTA)
+    a.bind(helperLab);
 
   freeAllFRTempExcept({});
 
@@ -239,11 +488,39 @@ void Emitter::putByValImpl(
   loadFrameAddr(x86::rsi, frTarget);
   loadFrameAddr(x86::rdx, frKey);
   loadFrameAddr(x86::rcx, frValue);
-  callRuntimeWithSavedIP((void *)shImpl, shImplName);
+  loadBits64InGp(x86::r8, (uint64_t)versionData_, "JitVersionData");
+  a.mov(x86::r9d, asmjit::Imm(siteId));
 
-#if HERMES_JIT_INLINE_SAFE_STORE
-  a.bind(contLab);
-#endif
+  // site.helper is per-site mutable state (spec: "Slow-path demotion: the
+  // pointer flip"): it starts out null on a fresh record and is carried
+  // forward as-is across recompiles, so a demoted slot (flipped by the
+  // runtime to the matching plain _sh_ljs helper) stays demoted. Only a
+  // still-null slot -- never yet flipped -- is initialized here, to the
+  // recording helper matching this instruction's strictness.
+  if (!site.helper) {
+    site.helper =
+        strict ? (void *)_jit_put_by_val_strict : (void *)_jit_put_by_val_loose;
+  }
+  // Type-check both possible recording callees against the signature the
+  // emitted call sequence assumes, the same way EMIT_RUNTIME_CALL does for
+  // a direct call -- even though neither is called directly here, since
+  // the actual callee is loaded from site.helper at runtime.
+  using _FnT = void (*)(
+      SHRuntime *,
+      SHLegacyValue *,
+      SHLegacyValue *,
+      SHLegacyValue *,
+      SHJitVersionData *,
+      uint32_t);
+  _FnT _fn = strict ? _jit_put_by_val_strict : _jit_put_by_val_loose;
+  (void)_fn;
+  callRuntimeWithSavedIPIndirect(
+      (uint64_t)&site.helper,
+      strict ? "_jit_put_by_val_strict [indirect]"
+             : "_jit_put_by_val_loose [indirect]");
+
+  if (emitJSArray || emitTA)
+    a.bind(contLab);
 }
 
 void Emitter::putByValWithReceiver(

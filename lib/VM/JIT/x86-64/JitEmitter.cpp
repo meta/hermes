@@ -645,6 +645,32 @@ void Emitter::callRuntime(void *fn, const char *name) {
   a.call(xScratch);
 }
 
+void Emitter::callRuntimeWithSavedIPIndirect(
+    uint64_t slotAddr,
+    const char *name) {
+  // Save the current IP in the runtime.
+  getBytecodeIP(xScratch);
+  a.mov(x86::qword_ptr(xRuntime, RuntimeOffsets::currentIP), xScratch);
+
+  // Call through the slot.
+  callRuntimeIndirect(slotAddr, name);
+
+  if (emitAsserts_) {
+    // Invalidate the current IP to make sure it is set before the next call.
+    a.mov(xScratch, asmjit::Imm(Runtime::kInvalidCurrentIP));
+    a.mov(x86::qword_ptr(xRuntime, RuntimeOffsets::currentIP), xScratch);
+  }
+}
+
+void Emitter::callRuntimeIndirect(uint64_t slotAddr, const char *name) {
+  // See callRuntime(): the same rspDelta_/alignment contract applies to
+  // every call emission, direct or indirect.
+  assert(rspDelta_ % 16 == 0 && "rsp not 16-byte aligned at call emission");
+  comment("// call %s", name);
+  loadBits64InGp(xScratch, slotAddr, "helper slot address");
+  a.call(x86::qword_ptr(xScratch));
+}
+
 uint16_t Emitter::initHCLazyIDMayAlloc(HiddenClass *hc) {
   // Callers pass the result of WeakRoot::get(), which is null if the GC has
   // cleared the root. Since 0 already means "no id" and every caller checks

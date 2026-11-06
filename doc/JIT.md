@@ -696,7 +696,7 @@ switch tables hold only case indices, and each body resolves an index
 through a jump table of its own (see `stringSwitchImm`).
 
 **Budget.** `-Xjit-max-recompiles=N` sets the per-function recompile
-budget; default 1, and `0` restores the exact compile-once behavior
+budget; default 2, and `0` restores the exact compile-once behavior
 this mechanism extends. `-Xjit-recompile-threshold=N` sets how many
 declines of one compiled body precede a recompile check; default 64,
 and `0` is clamped to 1 (there is no "off" value -- that is what
@@ -721,6 +721,136 @@ lists, so a freshly compiled body's `coldByIdSites` is always zero and
 `considerRecompile`'s gate never lets a recompile fire. The tree builds
 and the jit suite passes there; live recompilation arrives with the
 arm64 port.
+
+**ByVal shape records.** The Records paragraph above named `consumerRecords`
+for future per-site feedback; it now holds a `JitConsumerRecords`, a deque of
+per-site `JitByValSiteRecord`s keyed by the PutByVal instruction's bytecode
+offset -- a deque, not a vector, because emitted code embeds the address of an
+entry's `helper` slot, so entries must never relocate.
+
+Tier selection is monotone: tiers are only ever added, never dropped (spec:
+`doc/superpowers/specs/2026-09-09-jit-putbyval-monotone-demotion-design.md`,
+"Monotone emission"). The JSArray fast-array tier is a static prior, not a
+decision -- it is emitted at every site `HERMES_JIT_INLINE_SAFE_STORE` permits
+one, in every version, exactly the pre-feedback behavior; nothing observes its
+hits, so no evidence about it is ever consulted and it is never instrumented.
+The typed-array tier is emitted at a site iff the record holds an observed
+supported kind (`taKind != kTAKindNone`): since `taKind` never un-learns,
+selecting from that one field is already monotone, and no previously-emitted
+set needs consulting. A site that hosts both keeps the shipped chaining
+(typed-array tier first -- it is what the site was observed declining on --
+kind miss chains into the JSArray tier rather than the helper, then
+`targetKnownObject`).
+
+Poison preserves the first kind: `kTAKindPoly` does not exist. The record
+keeps `taKind` = the FIRST observed supported kind permanently, plus
+`taPoisoned`, set when a DIFFERENT supported kind is later observed (the first
+kind is kept, not replaced). Selection and the progress check both ignore
+`taPoisoned` -- a poisoned site still gets (or keeps) its first kind's tier, so
+that half of its traffic runs inline while the other half declines toward
+demotion; a second typed-array tier per site (PIC-style growth) is out of
+scope. Recording, done by the helpers below, is otherwise as before:
+`jsArraySeen` for a JSArray target, `otherSeen` for an unsupported kind, any
+other object, or a non-object.
+
+The recording helpers `_jit_put_by_val_{loose,strict}` -- the x86-64 PutByVal
+emitters' helper-path targets, standing in front of the unchanged
+`_sh_ljs_put_by_val_{loose,strict}_rjs` -- classify every declining target,
+update the record (setting `changed` on any field's first transition), and
+join the same decline/threshold/`considerRecompile` tail `_jit_put_by_id`
+uses, so the two sources share one counter, one threshold, and one budget.
+Unlike the PutById tiers, the call to a ByVal site's current helper is
+indirect: `JitByValSiteRecord` holds a mutable `void *helper` slot
+(initialized, if still null after carry-forward, to
+`_jit_put_by_val_{strict,loose}` per the instruction), and the emitter emits
+`movabs xScratch, &site.helper; call qword ptr [xScratch]` -- one load more
+than a direct call, on a path that is slow by definition. The six argument
+registers are set up as for any helper call; a four-argument plain callee
+ignores r8/r9 under SysV, so one call sequence serves both the recording and
+the plain helper.
+
+`considerRecompile`'s progress check reads, per site, whether the observed
+`taKind` outruns what the current body emitted there
+(`isJitSupportedTypedArrayStoreKind(taKind) && taKind != specializedTAKind`;
+`specializedTAKind` is what THIS body emitted, reset in carry-forward, filled
+at emission) -- the only ByVal progress source under monotone emission, since
+the JSArray tier can never be missing where evidence would want it. A
+triggered recompile re-reads the carried-forward record per site exactly as
+described above. The typed-array tier itself guards, in order: the target is
+an object and its cell-kind byte matches the specialized kind (both ahead of
+any value-based decline, so a duo site's kind miss chains into the JSArray
+tier rather than declining to the helper on a non-number value the JSArray
+tier could still handle), the fast-array class-flags mask (the same
+fast-index-properties/`frozen` compare of the hidden class's flags the JSArray
+tier uses -- needed because
+an out-of-range `defineProperty` followed by `freeze` must still throw on a
+strict in-bounds store), the stored value is a number the specialized kind can
+hold, the key is a uint32 (the fast-array tier's own sequence), the index is
+in bounds, and the buffer is attached (a free check riding the `data_` load
+the store needs anyway); every guard decline falls through to the current
+helper, preserving whatever it does for that case -- strict-mode throws
+included. Because typed-array storage holds no GC pointers the tier needs no
+write barrier, and its only heap-encoding-sensitive steps are the
+compressed-pointer decodes it shares with the fast-array tier, so it is
+heap-mode-neutral across HV64, HV32, and BOXED. It is also GC-kind-neutral in
+the other direction: the JSArray tier exists only where
+`HERMES_JIT_INLINE_SAFE_STORE` is nonzero (MallocGC disables it), but the
+typed-array tier needs no write barrier and stays available unconditionally on
+x86-64, which is why `classFlagsFastArrayMask()`/`Value()` moved out of
+RuntimeOffsets.h's Hades-only section.
+
+**Slow-path demotion.** A site's demotion state lives entirely in its helper
+slot: while it points at a recording helper the site is still being watched;
+once flipped to the matching plain helper (`_jit_put_by_val_strict` ->
+`_sh_ljs_put_by_val_strict_rjs`, loose likewise -- strictness read from the
+slot's current value, no extra field) every subsequent store calls the
+pre-feature helper directly, with no recording, no counting, and no extra hop.
+Terminal is terminal: nothing ever flips a slot back, and carry-forward copies
+a demoted slot's value into the candidate record, so demotion survives
+recompiles triggered by other sites in the same function. `considerRecompile`
+runs a demotion pass over every still-recording site on each threshold
+crossing, ahead of the budget/`enabled_` early-outs (demotion needs no budget
+and must run at budget 0): a never-observed site is left alone (flipping it
+would silence a site that might still start learning); a site that can still
+progress -- the term above, evaluated against the CURRENT body -- resets its
+stability counter, but only while a recompile could actually happen (budget
+nonzero and the JIT still `enabled_`; once either fails -- the budget is
+exhausted or the JIT has been disabled -- no recompile can ever happen again,
+so an observed site can never be rescued and is demotion-eligible regardless
+of `taKind`); a site
+whose record changed since the last crossing (`changed`, set by the recording
+helper on any field's first transition -- same-shape declines set nothing)
+also resets; otherwise its `unchangedCrossings` counter increments, and at
+`kDemotionStableCrossings` (3) the slot flips and `NumByValDemotions` counts
+it. `changed` is cleared for every site at the end of the pass. A fresh site's
+first crossing is always a `changed` crossing, so demotion of a site observed
+from cold lands at the fourth crossing (one changed + 3 stable). The version
+record keeps a `uint32_t recordingByValSites` count, decremented on each flip,
+so the pass is a constant-time skip once every site is demoted -- declines
+from other sources (ById, other ByVal sites) keep driving crossings after
+that. Retirement demotes too: the install step, moving `current` into
+`retired`, flips every still-recording site in the retired record without
+counting the flips (retirement IS that body's terminal state; its
+observations influence nothing by construction, so recording past that point
+is pure waste no demotion pass would otherwise catch, since the retired
+body's own crossings die at the staleness gate first).
+
+The compile banner gains a line, in the cold-ById line's style, whenever any
+site was observed: `JIT ByVal sites: N observed, M specialized` (under
+monotone emission, "specialized" counts sites with an emitted typed-array
+tier only -- the JSArray tier's presence is unconditional and not part of this
+count); `-Xdump-jitcode=3` additionally prints an `// Inline typed array store
+(kind K)` comment at each specialized site, so both counts and kind selection
+are pinnable in lit tests. `-Xjit-max-recompiles` defaults to 2 (was 1):
+demotion sharpens budget exhaustion's consequence from "keeps recording
+uselessly" to "recording ends and the site is frozen permanently", and two
+recompiles cover the common case of one improvement per consumer family
+(ById warmth, ByVal specialization) landing at different times. Full design:
+`doc/superpowers/specs/2026-09-08-jit-putbyval-typed-array-design.md`
+(tier mechanics) and
+`doc/superpowers/specs/2026-09-09-jit-putbyval-monotone-demotion-design.md`
+(monotone emission, poison, demotion -- supersedes the first document's
+sticky-flag instrumentation and drop-tier rules where they disagree).
 
 Tests: `test/jit/x86-64/recompile-byid-warm.js` (headline: the tier is
 absent at version 1, present at version 2, and absent entirely under
