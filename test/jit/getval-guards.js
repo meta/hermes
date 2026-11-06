@@ -29,10 +29,10 @@
 // (see test/hermes/typedarray-detached.js); every RUN line that runs the
 // script runs the detach case below, so each carries the flag.
 //
-// ARCHITECTURE-INDEPENDENT. arm64 has no JSArray load tier yet; every read
-// below still goes through its bare helper call, which the interpreter
-// diff exercises identically. The point of this file is the read
-// SEMANTICS at a GetByVal site, not any inline tier's presence.
+// ARCHITECTURE-INDEPENDENT. Both backends emit the JSArray and typed-array
+// load tiers, so on either one these reads exercise the inline tiers and
+// their decline paths. The point of this file is the read SEMANTICS at a
+// GetByVal site, not any inline tier's presence.
 //
 // EVERY read below goes through a variable key (`readAt`'s `i` parameter,
 // or `arguments[idx]`'s `idx`), never a literal: ISel.cpp only lowers a

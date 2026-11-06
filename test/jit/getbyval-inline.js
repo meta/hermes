@@ -20,11 +20,11 @@
 // the whole run is diffed against the interpreter.
 //
 // ARCHITECTURE-INDEPENDENT. This file checks values, never instructions,
-// so it runs on every backend, including arm64, whose GetByVal has no
-// inline tier at all and answers every read below through its helper. That
-// the tiers are emitted, and what they consist of, is pinned separately
-// and per backend by x86-64/getbyval-inline-emitted.js; which tier a site
-// gets is pinned by the x86-64/recompile-getval-*.js policy tests.
+// so it runs on every backend. That the tiers are emitted, and what they
+// consist of, is pinned separately and per backend by
+// x86-64/getbyval-inline-emitted.js and getbyval-inline-emitted-arm64.js;
+// which tier a site gets is pinned by the recompile-getval-*.js policy
+// tests.
 //
 // TWO KINDS OF SITE are deliberately mixed here. `readAt` is polymorphic:
 // it sees dense arrays, Arguments objects, plain objects and several typed

@@ -29,8 +29,8 @@
 // deliberately not repeated:
 //   - Int8 (34) and Float64 (42): x86-64/getbyval-inline-emitted.js, which
 //     pins their full guard chains, not just the convert;
-//   - Int32 (39): x86-64/recompile-getval-{trigger,duo,poisoned-int32-first}.js;
-//   - Float64 (42) again: x86-64/recompile-getval-poisoned-float64-first.js.
+//   - Int32 (39): recompile-getval-{trigger,duo,poisoned-int32-first}.js;
+//   - Float64 (42) again: recompile-getval-poisoned-float64-first.js.
 // Float16 and the BigInt kinds are NOT supported and must never be
 // specialized; test/jit/getval-guards.js covers their decline.
 //

@@ -23,10 +23,10 @@
 // only perturbing a diff (see the NaN block below for why the oracle it
 // pins is the load-bearing one).
 //
-// ARCHITECTURE-INDEPENDENT. arm64 has no typed-array load tier; every read
-// below still goes through its bare helper call, which the interpreter
-// diff exercises identically. What this file pins is the read SEMANTICS at
-// a GetByVal site, which must be the same on every backend.
+// ARCHITECTURE-INDEPENDENT. Both backends emit the typed-array load tier,
+// so on either one these reads exercise the inline tier and its decline
+// paths. What this file pins is the read SEMANTICS at a GetByVal site,
+// which must be the same on every backend.
 //
 // NINE distinct, top-level loader functions -- one per kind the load tier
 // supports (see isJitSupportedTypedArrayLoadKind: the store set plus
