@@ -7,9 +7,12 @@
 
 #include "EmptyCell.h"
 #include "VMRuntimeTestHelpers.h"
+#include "hermes/VM/ArrayStorage.h"
 #include "hermes/VM/BuildMetadata.h"
+#include "hermes/VM/CardBoundaryTable.h"
 #include "hermes/VM/CompressedPointer.h"
 #include "hermes/VM/DummyObject.h"
+#include "hermes/VM/FillerCell.h"
 #include "hermes/VM/GC.h"
 #include "hermes/VM/LargeDummyObject.h"
 #include "hermes/VM/WeakRef.h"
@@ -833,6 +836,94 @@ TEST_F(GCBasicsTestGCOptions, CollectWithGCOptionsMajorAsyncCoalesces) {
   ASSERT_TRUE(collectUntilCompleted(2));
   EXPECT_EQ(2u, info.fullStats.numCollections);
   EXPECT_EQ(0u, info.allocatedBytes);
+}
+
+/// Test scanning a dirty card when an OG collection completes while an object
+/// in the card is being marked. Marking the object promotes a YG object, and
+/// since the OG is full and the heap is at its maximum size, OldGen::allocSlow
+/// completes the OG collection on the mutator. Its sweep must not trim the
+/// object being marked: the scan has already computed where the object ends,
+/// and the trimmed space would be coalesced with the dead cell after it.
+/// ArrayStorage trimming is currently disabled, in which case nothing is
+/// trimmed anyway, but the OG collection still completes in the middle of the
+/// scan.
+TEST(GCDirtyCardScanTest, OGCollectionCompletesWhileMarking) {
+  // Only room for the YG segment and a single OG segment, so no OG segment can
+  // be added, and the OG collection doesn't choose a compactee.
+  auto runtime = DummyRuntime::create(
+      TestGCConfigFixedSize(2 * FixedSizeHeapSegment::storageSize()));
+  DummyRuntime &rt = *runtime;
+  auto &gc = rt.getHeap();
+  struct : Locals {
+    PinnedValue<ArrayStorage> x;
+    PinnedValue<ArrayStorage> a;
+  } lv;
+  DummyLocalsRAII lraii{rt, &lv};
+
+  auto allocDeadCell = [&rt](uint32_t size) {
+    return rt.makeAVariable<FillerCell, HasFinalizer::No, LongLived::Yes>(size);
+  };
+  auto allocStorage = [&rt, &gc](
+                          ArrayStorage::size_type capacity,
+                          ArrayStorage::size_type size) {
+    auto *storage =
+        rt.makeAVariable<ArrayStorage, HasFinalizer::No, LongLived::Yes>(
+            ArrayStorage::allocationSize(capacity));
+    ArrayStorage::resizeWithinCapacity(storage, gc, size);
+    return storage;
+  };
+
+  // The first OG allocation is at the start of the new segment, and the rest
+  // of the segment becomes a free cell. Later allocations are carved from the
+  // end of that free cell, which gives the layout [p][free][d][x][a][b].
+  FillerCell *p = allocDeadCell(heapAlignSize(64));
+  FillerCell *b = allocDeadCell(heapAlignSize(64));
+  // a has spare capacity, so a sweep that trims would trim it.
+  ArrayStorage *a = allocStorage(16, 1);
+  lv.a = a;
+  ArrayStorage *x = allocStorage(4, 4);
+  lv.x = x;
+  // d leaves only a small free cell, so the OG has no room to promote y below.
+  const uint32_t used = p->getAllocatedSize() + b->getAllocatedSize() +
+      a->getAllocatedSize() + x->getAllocatedSize();
+  FillerCell *d = allocDeadCell(
+      (FixedSizeHeapSegment::maxSize() - used - GC::minAllocationSize() - 64) &
+      ~(HeapAlign - 1));
+
+  // x, a and b are adjacent and in the same card, so a is marked in the middle
+  // of the scan of that card, and the cell after it is dead.
+  auto *xStart = reinterpret_cast<char *>(x);
+  auto *aStart = reinterpret_cast<char *>(a);
+  auto *bStart = reinterpret_cast<char *>(b);
+  ASSERT_EQ(reinterpret_cast<char *>(d) + d->getAllocatedSize(), xStart);
+  ASSERT_EQ(xStart + x->getAllocatedSize(), aStart);
+  ASSERT_EQ(aStart + a->getAllocatedSize(), bStart);
+  auto cardOf = [](const char *ptr) {
+    return reinterpret_cast<uintptr_t>(ptr) >> CardBoundaryTable::kLogCardSize;
+  };
+  ASSERT_EQ(cardOf(xStart), cardOf(bStart + b->getAllocatedSize() - 1));
+  const ArrayStorage::size_type aCapacity = a->capacity();
+
+  // Start an OG collection.
+  gc.collectWithOptions(
+      "test", {GCBase::GCType::Major, GCBase::GCExecutionPolicy::Async});
+  GCBase::HeapInfo info;
+  gc.getHeapInfo(info);
+  ASSERT_EQ(0u, info.fullStats.numCollections);
+
+  // y is only reachable from a, so it is promoted when a's card is scanned.
+  auto *y = rt.makeAVariable<ArrayStorage>(ArrayStorage::allocationSize(500));
+  lv.a->set(0, HermesValue::encodeObjectValue(y), gc);
+  gc.collectWithOptions(
+      "test", {GCBase::GCType::Minor, GCBase::GCExecutionPolicy::Sync});
+
+  // Promoting y required completing the OG collection, which did not trim a.
+  gc.getHeapInfo(info);
+  EXPECT_EQ(1u, info.fullStats.numCollections);
+  EXPECT_EQ(aCapacity, lv.a->capacity());
+  ASSERT_TRUE(lv.a->at(0).isObject());
+  EXPECT_FALSE(
+      gc.inYoungGen(static_cast<const GCCell *>(lv.a->at(0).getObject())));
 }
 #endif
 

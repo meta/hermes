@@ -1109,7 +1109,12 @@ bool HadesGC::OldGen::sweepNext(bool backgroundThread) {
       // Cannot concurrently trim storage. Technically just checking
       // backgroundThread would suffice, but the kConcurrentGC lets us compile
       // away this check in incremental mode.
-      if (kConcurrentGC && backgroundThread)
+      // Also don't trim during a YG collection: it may complete an OG
+      // collection while evacuating (see OldGen::allocSlow), and its heap walks
+      // (e.g. scanDirtyCardsForSegment, finalizeCompactee) rely on the sizes of
+      // cells not changing. In incremental mode, this also skips trimming in
+      // the sweeps done by yieldToOldGen.
+      if ((kConcurrentGC && backgroundThread) || gc_.ygCollectionStats_)
         continue;
       const uint32_t cellSize = cell->getAllocatedSize();
       const uint32_t trimmedSize =
