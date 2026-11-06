@@ -1198,6 +1198,15 @@ bool Verifier::visitBinaryOperatorInst(const hermes::BinaryOperatorInst &Inst) {
   return visitBinaryOperatorLikeInst(Inst);
 }
 
+bool Verifier::visitImulInst(const ImulInst &Inst) {
+  // Both operands may be of any type: they coerce via ToInt32, or throw.
+  AssertIWithMsg(
+      Inst,
+      Inst.getNumOperands() == 2,
+      "ImulInst must have exactly 2 operands");
+  return true;
+}
+
 bool Verifier::visitCatchInst(const CatchInst &Inst) {
   AssertIWithMsg(
       Inst,

@@ -1263,6 +1263,19 @@ class InstrGen {
     os_ << ";\n";
   }
 
+  void generateImulInst(ImulInst &inst) {
+    os_.indent(2);
+    generateRegister(inst);
+    os_ << " = ";
+    os_
+        << (options_.smallC ? "_sh_ljs_imul_rjs(shr, "
+                            : "_sh_ljs_imul_rjs_inline(shr, ");
+    generateRegisterPtr(*inst.getLeft());
+    os_ << ", ";
+    generateRegisterPtr(*inst.getRight());
+    os_ << ");\n";
+  }
+
   void generateStorePropertyWithReceiverInst(
       StorePropertyWithReceiverInst &inst) {
     os_ << "_sh_ljs_put_by_val_with_receiver_rjs(shr,&";

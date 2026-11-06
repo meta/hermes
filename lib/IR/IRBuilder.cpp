@@ -904,6 +904,12 @@ IRBuilder::createBinaryOperatorInst(Value *left, Value *right, ValueKind kind) {
   return BOI;
 }
 
+ImulInst *IRBuilder::createImulInst(Value *left, Value *right) {
+  auto *II = new ImulInst(left, right);
+  insert(II);
+  return II;
+}
+
 SwitchInst *IRBuilder::createSwitchInst(
     Value *input,
     BasicBlock *defaultBlock,

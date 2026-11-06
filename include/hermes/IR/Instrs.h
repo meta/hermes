@@ -3296,6 +3296,51 @@ class BinaryOperatorInst : public Instruction {
   getBinarySideEffect(TypeContext &tc, Type leftTy, Type rightTy, ValueKind op);
 };
 
+class ImulInst : public Instruction {
+  ImulInst(const ImulInst &) = delete;
+  void operator=(const ImulInst &) = delete;
+
+ public:
+  enum { LeftIdx, RightIdx };
+
+  explicit ImulInst(Value *left, Value *right)
+      : Instruction(ValueKind::ImulInstKind) {
+    pushOperand(left);
+    pushOperand(right);
+  }
+  explicit ImulInst(const ImulInst *src, llvh::ArrayRef<Value *> operands)
+      : Instruction(src, operands) {}
+
+  Value *getLeft() const {
+    return getOperand(LeftIdx);
+  }
+  Value *getRight() const {
+    return getOperand(RightIdx);
+  }
+
+  static bool hasOutput() {
+    return true;
+  }
+  static bool isTyped() {
+    return false;
+  }
+
+  SideEffect getSideEffectImpl() const {
+    // Math.imul semantics: ToInt32(left) then ToInt32(right), each of which
+    // may run arbitrary JS (valueOf) and may throw (BigInt/Symbol operands).
+    // When both operands are statically known to be Number, the coercions
+    // are pure conversions with no side effects.
+    if (getLeft()->getType().isNumberType() &&
+        getRight()->getType().isNumberType())
+      return SideEffect{}.setIdempotent();
+    return SideEffect::createExecute();
+  }
+
+  static bool classof(const Value *V) {
+    return V->getKind() == ValueKind::ImulInstKind;
+  }
+};
+
 class CatchInst : public Instruction {
   CatchInst(const CatchInst &) = delete;
   void operator=(const CatchInst &) = delete;

@@ -596,6 +596,8 @@ class IRBuilder {
   BinaryOperatorInst *
   createBinaryOperatorInst(Value *left, Value *right, ValueKind kind);
 
+  ImulInst *createImulInst(Value *left, Value *right);
+
   GetPNamesInst *createGetPNamesInst(
       AllocStackInst *iteratorAddr,
       AllocStackInst *baseAddr,

@@ -98,6 +98,8 @@ DEF_TAG(BinaryPrivateInInst, BinaryOperatorInst)
 DEF_TAG(BinaryInstanceOfInst, BinaryOperatorInst)
 END_VALUE(BinaryOperatorInst)
 
+DEF_VALUE(ImulInst, Instruction)
+
 MARK_FIRST(BaseStorePropertyInst, Instruction)
 DEF_VALUE(StorePropertyWithReceiverInst, BaseStorePropertyInst)
 MARK_FIRST(StorePropertyInst, BaseStorePropertyInst)

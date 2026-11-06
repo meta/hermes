@@ -995,6 +995,13 @@ void HBCISel::generateBinaryOperatorInst(
   }
 }
 
+void HBCISel::generateImulInst(ImulInst *Inst, BasicBlock *next) {
+  auto left = encodeValue(Inst->getLeft());
+  auto right = encodeValue(Inst->getRight());
+  auto res = encodeValue(Inst);
+  BCFGen_->emitImul(res, left, right);
+}
+
 void HBCISel::generateStorePropertyWithReceiverInst(
     StorePropertyWithReceiverInst *Inst,
     BasicBlock *next) {

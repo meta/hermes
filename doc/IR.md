@@ -433,6 +433,16 @@ Arguments | %x and %y are the operands of the binary operation.
 Semantics | The instruction follows the rules of JavaScript for each one of the binary operators defined in the instruction.
 Effects | May read and write memory.
 
+### ImulInst
+
+ImulInst | _
+--- | --- |
+Description | Computes `Math.imul(left, right)`: the signed 32-bit-wrapped product of `ToInt32(left)` and `ToInt32(right)`.
+Example | %0 = ImulInst %left, %right
+Arguments | %left and %right may be values of any type.
+Semantics | Evaluates `ToInt32(%left)`, then `ToInt32(%right)`, in that order, exactly as `Math.imul` does. Each `ToInt32` may run arbitrary JS (e.g. a `valueOf`/`toString` method) and throws a TypeError if the operand is a BigInt or a Symbol. The result is the mathematical product of the two resulting int32 values, taken modulo 2^32 and reinterpreted as a signed 32-bit number.
+Effects | If both operands are statically known to be of Number type, the instruction is idempotent and does not read or write memory. Otherwise it may execute arbitrary JS and throw.
+
 ### DirectEvalInst
 
 DirectEvalInst | _
