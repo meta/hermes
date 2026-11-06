@@ -492,6 +492,15 @@ class Emitter {
   /// to on arm64 today.
   llvh::SmallVector<uint8_t, 4> coldReadCacheIdxs_;
 
+  /// \return the candidate version record's ByVal site entry for
+  /// \p siteId, creating the records and/or entry if absent. The
+  /// entry's address is stable (deque) and may be embedded in code.
+  JitByValSiteRecord &byValSiteRecord(uint32_t siteId) {
+    if (!versionData_->consumerRecords)
+      versionData_->consumerRecords = std::make_unique<JitConsumerRecords>();
+    return versionData_->consumerRecords->findOrCreateByValSite(siteId);
+  }
+
   /// Create an Emitter, but do not emit any actual code.
   /// Use \c enter to set up the stack frame before emitting the actual code.
   explicit Emitter(
@@ -814,16 +823,13 @@ class Emitter {
   void getByVal(FR frRes, FR frSource, FR frKey);
   void getByIndex(FR frRes, FR frSource, uint32_t key);
 
-#define DECL_PUT_BY_VAL(methodName, commentStr, shFn)                \
-  void methodName(FR frTarget, FR frKey, FR frValue) {               \
-    putByValImpl(frTarget, frKey, frValue, commentStr, shFn, #shFn); \
+#define DECL_PUT_BY_VAL(methodName, commentStr, strict)         \
+  void methodName(FR frTarget, FR frKey, FR frValue) {          \
+    putByValImpl(frTarget, frKey, frValue, commentStr, strict); \
   }
 
-  DECL_PUT_BY_VAL(putByValLoose, "putByValLoose", _sh_ljs_put_by_val_loose_rjs);
-  DECL_PUT_BY_VAL(
-      putByValStrict,
-      "putByValStrict",
-      _sh_ljs_put_by_val_strict_rjs);
+  DECL_PUT_BY_VAL(putByValLoose, "putByValLoose", false);
+  DECL_PUT_BY_VAL(putByValStrict, "putByValStrict", true);
 
   void putByValWithReceiver(
       FR frTarget,
@@ -1319,6 +1325,27 @@ class Emitter {
   /// where saving the IP is unnecessary or incorrect.
   void callRuntime(void *fn, const char *name);
 
+  /// Indirect sibling of callRuntimeWithSavedIP: saves the bytecode IP,
+  /// then calls through the mutable function pointer slot at
+  /// \p slotAddr rather than a compile-time-constant address. Used for
+  /// per-site helper slots (e.g. JitByValSiteRecord::helper) that the
+  /// runtime may flip, after emission, from a recording helper to a
+  /// plain one; the callee currently stored in the slot is called, and
+  /// both possible callees follow the ordinary saved-IP call protocol.
+  /// \p name is used only for the disassembly comment.
+  void callRuntimeWithSavedIPIndirect(uint64_t slotAddr, const char *name);
+
+  /// Indirect sibling of callRuntime: emits
+  /// `mov xScratch, slotAddr; ldr xScratch, [xScratch]; blr xScratch`,
+  /// calling whatever function pointer currently lives at \p slotAddr
+  /// instead of a compile-time-constant address. Clobbers only
+  /// xScratch, exactly as the direct form does. A callee reached this
+  /// way may take fewer than the six argument registers the caller sets
+  /// up: under AAPCS64, extra argument registers (e.g. x4/x5 for a
+  /// four-argument callee) are simply unread, so one call sequence
+  /// serves every callee the slot may hold.
+  void callRuntimeIndirect(uint64_t slotAddr, const char *name);
+
   /// Emit the code that runs when this function is longjmped to.
   /// Performs the catch table lookup and jumps to the appropriate catch block,
   /// and if no catch block is found, pops the SHJmpBuf and rethrows the
@@ -1443,12 +1470,7 @@ class Emitter {
       FR frKey,
       FR frValue,
       const char *name,
-      void (*shImpl)(
-          SHRuntime *shr,
-          SHLegacyValue *target,
-          SHLegacyValue *key,
-          SHLegacyValue *value),
-      const char *shImplName);
+      bool strict);
 
   class GetByIdImpl;
   void getByIdImpl(
@@ -1632,12 +1654,54 @@ class Emitter {
   /// because \p helperLab reads them from there. On return every temp this
   /// used is free again and no FR is registered in one, so the helper call
   /// that follows is safe (see the free-after-call invariant in doc/JIT.md).
+  ///
+  /// \param targetKnownObject true when an earlier tier at this site has
+  ///   already proved the target an object, in which case the object check
+  ///   below is skipped. Everything else is still emitted: this tier derives
+  ///   its own object pointer and re-reads the cell kind.
   void emitPutByValFastArrayTier(
       FR frTarget,
       FR frKey,
       FR frValue,
-      const asmjit::Label &helperLab);
+      const asmjit::Label &helperLab,
+      bool targetKnownObject);
 #endif // HERMES_JIT_INLINE_SAFE_STORE
+
+  /// Emit the inline typed-array store tier specialized for exactly \p kind.
+  /// A kind mismatch on an object target branches to \p kindMissLab (the
+  /// JSArray tier at duo sites, else the helper); every other guard declines
+  /// to \p helperLab, whose helper call preserves exact JS semantics and
+  /// keeps recording. Emits no write barrier: typed-array storage holds no
+  /// GC pointers, so unlike the fast array tier this one is not gated on
+  /// HERMES_JIT_INLINE_SAFE_STORE and exists under every GC.
+  ///
+  /// The guards, in emission order (which is not the spec's listing order --
+  /// the object and kind checks come first so that a duo site's non-number
+  /// stores reach the JSArray tier rather than the helper):
+  ///   - the target is an object of CellKind \p kind exactly;
+  ///   - hasFastIndexProperties() holds and the class is not frozen, the
+  ///     same masked compare the fast array tier emits: an out-of-range
+  ///     defineProperty gives the class index-like properties, and a frozen
+  ///     typed array must throw on a strict store rather than be written;
+  ///   - the value is a number that the element type can hold without a
+  ///     helper -- see the conversion comments at the emission site;
+  ///   - the key is a double that converts to a uint32 and back unchanged,
+  ///     exactly emit_double_is_uint32() as in the fast array tier;
+  ///   - the index is below length_;
+  ///   - the buffer is attached, i.e. its data_ is non-null.
+  ///
+  /// On entry all three operands must already be synced to the frame,
+  /// because \p helperLab and \p kindMissLab read them from there. On return
+  /// every temp this used is free again and no FR is registered in one, so
+  /// the helper call that follows is safe (see the free-after-call invariant
+  /// in doc/JIT.md).
+  void emitPutByValTypedArrayTier(
+      FR frTarget,
+      FR frKey,
+      FR frValue,
+      CellKind kind,
+      const asmjit::Label &kindMissLab,
+      const asmjit::Label &helperLab);
 
   void getArgumentsPropByValImpl(
       FR frRes,

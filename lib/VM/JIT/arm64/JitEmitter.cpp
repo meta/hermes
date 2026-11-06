@@ -605,6 +605,33 @@ void Emitter::callRuntime(void *fn, const char *name) {
   a.blr(xScratch);
 }
 
+void Emitter::callRuntimeWithSavedIPIndirect(
+    uint64_t slotAddr,
+    const char *name) {
+  // Save the current IP in the runtime.
+  getBytecodeIP(xScratch);
+  a.str(xScratch, a64::Mem(xRuntime, RuntimeOffsets::currentIP));
+
+  // Call through the slot.
+  callRuntimeIndirect(slotAddr, name);
+
+  if (emitAsserts_) {
+    // Invalidate the current IP to make sure it is set before the next call.
+    a.mov(xScratch, Runtime::kInvalidCurrentIP);
+    a.str(xScratch, a64::Mem(xRuntime, RuntimeOffsets::currentIP));
+  }
+}
+
+void Emitter::callRuntimeIndirect(uint64_t slotAddr, const char *name) {
+  comment("// call %s", name);
+  // The slot's ADDRESS is the constant baked into the code; the callee is
+  // whatever the slot holds when the call executes. xScratch carries first
+  // the one and then the other, which is all the direct form clobbers too.
+  loadBits64InGp(xScratch, slotAddr, "helper slot address");
+  a.ldr(xScratch, a64::Mem(xScratch));
+  a.blr(xScratch);
+}
+
 void Emitter::emitIncrementCounter(JitCounter counter) {
   if (!emitCounters_)
     return;
