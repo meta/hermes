@@ -7,9 +7,12 @@
 
 #pragma once
 
+#include "hermes/VM/Handle.h"
 #include "hermes/VM/HermesValue.h"
 #include "hermes/VM/JIT/JitFunctionData.h"
+#include "hermes/VM/PropertyDescriptor.h"
 #include "hermes/VM/RuntimeModule.h"
+#include "hermes/VM/SymbolID.h"
 #include "hermes/VM/sh_legacy_value.h"
 #include "hermes/VM/static_h.h"
 
@@ -246,27 +249,67 @@ SHLegacyValue _jit_get_by_index(
 /// "Eligibility").
 bool isEligibleByIdShape(HiddenClass *objClass, HiddenClass *protoClass);
 
-/// Add one shape to \p site per the spec's recording rule: an equal
-/// live entry absorbs it (marking it emitted if \p emitted), else it
-/// overwrites a dead entry, else it is appended, else the site becomes
-/// megamorphic. \return true if the record changed.
-bool addByIdShape(
-    JitByIdSiteRecord &site,
-    CompressedPointer objClass,
-    CompressedPointer protoClass,
-    uint16_t slot,
-    bool isProto,
-    bool emitted);
+/// Add \p ne to \p site per the recording rule: a live entry with the
+/// same identity absorbs it (marking it emitted if \p ne is), else it
+/// overwrites a dead entry that was never emitted, else it is appended,
+/// else the site becomes megamorphic. \return true if the record changed.
+bool addByIdShape(JitByIdSiteRecord &site, const JitByIdShapeEntry &ne);
+
+/// The result of jitWalkChain(): whether a GetById of a name on an object
+/// can be answered by a chain entry, and with what. A POD.
+struct JitChainWalk {
+  /// The verdict.
+  enum class Status : uint8_t {
+    /// A data property at depth >= 2, slot <= kMaxSlot.
+    Found,
+    /// Not cacheable as a chain entry.
+    Rejected,
+  };
+  /// The verdict.
+  Status status;
+  /// Found only: the object holding the property. A raw pointer, valid
+  /// only until the next GC point: consume it before anything allocates.
+  JSObject *holder;
+  /// Found only: the property's slot in holder.
+  SlotIndex slot;
+  /// Found only: prototypes from the receiver to holder.
+  uint8_t depth;
+  /// Every object the walk visited (the receiver's prototype up to the
+  /// holder, or up to where it stopped) is flagged or typed; false if it
+  /// stopped at a dictionary, proxy, host or lazy object. Says whether
+  /// the verdict is fixed until the parent cache epoch moves.
+  bool allFlagged;
+};
+
+/// Walk from \p obj's prototype up to JitByIdShapeEntry::kMaxChainDepth
+/// levels looking for \p name, as getNamedDescriptorUnsafe would for the
+/// objects it admits (spec: "The walk"). Never allocates.
+JitChainWalk jitWalkChain(Runtime &runtime, JSObject *obj, SymbolID name);
 
 /// Slow path of GetById and the recording site for its tiers' declines:
 /// forwards to _sh_ljs_get_by_id_rjs, records the shape the read cache
-/// now describes into \p siteRecord, counts the decline (possibly
-/// triggering a recompile), and returns the result. See the 2026-10-14
-/// polymorphic GetById spec, "The recording helper".
+/// now describes, or a chain entry found by jitWalkChain(), into
+/// \p siteRecord, refreshes stale chain entries, counts the decline
+/// (possibly triggering a recompile), and returns the result. See the
+/// 2026-10-14 polymorphic GetById spec, "The recording helper", and the
+/// 2026-10-24 chain spec, "Recording and refresh".
 /// \param versionData the version record of the CALLING body.
 /// \param siteRecord the calling site's JitByIdSiteRecord, owned by
 ///   \p versionData; its address is embedded in the emitted call.
 SHLegacyValue _jit_get_by_id(
+    SHRuntime *shr,
+    const SHLegacyValue *source,
+    SHSymbolID symID,
+    SHReadPropertyCacheEntry *propCacheEntry,
+    SHJitVersionData *versionData,
+    SHJitByIdSiteRecord *siteRecord);
+
+/// The helper a demoted GetById site with an emitted chain entry calls
+/// instead of _sh_ljs_get_by_id_rjs (spec: "_jit_get_by_id_refresh"):
+/// if \p versionData is current, a fast refresh, the forwarded lookup,
+/// and a revalidation when a stale chain entry exists; otherwise only
+/// the forwarded lookup. Records nothing and counts no decline.
+SHLegacyValue _jit_get_by_id_refresh(
     SHRuntime *shr,
     const SHLegacyValue *source,
     SHSymbolID symID,

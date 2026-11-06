@@ -373,10 +373,13 @@ inline void emit_sh_cp_decode(
 ///
 /// See emit_sh_cp_decode_non_null() -- the narrow branch below is live in
 /// the HV32 build, so \p mayBeRes is used there and unused in the HV64 and
-/// BOXED builds. Its only caller is the GetById object-specialization tier,
-/// which is emitted only once a call site's cache has warmed up; under
-/// -Xjit=force nothing warms, so props.js's threshold-mode SPEC RUN lines
-/// are the only coverage this helper has. Do not delete them.
+/// BOXED builds. Its callers are the GetById object-specialization tier and
+/// the polymorphic chain (the receiver ID load, the prototype block and
+/// each chain entry), none of which a first -Xjit=force compile emits: the
+/// specialization needs a warmed cache, the chain a recompile with a
+/// recorded site. props.js's threshold-mode SPEC RUN lines and the
+/// recompiling getbyid-poly-*.js and getbyid-chain*.js tests are this
+/// helper's coverage. Do not delete them.
 [[nodiscard]] inline const x86::Gp &emit_sh_cp_decode_non_null_preserve_input(
     x86::Assembler &a,
     [[maybe_unused]] const x86::Gp &mayBeRes,

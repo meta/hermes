@@ -731,19 +731,34 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
   /// recording_ and the instruction has a property cache entry.
   JitByIdSiteRecord *site_ = nullptr;
 
-  /// One chain entry, resolved to lazy JIT IDs.
+  /// One poly-chain entry, resolved to lazy JIT IDs.
   struct PolyEntry {
     /// Lazy JIT ID of the receiver's class.
     uint16_t objId;
-    /// Lazy JIT ID of the prototype's class; 0 unless isProto.
+    /// Proto only: lazy JIT ID of the prototype's class.
     uint16_t protoId;
-    /// Slot to load, in the receiver or in the prototype.
+    /// Slot to load, in the receiver, the prototype, or the object
+    /// `depth` levels up.
     SlotIndex slot;
-    /// Whether the property lives on the immediate prototype.
-    bool isProto;
+    /// Which record entry kind this is.
+    JitByIdEntryKind kind;
+    /// Chain only: prototypes from the receiver to the holder.
+    uint8_t depth;
+    /// Chain only: the address of the record entry's epoch, which the
+    /// emitted code reads. Stable: entries live in the record's inline
+    /// storage and are never moved, erased or, once emitted, overwritten.
+    const uint64_t *epochAddr;
   };
-  /// The entries emitPolyChain() emits, own entries first.
+  /// The entries emitPolyChain() emits: own entries, then chain entries,
+  /// then prototype entries.
   llvh::SmallVector<PolyEntry, JitByIdSiteRecord::kMaxEntries> poly_;
+
+  /// \return the position of \p kind in the chain's layout.
+  static unsigned emitRank(JitByIdEntryKind kind) {
+    return kind == JitByIdEntryKind::Own  ? 0
+        : kind == JitByIdEntryKind::Chain ? 1
+                                          : 2;
+  }
 
   asmjit::Label contLab;
   asmjit::Label slowPathLab;
@@ -849,6 +864,9 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
           SHJitByIdSiteRecord *);
       _FnT _fn = _jit_get_by_id;
       (void)_fn;
+      // Demotion may store _jit_get_by_id_refresh in the slot instead.
+      _FnT _fnRefresh = _jit_get_by_id_refresh;
+      (void)_fnRefresh;
       // JitByIdSiteRecord is not standard-layout (its SmallVector), so
       // the slot's displacement comes from the record, not offsetof.
       int32_t helperOfs =
@@ -1062,19 +1080,18 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
       if (isEligibleByIdShape(clazz, nullptr))
         addByIdShape(
             *site_,
-            cacheEntry->clazz.getNoBarrierUnsafe(),
-            CompressedPointer(nullptr),
-            cacheEntry->getSlot(),
-            false,
-            false);
+            JitByIdShapeEntry::makeOwn(
+                cacheEntry->clazz.getNoBarrierUnsafe(),
+                cacheEntry->getSlot(),
+                false));
     } else if (isEligibleByIdShape(neg, clazz)) {
       addByIdShape(
           *site_,
-          cacheEntry->negMatchClazz.getNoBarrierUnsafe(),
-          cacheEntry->clazz.getNoBarrierUnsafe(),
-          cacheEntry->getSlot(),
-          true,
-          false);
+          JitByIdShapeEntry::makeProto(
+              cacheEntry->negMatchClazz.getNoBarrierUnsafe(),
+              cacheEntry->clazz.getNoBarrierUnsafe(),
+              cacheEntry->getSlot(),
+              false));
     }
   }
 
@@ -1091,33 +1108,53 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
     if (cacheEntry->numGoodChanges == 1)
       addCacheShape(cacheEntry);
     Runtime &rt = _.runtime_;
+    bool anyChain = false;
     for (auto &e : site_->entries) {
       if (!e.isLive())
         continue;
+      bool isProto = e.kind == JitByIdEntryKind::Proto;
+      bool isChain = e.kind == JitByIdEntryKind::Chain;
+      // A chain entry needs a lazy ID for its receiver class only.
       uint16_t objId = _.initHCLazyIDMayAlloc(e.objClass.get(rt, rt.getHeap()));
       uint16_t protoId = 0;
-      if (objId && e.isProto)
+      if (objId && isProto)
         protoId = _.initHCLazyIDMayAlloc(e.protoClass.get(rt, rt.getHeap()));
-      if (!objId || (e.isProto && !protoId)) {
+      if (!objId || (isProto && !protoId)) {
         e.unemittable = 1;
         continue;
       }
       e.emitted = 1;
-      poly_.push_back({objId, protoId, e.slot, (bool)e.isProto});
+      anyChain |= isChain;
+      poly_.push_back(
+          {objId,
+           protoId,
+           e.slot,
+           e.kind,
+           e.depth,
+           isChain ? &e.epoch : nullptr});
     }
     if (poly_.empty())
       return false;
-    std::stable_partition(poly_.begin(), poly_.end(), [](const PolyEntry &p) {
-      return !p.isProto;
-    });
+    // Own entries, then chain entries, then the prototype block: chain
+    // entries leave the prototype block's state untouched.
+    std::stable_sort(
+        poly_.begin(), poly_.end(), [](const PolyEntry &a, const PolyEntry &b) {
+          return emitRank(a.kind) < emitRank(b.kind);
+        });
     site_->chainEmitted = 1;
+    site_->chainEntryEmitted = anyChain ? 1 : 0;
     return true;
   }
 
   /// Emit the chain. Entry state: temp1 = object, temp2 = compressed
-  /// receiver class. Fallthrough (the generic tier's join): the same.
-  /// hwRes may alias a temp; it is written only on hit paths, which
-  /// jump to contLab.
+  /// receiver class. Own entries, then chain entries (emitChainEntry),
+  /// then the prototype block. At every own and chain entry's `next`
+  /// label and at the fallthrough to the generic tier: temp1 = object,
+  /// temp2 = compressed receiver class. Inside the prototype block, temp2
+  /// holds the parent's lazy ID at each `next` label instead; the code
+  /// after its `join` label reloads the receiver class into temp2.
+  /// hwRes may alias a temp; it is written only on hit paths, which jump
+  /// to contLab.
   void emitPolyChain(Emit_sh_shv_decode &shvDecode) {
     _.comment("// Get polymorphic chain (%u entries)", (unsigned)poly_.size());
     // temp3 = receiver lazyJITId, decoded without clobbering temp2.
@@ -1128,10 +1165,10 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
         temp3.r32(), x86::word_ptr(reg, RuntimeOffsets::hiddenClassLazyJITId));
     bool anyProto = false;
     for (const PolyEntry &p : poly_) {
-      if (p.isProto) {
+      if (p.kind == JitByIdEntryKind::Proto)
         anyProto = true;
+      if (p.kind != JitByIdEntryKind::Own)
         continue;
-      }
       asmjit::Label next = a.newLabel();
       a.cmp(temp3.r32(), asmjit::Imm(p.objId));
       a.jne(next);
@@ -1140,6 +1177,10 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
       shvDecode.emitFirstCase(a);
       a.jmp(contLab);
       a.bind(next);
+    }
+    for (const PolyEntry &p : poly_) {
+      if (p.kind == JitByIdEntryKind::Chain)
+        emitChainEntry(shvDecode, p);
     }
     if (!anyProto)
       return;
@@ -1159,7 +1200,7 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
         temp2.r32(),
         x86::word_ptr(temp2, RuntimeOffsets::hiddenClassLazyJITId));
     for (const PolyEntry &p : poly_) {
-      if (!p.isProto)
+      if (p.kind != JitByIdEntryKind::Proto)
         continue;
       asmjit::Label next = a.newLabel();
       a.cmp(temp3.r32(), asmjit::Imm(p.objId));
@@ -1175,6 +1216,49 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
     a.bind(join);
     // Restore the generic tier's operand.
     emit_load_cp(a, temp2, x86::ptr(temp1, offsetof(SHJSObject, clazz)));
+  }
+
+  /// Emit one chain entry (spec: "Emission"). Entry state: temp1 =
+  /// object, temp2 = compressed receiver class, temp3 = receiver
+  /// lazyJITId. A miss on either guard leaves all three untouched and
+  /// clobbers only temp4, xScratch and EFLAGS. Past both guards the path
+  /// counts the hit, follows the live chain p.depth levels from the
+  /// receiver class's objectParent, loads the slot into hwRes and ends at
+  /// contLab.
+  void emitChainEntry(Emit_sh_shv_decode &shvDecode, const PolyEntry &p) {
+    asmjit::Label next = a.newLabel();
+    a.cmp(temp3.r32(), asmjit::Imm(p.objId));
+    a.jne(next);
+    // xScratch is live only from here to the epoch load.
+    _.loadBits64InGp(xScratch, (uint64_t)p.epochAddr, "chain entry epoch");
+    a.mov(temp4, x86::qword_ptr(xScratch));
+    a.cmp(
+        temp4,
+        x86::qword_ptr(xRuntime, RuntimeOffsets::runtimeParentCacheEpoch));
+    a.jne(next);
+    // Both guards passed; this path ends at contLab. The increment uses
+    // xScratch and EFLAGS, neither live here.
+    _.emitIncrementCounter(JitCounter::NumByIdChainHits);
+    // temp4 = the receiver's prototype, read from its class.
+    const auto &clsReg =
+        emit_sh_cp_decode_non_null_preserve_input(a, temp4, temp2);
+    emit_load_cp(
+        a, temp4, x86::ptr(clsReg, RuntimeOffsets::hiddenClassObjectParent));
+    emit_sh_cp_decode_non_null(a, temp4);
+    // Two dependent loads per further level: the class, then its parent.
+    // No null checks: the receiver class and the epoch fix every level.
+    for (unsigned i = 1; i < p.depth; ++i) {
+      emit_load_cp(a, temp4, x86::ptr(temp4, offsetof(SHJSObject, clazz)));
+      emit_sh_cp_decode_non_null(a, temp4);
+      emit_load_cp(
+          a, temp4, x86::ptr(temp4, RuntimeOffsets::hiddenClassObjectParent));
+      emit_sh_cp_decode_non_null(a, temp4);
+    }
+    // May clobber temp4 (indirect slot).
+    emitLoadFromSlot(hwRes.gpq(), temp4, p.slot);
+    shvDecode.emitFirstCase(a);
+    a.jmp(contLab);
+    a.bind(next);
   }
 
   /// Emit a specialization for accessing a property on the object.
@@ -1214,11 +1298,10 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
     if (site_) {
       addByIdShape(
           *site_,
-          cacheEntry->clazz.getNoBarrierUnsafe(),
-          CompressedPointer(nullptr),
-          cacheEntry->getSlot(),
-          false,
-          true);
+          JitByIdShapeEntry::makeOwn(
+              cacheEntry->clazz.getNoBarrierUnsafe(),
+              cacheEntry->getSlot(),
+              true));
     }
     return true;
   }
@@ -1293,11 +1376,11 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
     if (site_) {
       addByIdShape(
           *site_,
-          cacheEntry->negMatchClazz.getNoBarrierUnsafe(),
-          cacheEntry->clazz.getNoBarrierUnsafe(),
-          cacheEntry->getSlot(),
-          true,
-          true);
+          JitByIdShapeEntry::makeProto(
+              cacheEntry->negMatchClazz.getNoBarrierUnsafe(),
+              cacheEntry->clazz.getNoBarrierUnsafe(),
+              cacheEntry->getSlot(),
+              true));
     }
     return true;
   }

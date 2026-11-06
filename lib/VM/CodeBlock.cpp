@@ -351,7 +351,7 @@ void CodeBlock::markWeakElementsInCaches(
 #if HERMESVM_JIT
   // Polymorphic GetById shape records hold weak hidden-class references.
   // Only the current body's records and a compile candidate's are read
-  // again; retired records are cleared at retirement.
+  // again; retirement nulls a retired record's classes.
   if (JitFunctionData *jd = jitData_.get()) {
     auto markById = [&acceptor](JitVersionData *vd) {
       if (!vd || !vd->consumerRecords)
@@ -366,15 +366,20 @@ void CodeBlock::markWeakElementsInCaches(
     markById(jd->current.get());
     markById(jd->compiling);
 #ifndef NDEBUG
-    // Retired records are not traced, which is sound only because they
-    // hold no entries: retirement clears them and the recording helper's
-    // staleness gate keeps them clear (spec: "GC"). Check it on every
-    // collection, so a violation fails loudly in Debug builds.
+    // Retired records are not traced, which is sound only because their
+    // entries hold no classes: retirement nulls every weak root, and the
+    // recording helper's staleness gate keeps them null (a retired body
+    // may still run and read its chain entries' epochs, so the entries
+    // themselves stay). Check it on every collection, so a violation
+    // fails loudly in Debug builds.
     for (auto &vd : jd->retired) {
       if (!vd->consumerRecords)
         continue;
       for (auto &site : vd->consumerRecords->byIdSites)
-        assert(site->entries.empty() && "retired ById record repopulated");
+        for (auto &e : site->entries)
+          assert(
+              !e.objClass && !e.protoClass &&
+              "retired ById entry holds a class");
     }
 #endif
   }

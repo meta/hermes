@@ -175,6 +175,13 @@ class JITContext {
   /// Dump the counters to the given stream. Counters must be enabled.
   void dumpCounters(llvh::raw_ostream &os);
 
+  /// Increment \p counter if counters are enabled. For runtime helpers;
+  /// emitted code increments counters inline.
+  void incrementCounter(JitCounter counter) {
+    if (counters_.get())
+      ++counters_.get()[(unsigned)counter];
+  }
+
   /// \return true if we should emit asserts in the JIT'ed code.
   bool getEmitAsserts() {
     return emitAsserts_;

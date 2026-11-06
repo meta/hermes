@@ -54,5 +54,5 @@ main();
 // DUMP: JIT compilation of FunctionID {{[0-9]+}}, 'get' (version 3)
 // DUMP: // Get polymorphic chain (4 entries)
 // DUMP: JIT successfully compiled FunctionID {{[0-9]+}}, 'get' (version 3)
-// DUMP-NEXT: JIT ById sites: 1 recorded, 1 polymorphic, 0 megamorphic
+// DUMP-NEXT: JIT ById sites: 1 recorded, 1 polymorphic, 0 chain, 0 megamorphic
 // CNT: NumRecompiles: 2{{$}}

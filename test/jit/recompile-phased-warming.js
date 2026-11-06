@@ -45,7 +45,7 @@ print(o.q);
 // The warm `o.p` read got the single-shape specialization, which the
 // body records as an emitted GetById shape: one recorded site. Both
 // backends record GetById shapes and print this line.
-// CHECK-NEXT: JIT ById sites: 1 recorded, 0 polymorphic, 0 megamorphic
+// CHECK-NEXT: JIT ById sites: 1 recorded, 0 polymorphic, 0 chain, 0 megamorphic
 // The budget must survive all of phase one -- bound the -NOT up to
 // 'late phase' so a premature version-2 body (the pre-fix bug: the
 // unrelated warm `o.p` read cache satisfying the old progress check)
@@ -66,5 +66,5 @@ print(o.q);
 // entry is already emitted, so it is not a progress source in phase
 // one.
 // CHECK-NEXT: JIT cold ById sites: 1
-// CHECK-NEXT: JIT ById sites: 1 recorded, 1 polymorphic, 0 megamorphic
+// CHECK-NEXT: JIT ById sites: 1 recorded, 1 polymorphic, 0 chain, 0 megamorphic
 // CHECK-NEXT: 2

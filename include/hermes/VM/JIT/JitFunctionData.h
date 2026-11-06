@@ -103,19 +103,49 @@ struct JitByValSiteRecord {
   void *helper = nullptr;
 };
 
-/// One observed GetById shape: a receiver class and, for a prototype
-/// hit, the immediate prototype's class, plus the slot to load. See
-/// the 2026-10-14 polymorphic GetById spec, "Records".
+/// What a JitByIdShapeEntry describes. Set when the entry is recorded and
+/// never changed, so a cleared weak root never changes what an entry
+/// means (DESIGN-PRINCIPLES.md: encode kinds explicitly, not by nullness).
+enum class JitByIdEntryKind : uint8_t {
+  /// A data property of the receiver itself.
+  Own,
+  /// A data property of the receiver's immediate prototype, whose class
+  /// is protoClass.
+  Proto,
+  /// A data property `depth` prototypes up (2..kMaxChainDepth), valid
+  /// while the runtime's full parent cache epoch equals `epoch`. See the
+  /// 2026-10-24 GetById chain spec.
+  Chain,
+};
+
+/// One observed GetById shape: a receiver class, what kind of lookup
+/// answers it, and the slot to load. See the 2026-10-14 polymorphic
+/// GetById spec, "Records", and the 2026-10-24 chain spec, "Records".
 struct JitByIdShapeEntry {
+  /// The deepest prototype, counted from the receiver, that a chain entry
+  /// may reach.
+  static constexpr uint8_t kMaxChainDepth = 8;
+
   /// The receiver's hidden class.
   WeakRoot<HiddenClass> objClass{nullptr};
-  /// The immediate prototype's hidden class; meaningful only if isProto.
+  /// Proto only: the immediate prototype's hidden class.
   WeakRoot<HiddenClass> protoClass{nullptr};
-  /// Slot in the receiver (own entry) or in the prototype.
+  /// Chain only: the full parent cache epoch at which a walk last
+  /// validated this entry. Emitted code reads it through its address,
+  /// and the helpers refresh it in place.
+  uint64_t epoch = 0;
+  /// Chain only: the epoch at which revalidating this entry last failed
+  /// for a semantic reason; refreshes skip the entry until the epoch
+  /// moves. Reset on carry-forward.
+  uint64_t refreshFailedAt = 0;
+  /// Slot in the receiver (Own), the prototype (Proto) or the object
+  /// `depth` levels up (Chain).
   uint16_t slot = 0;
-  /// Set when recorded, never changed: a prototype entry whose
-  /// protoClass the GC cleared is dead, never an own entry.
-  uint8_t isProto = 0;
+  /// Chain only: how many prototypes up the property lives,
+  /// 2..kMaxChainDepth.
+  uint8_t depth = 0;
+  /// Set when recorded, never changed.
+  JitByIdEntryKind kind = JitByIdEntryKind::Own;
   /// The owning body emitted an inline check for this entry. Carried
   /// forward: emitted classes are pinned by their lazy JIT IDs and every
   /// later version emits the entry again.
@@ -137,31 +167,116 @@ struct JitByIdShapeEntry {
   JitByIdShapeEntry &operator=(const JitByIdShapeEntry &other) {
     objClass = other.objClass.getNoBarrierUnsafe();
     protoClass = other.protoClass.getNoBarrierUnsafe();
+    epoch = other.epoch;
+    refreshFailedAt = other.refreshFailedAt;
     slot = other.slot;
-    isProto = other.isProto;
+    depth = other.depth;
+    kind = other.kind;
     emitted = other.emitted;
     unemittable = other.unemittable;
     return *this;
   }
 
+  /// \return an own entry for receiver class \p objClass.
+  static JitByIdShapeEntry
+  makeOwn(CompressedPointer objClass, uint16_t slot, bool emitted);
+  /// \return a prototype entry for receiver class \p objClass whose
+  /// immediate prototype has class \p protoClass.
+  static JitByIdShapeEntry makeProto(
+      CompressedPointer objClass,
+      CompressedPointer protoClass,
+      uint16_t slot,
+      bool emitted);
+  /// \return an unemitted chain entry for receiver class \p objClass,
+  /// validated at \p epoch.
+  static JitByIdShapeEntry makeChain(
+      CompressedPointer objClass,
+      uint8_t depth,
+      uint16_t slot,
+      uint64_t epoch);
+
   /// \return true if every class this entry needs is still alive.
   bool isLive() const {
-    return objClass && (!isProto || protoClass);
+    return objClass && (kind != JitByIdEntryKind::Proto || protoClass);
   }
+
+  /// \return true if \p other describes the same shape: same kind,
+  /// receiver class and slot, plus the prototype class (Proto) or the
+  /// depth (Chain). Epochs are not part of identity: receiver class,
+  /// depth and slot, validated at an epoch, determine the answer.
+  bool sameIdentity(const JitByIdShapeEntry &other) const;
 };
+
+inline JitByIdShapeEntry JitByIdShapeEntry::makeOwn(
+    CompressedPointer objClass,
+    uint16_t slot,
+    bool emitted) {
+  JitByIdShapeEntry e;
+  e.objClass = objClass;
+  e.slot = slot;
+  e.kind = JitByIdEntryKind::Own;
+  e.emitted = emitted;
+  return e;
+}
+
+inline JitByIdShapeEntry JitByIdShapeEntry::makeProto(
+    CompressedPointer objClass,
+    CompressedPointer protoClass,
+    uint16_t slot,
+    bool emitted) {
+  JitByIdShapeEntry e;
+  e.objClass = objClass;
+  e.protoClass = protoClass;
+  e.slot = slot;
+  e.kind = JitByIdEntryKind::Proto;
+  e.emitted = emitted;
+  return e;
+}
+
+inline JitByIdShapeEntry JitByIdShapeEntry::makeChain(
+    CompressedPointer objClass,
+    uint8_t depth,
+    uint16_t slot,
+    uint64_t epoch) {
+  JitByIdShapeEntry e;
+  e.objClass = objClass;
+  e.epoch = epoch;
+  e.slot = slot;
+  e.depth = depth;
+  e.kind = JitByIdEntryKind::Chain;
+  return e;
+}
+
+inline bool JitByIdShapeEntry::sameIdentity(
+    const JitByIdShapeEntry &other) const {
+  if (kind != other.kind || objClass != other.objClass.getNoBarrierUnsafe() ||
+      slot != other.slot)
+    return false;
+  if (kind == JitByIdEntryKind::Proto)
+    return protoClass == other.protoClass.getNoBarrierUnsafe();
+  if (kind == JitByIdEntryKind::Chain)
+    return depth == other.depth;
+  return true;
+}
 
 /// One GetById site's observed shapes and what the owning body emitted
 /// for it. _jit_get_by_id records observed shapes and sets seen and
-/// changed. The emitter also adds entries: the read cache's current
-/// shape, and the shapes it emits, marked emitted. Both add through
-/// addByIdShape, so either can set megamorphic.
+/// changed. It and, once the site is demoted, _jit_get_by_id_refresh
+/// also write chain entries' epoch and refreshFailedAt. The emitter
+/// also adds entries: the read cache's current shape, and the shapes
+/// it emits, marked emitted. Both add through addByIdShape, so either
+/// can set megamorphic.
 struct JitByIdSiteRecord {
   /// Maximum number of shapes kept per site.
   static constexpr unsigned kMaxEntries = 4;
 
   /// Bytecode offset of the GetById instruction.
   uint32_t siteId;
-  /// Observed shapes, at most kMaxEntries; dead entries are reused.
+  /// Observed shapes, at most kMaxEntries. They live in the inline
+  /// storage, which never reallocates because addByIdShape never exceeds
+  /// kMaxEntries, and are never erased, reordered or (once emitted)
+  /// overwritten: emitted code embeds the address of a chain entry's
+  /// epoch. Dead entries that were never emitted are reused.
   llvh::SmallVector<JitByIdShapeEntry, kMaxEntries> entries;
   /// The recording helper completed at least one call here. The
   /// demotion rule's "observed" test.
@@ -175,8 +290,13 @@ struct JitByIdSiteRecord {
   /// The owning body emitted a polymorphic chain here. Emitted-tier
   /// field: reset on carry-forward; feeds the dump line only.
   uint8_t chainEmitted = 0;
-  /// Per-site mutable helper slot: _jit_get_by_id while recording,
-  /// _sh_ljs_get_by_id_rjs after demotion. Never flipped back.
+  /// The owning body emitted at least one chain entry here. Emitted-tier
+  /// field: reset on carry-forward; feeds the dump line only.
+  uint8_t chainEntryEmitted = 0;
+  /// Per-site mutable helper slot: _jit_get_by_id while recording; after
+  /// demotion, _jit_get_by_id_refresh if the owning body emitted a chain
+  /// entry here, else _sh_ljs_get_by_id_rjs. Retirement sets
+  /// _sh_ljs_get_by_id_rjs. Never flipped back to _jit_get_by_id.
   void *helper = nullptr;
 };
 

@@ -148,8 +148,11 @@ class JITContext::Compiler {
           r->changed = 0;
           r->unchangedCrossings = 0;
           r->chainEmitted = 0;
-          for (auto &e : r->entries)
+          r->chainEntryEmitted = 0;
+          for (auto &e : r->entries) {
             e.unemittable = 0;
+            e.refreshFailedAt = 0;
+          }
           copy->byIdSites.push_back(std::move(r));
         }
         candidateVD_->consumerRecords = std::move(copy);
@@ -330,6 +333,14 @@ static bool byIdShapeProgress(const JitVersionData *vd) {
   return false;
 }
 
+/// \return true if the owning body emitted a chain entry at \p s.
+static bool byIdSiteHasEmittedChain(const JitByIdSiteRecord &s) {
+  for (const auto &e : s.entries)
+    if (e.kind == JitByIdEntryKind::Chain && e.emitted)
+      return true;
+  return false;
+}
+
 /// A site is demoted after this many consecutive threshold crossings on
 /// which its record neither changed nor had anything actionable left to
 /// learn. Note the schedule for a site observed from cold: its first
@@ -381,11 +392,18 @@ static void demoteAllSitesOnRetirement(JitVersionData *vd) {
       demoteSite(s);
   }
   for (auto &s : llvh::make_pointee_range(cr->byIdSites)) {
-    if (s.helper == (void *)_jit_get_by_id)
+    if (s.helper == (void *)_jit_get_by_id ||
+        s.helper == (void *)_jit_get_by_id_refresh)
       s.helper = (void *)_sh_ljs_get_by_id_rjs;
-    // Never read again; dropping the entries means a retired record's
-    // weak references need no tracing (spec: "GC").
-    s.entries.clear();
+    // The retired body may still be running, and emitted chain entries
+    // read their epochs through the entries' addresses, so the entries
+    // stay. Their classes go instead: a retired record is not traced
+    // (CodeBlock::markWeakElementsInCaches), and the receiver IDs the body
+    // compares are immediates, so nothing reads the classes again.
+    for (auto &e : s.entries) {
+      e.objClass = CompressedPointer(nullptr);
+      e.protoClass = CompressedPointer(nullptr);
+    }
   }
   cr->recordingSites = 0;
 }
@@ -439,7 +457,11 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
         if (!s.seen || canProgress || s.changed) {
           s.unchangedCrossings = 0;
         } else if (++s.unchangedCrossings >= kDemotionStableCrossings) {
-          s.helper = (void *)_sh_ljs_get_by_id_rjs;
+          // A site with an emitted chain entry keeps a helper that
+          // refreshes it; otherwise one epoch bump after demotion would
+          // disable the entry for good.
+          s.helper = byIdSiteHasEmittedChain(s) ? (void *)_jit_get_by_id_refresh
+                                                : (void *)_sh_ljs_get_by_id_rjs;
           --cr->recordingSites;
           if (counters_.get())
             ++counters_.get()[(unsigned)JitCounter::NumByIdDemotions];
@@ -709,8 +731,9 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
                      << specialized << " specialized\n";
       }
       // The ById shape records: sites holding a live shape or marked
-      // megamorphic, and how many of them this body gave a chain.
-      size_t recorded = 0, poly = 0, mega = 0;
+      // megamorphic, how many of them this body gave a chain, and how
+      // many of those emitted a chain entry.
+      size_t recorded = 0, poly = 0, chain = 0, mega = 0;
       for (const auto &s : llvh::make_pointee_range(cr->byIdSites)) {
         bool live = false;
         for (const auto &e : s.entries)
@@ -718,11 +741,13 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
         if (live || s.megamorphic)
           ++recorded;
         poly += s.chainEmitted;
+        chain += s.chainEntryEmitted;
         mega += s.megamorphic;
       }
       if (recorded) {
         llvh::outs() << "JIT ById sites: " << recorded << " recorded, " << poly
-                     << " polymorphic, " << mega << " megamorphic\n";
+                     << " polymorphic, " << chain << " chain, " << mega
+                     << " megamorphic\n";
       }
     }
   }

@@ -28,9 +28,19 @@ namespace vm {
    * flips are bookkeeping, not policy, and are NOT counted. */   \
   X(NumByValDemotions)                                            \
   /* GetById sites whose helper slot the demotion pass flipped    \
-   * from _jit_get_by_id to the plain helper. Retirement-time     \
-   * flips are bookkeeping, not policy, and are NOT counted. */   \
-  X(NumByIdDemotions)
+   * from _jit_get_by_id to the plain helper, or to               \
+   * _jit_get_by_id_refresh when the site holds an emitted chain  \
+   * entry. Retirement-time flips are bookkeeping, not policy,    \
+   * and are NOT counted. */                                      \
+  X(NumByIdDemotions)                                             \
+  /* Chain entries whose epoch a GetById helper set: fast         \
+   * refreshes before the forwarded lookup plus revalidations     \
+   * after it. Counted by the helpers, so only with               \
+   * -Xjit-emit-counters. */                                      \
+  X(NumByIdChainRefreshes)                                        \
+  /* Inline hits of emitted GetById chain entries, counted by the \
+   * emitted code only with -Xjit-emit-counters. */               \
+  X(NumByIdChainHits)
 
 /// Enum with an entry for each JIT counter. This is used to index into the
 /// list of counters.

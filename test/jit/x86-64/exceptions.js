@@ -382,7 +382,7 @@ say(churn(2000));
 // CHECK-NEXT: JIT compilation of FunctionID 16, 'churn' (version 2)
 // CHECK: JIT successfully compiled FunctionID 16, 'churn' (version 2)
 // CHECK-NEXT: JIT cold ById sites: {{[0-9]+}}
-// CHECK-NEXT: JIT ById sites: {{[0-9]+}} recorded, {{[0-9]+}} polymorphic, 0 megamorphic
+// CHECK-NEXT: JIT ById sites: {{[0-9]+}} recorded, {{[0-9]+}} polymorphic, 0 chain, 0 megamorphic
 // CHECK-NEXT: 1999679
 // CHECK0: JIT successfully compiled FunctionID 16, 'churn'
 // CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
@@ -390,7 +390,7 @@ say(churn(2000));
 // CHECK0-NEXT: JIT compilation of FunctionID 16, 'churn' (version 2)
 // CHECK0: JIT successfully compiled FunctionID 16, 'churn' (version 2)
 // CHECK0-NEXT: JIT cold ById sites: {{[0-9]+}}
-// CHECK0-NEXT: JIT ById sites: {{[0-9]+}} recorded, {{[0-9]+}} polymorphic, 0 megamorphic
+// CHECK0-NEXT: JIT ById sites: {{[0-9]+}} recorded, {{[0-9]+}} polymorphic, 0 chain, 0 megamorphic
 // CHECK0-NEXT: 1999679
 
 // ThrowIfEmpty and ThrowIfThisInitialized. Reading `this` in a derived

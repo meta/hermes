@@ -594,8 +594,9 @@ void Emitter::emitIncrementCounter(JitCounter counter) {
   // array is non-null whenever emitCounters_ is set (JITContext::setEmit-
   // Counters allocates it), so there is no null check here, just as on arm64.
   //
-  // Unlike arm64's `add`, `inc` writes EFLAGS. Both call sites -- the top of
-  // callImpl and the head of its slow path -- have no live flags.
+  // Unlike arm64's `add`, `inc` writes EFLAGS. No call site -- the top of
+  // callImpl, the head of its slow path, a GetById chain entry's hit path
+  // -- has live flags.
   a.mov(xScratch, x86::qword_ptr(xRuntime, RuntimeOffsets::runtimeJitCounters));
   a.inc(
       x86::qword_ptr(

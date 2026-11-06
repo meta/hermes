@@ -545,34 +545,22 @@ bool isEligibleByIdShape(HiddenClass *objClass, HiddenClass *protoClass) {
   return !objClass->isDictionary() && !protoClass->isDictionaryNoCache();
 }
 
-bool addByIdShape(
-    JitByIdSiteRecord &site,
-    CompressedPointer objClass,
-    CompressedPointer protoClass,
-    uint16_t slot,
-    bool isProto,
-    bool emitted) {
+bool addByIdShape(JitByIdSiteRecord &site, const JitByIdShapeEntry &ne) {
   JitByIdShapeEntry *dead = nullptr;
   for (auto &e : site.entries) {
     if (!e.isLive()) {
-      if (!dead)
+      // A body may embed an emitted entry's address (a chain entry's
+      // epoch), so only entries that were never emitted are reused.
+      if (!dead && !e.emitted)
         dead = &e;
       continue;
     }
-    if (e.isProto == isProto && e.objClass == objClass &&
-        (!isProto || e.protoClass == protoClass) && e.slot == slot) {
-      if (emitted)
+    if (e.sameIdentity(ne)) {
+      if (ne.emitted)
         e.emitted = 1;
       return false;
     }
   }
-  JitByIdShapeEntry ne;
-  ne.objClass = objClass;
-  if (isProto)
-    ne.protoClass = protoClass;
-  ne.slot = slot;
-  ne.isProto = isProto;
-  ne.emitted = emitted;
   if (dead) {
     // Overwrites every field, including emitted and unemittable.
     *dead = ne;
@@ -580,6 +568,9 @@ bool addByIdShape(
   }
   if (site.entries.size() < JitByIdSiteRecord::kMaxEntries) {
     site.entries.push_back(ne);
+    assert(
+        site.entries.capacity() == JitByIdSiteRecord::kMaxEntries &&
+        "ById entries must stay in the record's inline storage");
     return true;
   }
   if (!site.megamorphic) {
@@ -589,9 +580,87 @@ bool addByIdShape(
   return false;
 }
 
+/// \return true if lookups through an object of class \p clazz are not
+/// described by a class that only updateClass changes (spec: "The
+/// validity argument", 6 and 7), so a chain path must not contain it.
+static bool isChainExcluded(const HiddenClass *clazz) {
+  return clazz->isDictionary() || clazz->isLazyObject() ||
+      clazz->isHostObject() || clazz->isProxyObject();
+}
+
+/// Look \p name up in \p clazz without allocating: in the property map if
+/// the class has one, else by findPropertyNoAlloc's walk of the
+/// transition chain. \return true and fill \p desc if found.
+static bool chainClassLookup(
+    Runtime &runtime,
+    HiddenClass *clazz,
+    SymbolID name,
+    NamedPropertyDescriptor &desc) {
+  OptValue<bool> fast =
+      HiddenClass::tryFindPropertyFast(clazz, runtime, name, desc);
+  if (fast.hasValue())
+    return *fast;
+  llvh::Optional<NamedPropertyDescriptor> slow =
+      HiddenClass::findPropertyNoAlloc(clazz, runtime, name);
+  if (!slow)
+    return false;
+  desc = *slow;
+  return true;
+}
+
+JitChainWalk jitWalkChain(Runtime &runtime, JSObject *obj, SymbolID name) {
+  NoAllocScope noAlloc(runtime);
+  JitChainWalk res{JitChainWalk::Status::Rejected, nullptr, 0, 0, false};
+  NamedPropertyDescriptor desc;
+  HiddenClass *clazz = obj->getClass(runtime);
+  // The receiver must be plain too: a dictionary receiver could gain the
+  // property without a class change.
+  if (isChainExcluded(clazz))
+    return res;
+  if (chainClassLookup(runtime, clazz, name, desc)) {
+    // An own property: the receiver's class alone decides, and entries
+    // are keyed on it.
+    res.allFlagged = true;
+    return res;
+  }
+  bool allFlagged = true;
+  JSObject *cur = obj;
+  for (unsigned depth = 1; depth <= JitByIdShapeEntry::kMaxChainDepth;
+       ++depth) {
+    cur = cur->getParent(runtime);
+    if (!cur)
+      break;
+    clazz = cur->getClass(runtime);
+    if (isChainExcluded(clazz)) {
+      allFlagged = false;
+      break;
+    }
+    // Typed objects never change class or parent, so they count as
+    // flagged (setCachedUsingEpoch skips them).
+    if (!clazz->getIsCachedUsingEpoch() && !clazz->isTyped())
+      allFlagged = false;
+    if (!chainClassLookup(runtime, clazz, name, desc))
+      continue;
+    // Found here; depth 1 is the prototype entry's job.
+    if (depth >= 2 && !desc.flags.accessor && !desc.flags.hostObject &&
+        !desc.flags.proxyObject &&
+        desc.slot <= ReadPropertyCacheEntry::kMaxSlot) {
+      res.status = JitChainWalk::Status::Found;
+      res.holder = cur;
+      res.slot = desc.slot;
+      res.depth = (uint8_t)depth;
+    }
+    break;
+  }
+  res.allFlagged = allFlagged;
+  return res;
+}
+
 /// Step 3 of the recording helper: record what \p shEntry now describes
 /// for the object in \p source. Allocates nothing on the GC heap.
-static void recordByIdObservation(
+/// \return true if the read cache described the receiver as an own or
+///   prototype hit whose shape was offered to addByIdShape.
+static bool recordByIdObservation(
     Runtime &runtime,
     JitByIdSiteRecord &site,
     const SHLegacyValue *source,
@@ -603,7 +672,7 @@ static void recordByIdObservation(
   }
   HermesValue src = *toPHV(source);
   if (!src.isObject())
-    return;
+    return false;
   auto *entry = reinterpret_cast<ReadPropertyCacheEntry *>(shEntry);
   JSObject *obj = vmcast<JSObject>(src);
   CompressedPointer now = obj->getClassGCPtr();
@@ -613,21 +682,188 @@ static void recordByIdObservation(
     // Own hit. Takes precedence over negMatchClazz, which the own fill
     // does not clear (StaticH.cpp, _sh_ljs_get_by_id_rjs).
     if (!isEligibleByIdShape(obj->getClass(runtime), nullptr))
-      return;
+      return false;
     changed = addByIdShape(
-        site, now, CompressedPointer(nullptr), entry->getSlot(), false, false);
+        site, JitByIdShapeEntry::makeOwn(now, entry->getSlot(), false));
   } else if (now && entry->negMatchClazz.getNoBarrierUnsafe() == now) {
     JSObject *parent = obj->getParent(runtime);
     if (!clazz || !parent ||
         CompressedPointer(parent->getClassGCPtr()) != clazz)
-      return;
+      return false;
     if (!isEligibleByIdShape(obj->getClass(runtime), parent->getClass(runtime)))
-      return;
-    changed = addByIdShape(site, now, clazz, entry->getSlot(), true, false);
+      return false;
+    changed = addByIdShape(
+        site,
+        JitByIdShapeEntry::makeProto(now, clazz, entry->getSlot(), false));
   } else {
-    return;
+    return false;
   }
   if (changed)
+    site.changed = 1;
+  return true;
+}
+
+/// \return true if \p e is a chain entry for receiver class \p clazz that
+/// a walk at epoch \p now may refresh: live, its epoch stale, and not
+/// marked as failing at \p now.
+static bool isChainCandidate(
+    const JitByIdShapeEntry &e,
+    CompressedPointer clazz,
+    uint64_t now) {
+  return e.kind == JitByIdEntryKind::Chain && e.isLive() &&
+      e.objClass == clazz && e.epoch != now && e.refreshFailedAt != now;
+}
+
+/// \return true if \p site holds a chain candidate for \p clazz at \p now.
+static bool hasChainCandidate(
+    const JitByIdSiteRecord &site,
+    CompressedPointer clazz,
+    uint64_t now) {
+  for (const auto &e : site.entries)
+    if (isChainCandidate(e, clazz, now))
+      return true;
+  return false;
+}
+
+/// \return true if a new entry would be stored rather than overflow:
+/// fewer than kMaxEntries entries, or a dead one that was never emitted.
+static bool byIdSiteHasRoom(const JitByIdSiteRecord &site) {
+  if (site.entries.size() < JitByIdSiteRecord::kMaxEntries)
+    return true;
+  for (const auto &e : site.entries)
+    if (!e.isLive() && !e.emitted)
+      return true;
+  return false;
+}
+
+/// Flag every unflagged, untyped object from \p recv's prototype up
+/// \p depth levels, as JSObject::tryCacheAddProperty does.
+/// Flagging changes only class flags (HiddenClass::markAsCachedUsingEpoch),
+/// cannot run JS and cannot throw: the objects on a walked path are not
+/// lazy, so setCachedUsingEpoch never materializes. It can allocate and
+/// collect.
+static void
+flagChainPath(Runtime &runtime, Handle<JSObject> recv, uint8_t depth) {
+  struct : public Locals {
+    PinnedValue<JSObject> cur;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.cur = recv->getParent(runtime);
+  for (uint8_t i = 0; i < depth && lv.cur.get() != nullptr; ++i) {
+    if (!lv.cur->isCachedUsingEpoch(runtime))
+      JSObject::setCachedUsingEpoch(lv.cur, runtime);
+    lv.cur = lv.cur->getParent(runtime);
+  }
+}
+
+/// The fast refresh (spec: "Recording and refresh"), before the forwarded
+/// lookup. Allocates nothing. If a stale chain entry for the receiver's
+/// class names the (depth, slot) a fully flagged walk finds, set its
+/// epoch. \return true, with the holder's value in \p out, only if that
+/// entry is emitted: the call is then complete. An unemitted entry is
+/// refreshed but the call continues, so its miss still counts toward
+/// the recompile that emits it.
+static bool chainFastRefresh(
+    Runtime &runtime,
+    JitByIdSiteRecord &site,
+    const SHLegacyValue *source,
+    SymbolID name,
+    SHLegacyValue &out) {
+  NoAllocScope noAlloc(runtime);
+  HermesValue src = *toPHV(source);
+  if (!src.isObject())
+    return false;
+  JSObject *obj = vmcast<JSObject>(src);
+  CompressedPointer clazz = obj->getClassGCPtr();
+  uint64_t now = runtime.getFullParentCacheEpoch();
+  if (!hasChainCandidate(site, clazz, now))
+    return false;
+  JitChainWalk w = jitWalkChain(runtime, obj, name);
+  if (w.status != JitChainWalk::Status::Found || !w.allFlagged)
+    return false;
+  for (auto &e : site.entries) {
+    if (!isChainCandidate(e, clazz, now) || e.depth != w.depth ||
+        e.slot != w.slot)
+      continue;
+    e.epoch = now;
+    runtime.getJITContext().incrementCounter(JitCounter::NumByIdChainRefreshes);
+    if (!e.emitted)
+      return false;
+    out = JSObject::getNamedSlotValueUnsafe(w.holder, runtime, w.slot)
+              .unboxToHV(runtime);
+    return true;
+  }
+  return false;
+}
+
+/// After the forwarded lookup: walk from the rooted receiver \p recv and
+/// update \p site's chain entries (spec: "Recording and refresh",
+/// revalidation and step 4). Flagging the path can allocate and collect;
+/// only the walk's scalars cross it, and the receiver's class is re-read
+/// afterwards. Never runs JS and never throws. Revalidation never sets
+/// `changed`.
+/// \param record whether a new (depth, slot) may be recorded; false for
+///   _jit_get_by_id_refresh.
+static void chainAfterForward(
+    Runtime &runtime,
+    JitByIdSiteRecord &site,
+    Handle<JSObject> recv,
+    SymbolID name,
+    bool record) {
+  JitChainWalk w = jitWalkChain(runtime, *recv, name);
+  bool found = w.status == JitChainWalk::Status::Found;
+  uint64_t now = runtime.getFullParentCacheEpoch();
+  CompressedPointer clazz = recv->getClassGCPtr();
+  // The entry with the walk's identity, if any. Entries never move.
+  JitByIdShapeEntry *same = nullptr;
+  for (auto &e : site.entries) {
+    if (e.kind != JitByIdEntryKind::Chain || !e.isLive() || e.objClass != clazz)
+      continue;
+    if (found && e.depth == w.depth && e.slot == w.slot) {
+      same = &e;
+      continue;
+    }
+    // A different verdict that depends only on flagged objects cannot
+    // change without a bump: skip this entry until the epoch moves.
+    if (w.allFlagged && isChainCandidate(e, clazz, now))
+      e.refreshFailedAt = now;
+  }
+  if (!found)
+    return;
+  uint8_t depth = w.depth;
+  uint16_t slot = (uint16_t)w.slot;
+  if (same) {
+    if (same->epoch == now)
+      return;
+    // Revalidation: flag the path so that any change to it bumps the
+    // epoch, then adopt the epoch the walk ran at if nothing bumped it.
+    // `same` stays valid: entries never move, and its class is the
+    // rooted receiver's, so the GC cannot clear it.
+    flagChainPath(runtime, recv, depth);
+    if (runtime.getFullParentCacheEpoch() == now) {
+      same->epoch = now;
+      runtime.getJITContext().incrementCounter(
+          JitCounter::NumByIdChainRefreshes);
+    }
+    return;
+  }
+  if (!record)
+    return;
+  if (!byIdSiteHasRoom(site)) {
+    // Sets megamorphic (and changed) once; nothing is stored, so nothing
+    // needs flagging.
+    if (addByIdShape(
+            site, JitByIdShapeEntry::makeChain(clazz, depth, slot, now)))
+      site.changed = 1;
+    return;
+  }
+  flagChainPath(runtime, recv, depth);
+  if (runtime.getFullParentCacheEpoch() != now)
+    return;
+  if (addByIdShape(
+          site,
+          JitByIdShapeEntry::makeChain(
+              recv->getClassGCPtr(), depth, slot, now)))
     site.changed = 1;
 }
 
@@ -643,29 +879,89 @@ SHLegacyValue _jit_get_by_id(
   JitVersionData *vd = reinterpret_cast<JitVersionData *>(versionData);
   // vd owns the record, and a version record is never freed while its
   // body can run (retirement keeps it), so the pointer stays valid
-  // across step 1 even if a getter retires this body.
+  // across step 2 even if a getter retires this body.
   auto *site = reinterpret_cast<JitByIdSiteRecord *>(siteRecord);
-  // Step 1: forward. A throw longjmps past this frame, skipping
+  SymbolID name = SymbolID::unsafeCreate(symID);
+  JitFunctionData *jd = vd->codeBlock->getJitData();
+
+  // Step 0: staleness. A retired body or a demoted slot records and
+  // refreshes nothing.
+  // Step 1: fast refresh; may complete the call.
+  if (vd == jd->current.get() && site->helper == (void *)_jit_get_by_id) {
+    SHLegacyValue hv;
+    if (chainFastRefresh(runtime, *site, source, name, hv))
+      return hv;
+  }
+
+  // Step 2: forward. A throw longjmps past this frame, skipping
   // destructors, so no LocalsRAII may be registered across the call: a
   // stale one would leave runtime.vmLocals pointing at a dead frame.
   SHLegacyValue res = _sh_ljs_get_by_id_rjs(shr, source, symID, propCacheEntry);
   // Root the result at once (nothing allocates between the return and
-  // here); step 4 can compile and collect.
+  // here); steps 4 and 5 can flag, compile and collect.
   struct : public Locals {
     PinnedValue<> result;
+    PinnedValue<JSObject> recv;
   } lv;
   LocalsRAII lraii{runtime, &lv};
   lv.result = HermesValue::fromRaw(res.raw);
 
-  // Step 2: staleness. A getter run above may have retired this body,
-  // or a demotion pass may have flipped the site.
-  JitFunctionData *jd = vd->codeBlock->getJitData();
-  if (vd == jd->current.get() && site->helper == (void *)_jit_get_by_id)
-    recordByIdObservation(runtime, *site, source, propCacheEntry);
+  // Step 3: staleness again (a getter run above may have retired this
+  // body, or a demotion pass flipped the site), then harvest.
+  if (vd == jd->current.get() && site->helper == (void *)_jit_get_by_id) {
+    bool harvested =
+        recordByIdObservation(runtime, *site, source, propCacheEntry);
+    // Step 4: nothing harvested: walk for a chain entry.
+    HermesValue src = *toPHV(source);
+    if (!harvested && src.isObject()) {
+      lv.recv = vmcast<JSObject>(src);
+      chainAfterForward(runtime, *site, lv.recv, name, true);
+    }
+  }
 
-  // Step 4: count; a crossing may recompile (and collect).
+  // Step 5: count; a crossing may recompile (and collect).
   if (LLVM_UNLIKELY(++vd->declineCount >= vd->declineThreshold))
     runtime.getJITContext().considerRecompile(runtime, vd);
+  return lv.result.getHermesValue();
+}
+
+LLVM_ATTRIBUTE_NOINLINE
+SHLegacyValue _jit_get_by_id_refresh(
+    SHRuntime *shr,
+    const SHLegacyValue *source,
+    SHSymbolID symID,
+    SHReadPropertyCacheEntry *propCacheEntry,
+    SHJitVersionData *versionData,
+    SHJitByIdSiteRecord *siteRecord) {
+  Runtime &runtime = getRuntime(shr);
+  JitVersionData *vd = reinterpret_cast<JitVersionData *>(versionData);
+  auto *site = reinterpret_cast<JitByIdSiteRecord *>(siteRecord);
+  SymbolID name = SymbolID::unsafeCreate(symID);
+  JitFunctionData *jd = vd->codeBlock->getJitData();
+  // Retirement flips this slot to the plain helper, so a retired body
+  // gets here only for a call already in flight; it only forwards.
+  if (vd != jd->current.get())
+    return _sh_ljs_get_by_id_rjs(shr, source, symID, propCacheEntry);
+  {
+    SHLegacyValue hv;
+    if (chainFastRefresh(runtime, *site, source, name, hv))
+      return hv;
+  }
+  // Same longjmp rule as _jit_get_by_id.
+  SHLegacyValue res = _sh_ljs_get_by_id_rjs(shr, source, symID, propCacheEntry);
+  struct : public Locals {
+    PinnedValue<> result;
+    PinnedValue<JSObject> recv;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.result = HermesValue::fromRaw(res.raw);
+  HermesValue src = *toPHV(source);
+  if (vd == jd->current.get() && src.isObject()) {
+    lv.recv = vmcast<JSObject>(src);
+    if (hasChainCandidate(
+            *site, lv.recv->getClassGCPtr(), runtime.getFullParentCacheEpoch()))
+      chainAfterForward(runtime, *site, lv.recv, name, false);
+  }
   return lv.result.getHermesValue();
 }
 

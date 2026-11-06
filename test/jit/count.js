@@ -53,7 +53,7 @@ for (var i = 0; i < 50; ++i) {
 // CHECK:JIT compilation of FunctionID 3, 'loop2'
 
 // CHECK:JIT successfully compiled FunctionID 3, 'loop2'
-// CHECK-NEXT:JIT ById sites: 4 recorded, 0 polymorphic, 0 megamorphic
+// CHECK-NEXT:JIT ById sites: 4 recorded, 0 polymorphic, 0 chain, 0 megamorphic
 // CHECK-NEXT:3
 // CHECK-NEXT:4
 // CHECK-NEXT:5
@@ -64,7 +64,7 @@ for (var i = 0; i < 50; ++i) {
 // CHECK:JIT compilation of FunctionID 2, 'loop1'
 
 // CHECK:JIT successfully compiled FunctionID 2, 'loop1'
-// CHECK-NEXT:JIT ById sites: 2 recorded, 0 polymorphic, 0 megamorphic
+// CHECK-NEXT:JIT ById sites: 2 recorded, 0 polymorphic, 0 chain, 0 megamorphic
 // CHECK-NEXT:9
 // CHECK-NEXT:10
 // CHECK-NEXT:11

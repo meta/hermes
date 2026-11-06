@@ -360,46 +360,66 @@ never get a chain.
 
 - **Entries.** Up to `JitByIdSiteRecord::kMaxEntries` (4). An own entry is a
   receiver class and a slot in the receiver; a prototype entry is a receiver
-  class, the immediate prototype's class, and a slot in the prototype. If the
-  live cache entry currently passes the single-shape gate
-  (`numGoodChanges == 1`), that shape is folded into the record first,
-  subject to the cap. Lazy JIT IDs for every live entry's classes are
-  assigned before any chain code is emitted, re-reading each class from its
-  weak root right before `initHCLazyIDMayAlloc` (a GC safepoint). A dead
-  entry is skipped; one that gets no ID is skipped and marked
-  `unemittable`; the rest are marked `emitted`. If no entry survives, the
-  site falls back to tiers 1-3 exactly as before.
+  class, the immediate prototype's class, and a slot in the prototype. A chain
+  entry (doc/superpowers/specs/2026-10-24-jit-getbyid-chain-design.md) is a
+  receiver class, a depth (2 to `kMaxChainDepth`, 8) and a slot in the object
+  that many prototypes up, valid while the runtime's 64-bit parent cache epoch
+  equals the entry's `epoch`; it needs a lazy ID for the receiver class only. If
+  the live cache entry currently passes the single-shape gate
+  (`numGoodChanges == 1`), that shape is folded into the record first, subject
+  to the cap. Lazy JIT IDs for every live entry's classes are assigned before
+  any chain code is emitted, re-reading each class from its weak root right
+  before `initHCLazyIDMayAlloc` (a GC safepoint). A dead entry is skipped; one
+  that gets no ID is skipped and marked `unemittable`; the rest are marked
+  `emitted`. If no entry survives, the site falls back to tiers 1-3 exactly as
+  before.
 - **Registers.** The same on both backends: `temp1` = object, `temp2` =
-  compressed receiver class, `temp3` = receiver `lazyJITId`, and `temp4`
-  holds the parent in the prototype block. On arm64 only, `xTemp4` is also
-  the large-offset temporary for an out-of-line own load. ID compares on
-  arm64 go through `emit_cmp_imm32(a, reg.w(), id, xScratch.w())`: an ID
-  that `a64::Utils::isAddSubImm` rejects (above 4095 and not a multiple of
-  4096 below 2^24) is first materialized in `w16` (`mov w16, <id>; cmp wN,
-  w16`), which is free inline. The pin test uses IDs above 4095 that
-  `isAddSubImm` rejects for this.
+  compressed receiver class, `temp3` = receiver `lazyJITId`, and `temp4` holds
+  the parent in the prototype block. A chain entry also uses `temp4`: first for
+  its epoch, then, past both guards, for the walk to the holder. On arm64 only,
+  `xTemp4` is also the large-offset temporary for an out-of-line own load. ID
+  compares on arm64 go through `emit_cmp_imm32(a, reg.w(), id, xScratch.w())`:
+  an ID that `a64::Utils::isAddSubImm` rejects (above 4095 and not a multiple of
+  4096 below 2^24) is first materialized in `w16`
+  (`mov w16, <id>; cmp wN, w16`), which is free inline. The pin test uses IDs
+  above 4095 that `isAddSubImm` rejects for this. A chain entry also uses `r11`
+  on x86-64 (the entry's epoch address, dead after the load) and `x16`/`x17` on
+  arm64 (the runtime's epoch and the entry's epoch address).
 - **Layout.** The non-object check jumps straight to the slow call. Then
   `temp1` = object, `temp2` = compressed receiver class, `temp3` = receiver
   `lazyJITId` (decoded without clobbering `temp2`). Own entries come first,
-  each `cmp temp3, ID; jne next`, slot load, `jmp done`. If any prototype
-  entry was emitted, one parent load and null check follow (null goes to the
-  join), `temp2` becomes the parent's `lazyJITId`, and each prototype entry
-  compares both IDs before loading from the parent. At the join `temp2` is
-  reloaded from `temp1` if the prototype block overwrote it, so the generic
-  tier always starts from the same state: `temp1` = object, `temp2` =
-  compressed receiver class. Unlike tier 2, the chain is never terminal; the
-  generic tier and then the helper always follow it.
+  each `cmp temp3, ID; jne next`, slot load, `jmp done`. Chain entries come
+  next, before the prototype block, so they leave its state untouched. Each
+  is `cmp temp3, ID; jne next`, then the entry's epoch is loaded through its
+  address (`mov r11, imm64; mov temp4, [r11]`; arm64 `ldr xTemp4, [x17]`)
+  and compared with `Runtime::parentCacheEpoch_` (`cmp temp4, [r15 + ofs]`;
+  arm64 `ldr x16, [x19, #ofs]; cmp`), `jne next`. Past both guards the hit
+  is counted (`NumByIdChainHits`, only with `-Xjit-emit-counters`), `temp4`
+  follows the receiver class's `objectParent` and then each further level's
+  `clazz` and `objectParent` (two dependent loads per level), and the slot
+  is loaded from it. A miss leaves `temp1`-`temp3` untouched. Emitted code
+  embeds the entry's epoch address: entries live in the record's inline
+  storage and are never moved, erased or, once emitted, overwritten. If any
+  prototype entry was emitted, one parent load and null check follow (null
+  goes to the join), `temp2` becomes the parent's `lazyJITId`, and each
+  prototype entry compares both IDs before loading from the parent. At the
+  join `temp2` is reloaded from `temp1` if the prototype block overwrote
+  it, so the generic tier always starts from the same state: `temp1` =
+  object, `temp2` = compressed receiver class. Unlike tier 2, the chain is
+  never terminal; the generic tier and then the helper always follow it.
 - **One decoder per site.** A single `Emit_sh_shv_decode` serves the chain and
   the generic tier. Every chain load uses `emitFirstCase` and `jmp done`; the
   remaining decode cases are emitted once, by the generic tier's indirect-slot
   `emitAll`, and fall through to `done`. Prototype entries therefore do not
   use `emitAll`, unlike tier 2.
-- The dump comments it `// Get polymorphic chain (N entries)`.
+- The dump comments it `// Get polymorphic chain (N entries)`; N counts
+  chain entries too.
 
 Miss → out-of-line call to `_sh_ljs_get_by_id_rjs`/`_sh_ljs_try_get_by_id_rjs`
 with the cache-entry address; on both backends, GetById-family sites that
-have a read cache entry instead call `_jit_get_by_id` (or, once demoted,
-`_sh_ljs_get_by_id_rjs`) indirectly through the site's helper slot. Sites
+have a read cache entry instead call `_jit_get_by_id` indirectly through the
+site's helper slot. Once demoted, the slot holds `_sh_ljs_get_by_id_rjs`, or
+`_jit_get_by_id_refresh` if the body emitted a chain entry at the site. Sites
 without one keep the direct call. Writes have an inline tier on both backends
 (`emitPutByIdInlineTier`, see "Inline write barrier" below): when
 the site's write cache already names a hidden class at compile time, the
@@ -1138,43 +1158,50 @@ emitter differ.
 
 - **Records.** `JitConsumerRecords::byIdSites` is a second vector of owning
   pointers, beside `byValSites`, to `JitByIdSiteRecord`s keyed by the GetById
-  instruction's bytecode offset. A record holds up to four `JitByIdShapeEntry`s (receiver
-  class, prototype class for a prototype entry, slot, and the `isProto`,
-  `emitted` and `unemittable` bytes), plus `seen`, `megamorphic`, `changed`,
-  `unchangedCrossings`, `chainEmitted` and the mutable `helper` slot. Classes
-  are held as `WeakRoot<HiddenClass>`: lazy JIT IDs, which pin a class
-  forever, are assigned only when a compile emits the entry. The emitter
-  creates the record when it emits the site's helper call, so the recording
-  helper never adds one. Cost: each cached GetById site in a compiled body
-  takes one allocation of `sizeof(JitByIdSiteRecord)` (136 B on HV64, 104 B
-  on HV32) plus an 8-byte vector slot; a function with no recorded sites
-  allocates nothing for them.
+  instruction's bytecode offset. A record holds up to four `JitByIdShapeEntry`s
+  (receiver class; prototype class for a prototype entry; `epoch` and
+  `refreshFailedAt` for a chain entry; slot; `depth`; the explicit `kind`,
+  `Own`, `Proto` or `Chain`, set when recorded; and the `emitted` and
+  `unemittable` bytes), plus `seen`, `megamorphic`, `changed`,
+  `unchangedCrossings`, `chainEmitted`, `chainEntryEmitted` and the mutable
+  `helper` slot. Classes are held as `WeakRoot<HiddenClass>`: lazy JIT IDs,
+  which pin a class forever, are assigned only when a compile emits the entry.
+  The emitter creates the record when it emits the site's helper call, so the
+  recording helper never adds one. Cost: each cached GetById site in a compiled
+  body takes one allocation of `sizeof(JitByIdSiteRecord)` (200 B on HV64, 168 B
+  on HV32; a `JitByIdShapeEntry` is 40 B and 32 B) plus an 8-byte vector slot; a
+  function with no recorded sites allocates nothing for them.
 - **Trigger.** Every GetById-family site with a read cache entry calls through
   its record's helper slot, initialized (only if null) to `_jit_get_by_id`,
   which takes the plain helper's four arguments plus the version record (`r8`)
-  and the site's record (`r9`). The call is `call [r9 + offset of helper]`,
-  so the helper needs no lookup to find its record. On arm64 the call
-  passes `x0` runtime, `x1` &source, `w2` symbol ID, `x3` cache entry, `x4`
-  version record and `x5` the `JitByIdSiteRecord *`; the IP is saved first,
-  then `ldr x16, [x5, #ofs]` (ofs = `&site->helper - site`, 128 on HV64,
+  and the site's record (`r9`). The call is `call [r9 + offset of helper]`, so
+  the helper needs no lookup to find its record. On arm64 the call passes `x0`
+  runtime, `x1` &source, `w2` symbol ID, `x3` cache entry, `x4` version record
+  and `x5` the `JitByIdSiteRecord *`; the IP is saved first, then
+  `ldr x16, [x5, #ofs]` (ofs = `&site->helper - site`, 192 on HV64, 160 on HV32,
   asserted to fit the scaled `ldr` immediate) and `blr x16`, through the
-  `callRuntimeWithSavedIPIndirect(const a64::Mem &, name)` overload. A
-  demoted slot holds the four-argument `_sh_ljs_get_by_id_rjs`, which ignores
-  the extra registers (`r8`/`r9` on x86-64, `x4`/`x5` on arm64). The helper
-  forwards to `_sh_ljs_get_by_id_rjs` and pins the result in a `Locals` only
-  after the call returns (a throwing lookup longjmps past the helper, which
-  must not leave a `LocalsRAII` registered; see `DESIGN-PRINCIPLES.md`).
-  Next comes a staleness gate (the version is still `current` and the slot
-  still holds `_jit_get_by_id`). The observation is recorded under a
-  `NoAllocScope`: an own hit when the cache entry's `clazz` is the receiver's
-  class, a prototype hit when its `negMatchClazz` is and `clazz` is the
-  parent's class, each filtered by the read cache's own eligibility
-  predicates. Last, the decline is counted toward the shared threshold and
-  `considerRecompile`. A throwing lookup is neither recorded nor counted.
-  `TryGetById*`, `GetByIdWithReceiver*` and uncached sites keep the direct
-  call.
+  `callRuntimeWithSavedIPIndirect(const a64::Mem &, name)` overload. A demoted
+  slot holds the four-argument `_sh_ljs_get_by_id_rjs`, which ignores the extra
+  registers (`r8`/`r9` on x86-64, `x4`/`x5` on arm64), or, at a site where the
+  body emitted a chain entry, the six-argument `_jit_get_by_id_refresh`, which
+  uses them. If the version is still `current` and the slot still holds
+  `_jit_get_by_id`, the helper first tries the chain entries' fast refresh (see
+  "Chain entries" below), which can complete the call and return early,
+  recording nothing and counting no decline. Otherwise it forwards to
+  `_sh_ljs_get_by_id_rjs` and pins the result in a `Locals` only after the call
+  returns (a throwing lookup longjmps past the helper, which must not leave a
+  `LocalsRAII` registered; see `DESIGN-PRINCIPLES.md`). The same staleness check
+  runs again, since a getter may have retired the body. The observation is
+  recorded under a `NoAllocScope`: an own hit when the cache entry's `clazz` is
+  the receiver's class, a prototype hit when its `negMatchClazz` is and `clazz`
+  is the parent's class, each filtered by the read cache's own eligibility
+  predicates; if neither, the chain walk follows. Last, the decline is counted
+  toward the shared threshold and `considerRecompile`. A throwing lookup is
+  neither recorded nor counted. `TryGetById*`, `GetByIdWithReceiver*` and
+  uncached sites keep the direct call.
 - **Recording rule.** An equal live entry absorbs the shape; otherwise it
-  overwrites a dead entry (one the GC cleared), else is appended, else marks
+  overwrites a dead entry (one the GC cleared) that was never emitted, else
+  is appended, else marks
   the site `megamorphic` and is dropped. `changed` is set by an overwrite or
   append, by the first `seen`, and by `megamorphic` only on its 0 → 1
   transition, so sustained overflow traffic does not hold off demotion.
@@ -1185,14 +1212,51 @@ emitter differ.
 - **Demotion.** The same pass and rule as ByVal, with `seen` as the "observed"
   test and the progress term above as "can still progress". A flip sets the
   slot to `_sh_ljs_get_by_id_rjs` and counts `NumByIdDemotions` (retirement
-  flips are not counted). `recordingByValSites` became `recordingSites` and
-  counts both kinds of recording site.
+  flips are not counted). A site holding an emitted chain entry flips to
+  `_jit_get_by_id_refresh` instead. `recordingByValSites` became
+  `recordingSites` and counts both kinds of recording site.
 - **Carry-forward and retirement.** The `Compiler` constructor copies
   `byIdSites` from `current`: entries, `seen`, `megamorphic` and the helper
-  value carry; `changed`, `unchangedCrossings`, `chainEmitted` and every
-  entry's `unemittable` reset. `emitted` must carry, because it is what makes
+  value carry; `changed`, `unchangedCrossings`, `chainEmitted`,
+  `chainEntryEmitted` and every entry's `unemittable` and `refreshFailedAt`
+  reset. `emitted` must carry, because it is what makes
   emission monotone. Retirement flips the retired body's still-recording ById
-  slots and clears every ById record's entries.
+  slots, and its refresh slots, to the plain helper, and nulls the weak
+  roots of every ById record's entries.
+- **Chain entries.** `jitWalkChain` (JitHandlers.cpp) walks from the receiver's
+  prototype up to 8 levels with class lookups only (the property map, else
+  `HiddenClass::findPropertyNoAlloc`), never allocating. It rejects
+  dictionaries, proxies, host and lazy objects anywhere on the path or as the
+  receiver, accessors, slots above 0xffff, and properties found on the receiver
+  or its prototype, and reports whether every prototype it visited is flagged
+  (`isCachedUsingEpoch`) or typed (the receiver is not checked). The recording
+  helper walks only when the read cache yielded no own or prototype shape. On a
+  new (depth, slot) with room it flags the path
+  (`JSObject::setCachedUsingEpoch`, which can allocate but never throws) and
+  records the entry at the current epoch, unless flagging itself bumped the
+  epoch; with no room it marks the site megamorphic. Before forwarding, a fast
+  refresh under `NoAllocScope` refreshes a stale entry whose (depth, slot) a
+  fully flagged walk confirms. For an emitted entry it returns the holder's
+  value without forwarding or counting a decline; an unemitted entry is
+  refreshed but its call still forwards and counts. After forwarding,
+  revalidation flags a path that now holds unflagged objects and adopts the
+  epoch if nothing bumped it. A different verdict on a fully flagged path sets
+  `refreshFailedAt`, which suppresses further refresh attempts until the epoch
+  moves. `NumByIdChainRefreshes` counts the refreshes. A site that demotes while
+  holding an emitted chain entry flips to `_jit_get_by_id_refresh` (fast
+  refresh, forward, revalidation; it records no new entry and counts no
+  decline), which is not a recording helper. Retirement keeps a retired record's
+  entries, because the retired body may still run and read their epochs, and
+  nulls their weak roots instead, so retired records still need no tracing
+  (Debug builds assert that their entries hold no class). Carry-forward copies
+  chain entries whole and resets `refreshFailedAt`.
+- **The epoch.** `Runtime::parentCacheEpoch_` is 64-bit and monotonic.
+  `getParentCacheEpoch()` returns its low 24 bits for the add cache,
+  which sees the same sequence as before (the wrap still invalidates
+  every add cache entry). The array fast path compares the full members
+  directly (`arrayFastPathParentCacheEpoch_ == parentCacheEpoch_`); only
+  chain entries go through `getFullParentCacheEpoch()` (the helpers) and
+  `RuntimeOffsets::runtimeParentCacheEpoch` (emitted code).
 - **GC.** `CodeBlock::markWeakElementsInCaches` visits both classes of every
   entry, with `acceptWeak`, in `current`'s records and in
   `JitFunctionData::compiling`'s. `compiling` is the candidate of a compile in
@@ -1203,12 +1267,13 @@ emitter differ.
   installed, not from the data's existence). Install and the `Compiler`
   destructor, which also runs on the longjmp failure path, clear it.
   Retired records are not traced; Debug builds assert on every collection
-  that they hold no entries.
+  that they hold no class.
 - **Dump.** The `-Xdump-jitcode` per-function summary gains `JIT ById sites:
-  R recorded, P polymorphic, M megamorphic`, printed when R > 0. R counts
-  sites with a live entry or the megamorphic flag; P counts sites where this
-  body emitted a chain, including one-entry chains carried forward from a
-  single-shape specialization.
+  R recorded, P polymorphic, C chain, M megamorphic`, printed when R > 0. R
+  counts sites with a live entry or the megamorphic flag; P counts sites
+  where this body emitted a chain, including one-entry chains carried
+  forward from a single-shape specialization; C counts sites where this
+  body emitted at least one chain entry.
 
 Tests, all in `test/jit/` and run on both backends:
 `getbyid-record-{demote,demote-delay,throw}.js` and
@@ -1227,6 +1292,12 @@ split per backend with `%jit_arch_prefix` (`DUMPX86:` / `DUMPARM64:`).
 `getbyid-poly-emitted-arm64.js` pins the arm64 recording call and the chain's
 `ldrh` and `w16` compares; `getbyid-poly-bigslot.js` covers out-of-line slots
 at 32 KiB, where the arm64 load needs its temporary register.
+`getbyid-chain*.js` cover the DeltaBlue shape, depths 1-9, invalidation by
+each kind of path mutation, the fast refresh, refresh after demotion,
+revalidation, a mapless flags-transition holder, unflagged verdicts,
+overflow, exclusions, ID exhaustion, a retired body on the stack and rooted
+results; `unittests/VMRuntime/JitChainWalkTest.cpp` covers the walk's slot
+limit, its `findPropertyNoAlloc` fallback and its verdicts.
 
 ### Arithmetic, comparisons and NaN handling
 
@@ -1305,8 +1376,14 @@ function don't-JIT.
 - `emitAsserts` (`-Xjit-emit-asserts`): IP invalidation after calls, plus
   `assertPostInstructionInvariants` at compile time (every temp accounted
   for, no dirty FRs).
-- Counters (`JIT_COUNTERS`: NumCall, NumCallSlow) incremented inline when
-  enabled.
+- Counters (`JIT_COUNTERS` in include/hermes/VM/JIT/JitCounters.h:
+  NumCall, NumCallSlow, NumRecompileChecks, NumRecompiles,
+  NumByValDemotions, NumByIdDemotions, NumByIdChainRefreshes,
+  NumByIdChainHits), with `-Xjit-emit-counters`. Emitted code increments
+  NumCall, NumCallSlow and NumByIdChainHits inline; the runtime increments
+  the rest. Only the chain refreshes (NumByIdChainRefreshes) go through
+  `JITContext::incrementCounter`; the other runtime counters increment the
+  counter array directly.
 - Linux `perf` jitdump + source-comment sidecar via `PerfJitDump`.
 - `utils/jit/jit-dump.sh` / `jit-diff.sh`: capture a canonicalized dump of
   all JIT-emitted code from a `hermes` binary and diff two binaries'

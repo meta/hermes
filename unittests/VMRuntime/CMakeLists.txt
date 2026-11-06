@@ -42,6 +42,7 @@ set(RTSources
   InstrumentationAPITest.cpp
   InternalPropertiesTest.cpp
   InterpreterTest.cpp
+  JitChainWalkTest.cpp
   JSLibTest.cpp
   JSONParseTest.cpp
   JSTypedArrayTest.cpp
