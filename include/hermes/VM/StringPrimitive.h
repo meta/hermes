@@ -364,6 +364,12 @@ class StringPrimitive : public VariableSizeRuntimeCell {
     return llvh::ArrayRef<T>{castToPointer<T>(), getStringLength()};
   }
 
+  /// Get a writable raw char pointer, assert that this is ASCII string.
+  char *castToASCIIPointerForWrite();
+
+  /// Get a writable raw char16_t pointer, assert that this is UTF16 string.
+  char16_t *castToUTF16PointerForWrite();
+
  private:
   /// Similar to appendUTF16String(SmallVectorImpl), copy the string into
   /// a raw pointer \p ptr. Since there is no size check, this function should
@@ -380,12 +386,6 @@ class StringPrimitive : public VariableSizeRuntimeCell {
   /// the correct type.
   template <typename T>
   inline const T *castToPointer() const;
-
-  /// Get a writable raw char pointer, assert that this is ASCII string.
-  char *castToASCIIPointerForWrite();
-
-  /// Get a writable raw char16_t pointer, assert that this is UTF16 string.
-  char16_t *castToUTF16PointerForWrite();
 
   /// \return the UTF-16 ref starting at \p start of length \p length.
   UTF16Ref castToUTF16Ref(uint32_t start, uint32_t length) const {

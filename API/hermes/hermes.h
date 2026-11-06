@@ -172,6 +172,52 @@ class HERMES_EXPORT IHermesTestHelpers : public jsi::ICast {
   ~IHermesTestHelpers() = default;
 };
 
+/// Creates strings by letting the caller write the characters directly into
+/// the string's storage, avoiding an intermediate copy. Obtained through
+/// castInterface, so its absence can be detected at runtime; tracing runtimes
+/// don't provide it, since they must record every string they create. The
+/// layout and UUID are a contract with out-of-tree users: change the UUID on
+/// any change.
+class HERMES_EXPORT IStringWriter : public jsi::ICast {
+ public:
+  static constexpr jsi::UUID uuid{
+      0x51ebba26,
+      0xc682,
+      0x11f1,
+      0xa77d,
+      0x1683052e5da6};
+
+  /// Fills the \p count ASCII chars at positions [offset, offset + count) of
+  /// the new string, starting at \p dst. Depending on the internal
+  /// representation of the string, it may be invoked multiple times, in
+  /// increasing \p offset order, with ranges that together cover the whole
+  /// string. Must not call into the runtime. Returns false to reject the
+  /// output.
+  using AsciiWriteFn =
+      bool (*)(void *ctx, char *dst, size_t offset, size_t count) noexcept;
+
+  /// Like AsciiWriteFn, for UTF-16 code units.
+  using Utf16WriteFn =
+      bool (*)(void *ctx, char16_t *dst, size_t offset, size_t count) noexcept;
+
+  /// \return a string of \p length chars written in place by \p write.
+  /// Throws a JSError if \p write returns false, or a RangeError if \p length
+  /// is too large.
+  virtual jsi::String
+  createStringFromAsciiWriter(size_t length, void *ctx, AsciiWriteFn write) = 0;
+
+  /// Like createStringFromAsciiWriter, for UTF-16 code units: lets the caller
+  /// convert text (e.g. from UTF-8) straight into the string's storage. The
+  /// result is stored as UTF-16, except that empty strings and single ASCII
+  /// characters use the runtime's interned ASCII representation. Use
+  /// createStringFromAsciiWriter for ASCII text to halve character storage.
+  virtual jsi::String
+  createStringFromUtf16Writer(size_t length, void *ctx, Utf16WriteFn write) = 0;
+
+ protected:
+  ~IStringWriter() = default;
+};
+
 #ifdef JSI_UNSTABLE
 // Interface for methods that are exposed for tracing purposes.
 class IHermesTracingHelpers : public jsi::ICast {

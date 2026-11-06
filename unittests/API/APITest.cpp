@@ -491,6 +491,108 @@ TEST_P(HermesRuntimeTest, ResetTimezoneCache) {
   }
 }
 
+/// Source for the string writer tests; \c written tracks how much of \c src
+/// the writer has filled, to check the invocation contract.
+template <typename S>
+struct WriterSource {
+  const S &src;
+  size_t written = 0;
+};
+
+/// Copies the requested range of the WriterSource passed as \p ctx, checking
+/// that ranges arrive in order and contiguous.
+template <typename S>
+static bool writeRange(
+    void *ctx,
+    typename S::value_type *dst,
+    size_t offset,
+    size_t count) noexcept {
+  auto &source = *static_cast<WriterSource<S> *>(ctx);
+  EXPECT_EQ(offset, source.written);
+  EXPECT_LE(offset + count, source.src.size());
+  for (size_t i = 0; i < count; ++i)
+    dst[i] = source.src[offset + i];
+  source.written = offset + count;
+  return true;
+}
+
+TEST_P(HermesRuntimeTest, StringWriterTest) {
+  auto *writer = castInterface<IStringWriter>(rt.get());
+  if (!castInterface<IHermes>(rt.get())) {
+    // Only runtimes backed by HermesRuntime provide the writer.
+    return;
+  }
+  ASSERT_NE(writer, nullptr);
+
+  // Around the interned (0/1 chars) and external (64K chars) thresholds.
+  const size_t lengths[] = {0, 1, 2, 65535, 65536, 100000};
+  // ASCII, Cyrillic and a surrogate pair, which a cut can leave unpaired.
+  const char16_t pattern[] = {u'a', u'ж', 0xD83D, 0xDE42};
+  for (size_t length : lengths) {
+    std::string chars(length, '\0');
+    std::u16string units(length, u'\0');
+    for (size_t i = 0; i < length; ++i) {
+      chars[i] = static_cast<char>('a' + i % 26);
+      units[i] = pattern[i % 4];
+    }
+    WriterSource<std::string> asciiSource{chars};
+    String fromAscii = writer->createStringFromAsciiWriter(
+        length, &asciiSource, writeRange<std::string>);
+    EXPECT_EQ(asciiSource.written, length);
+    EXPECT_TRUE(
+        String::strictEquals(
+            *rt, fromAscii, String::createFromAscii(*rt, chars)));
+    WriterSource<std::u16string> utf16Source{units};
+    String fromUtf16 = writer->createStringFromUtf16Writer(
+        length, &utf16Source, writeRange<std::u16string>);
+    EXPECT_EQ(utf16Source.written, length);
+    EXPECT_TRUE(
+        String::strictEquals(
+            *rt, fromUtf16, String::createFromUtf16(*rt, units)));
+    EXPECT_EQ(fromUtf16.utf16(*rt), units);
+  }
+
+  // ASCII text through the UTF-16 writer still equals and keys like ASCII.
+  std::u16string keyUnits = u"writerKey";
+  WriterSource<std::u16string> keySource{keyUnits};
+  String key = writer->createStringFromUtf16Writer(
+      keyUnits.size(), &keySource, writeRange<std::u16string>);
+  EXPECT_TRUE(
+      String::strictEquals(
+          *rt, key, String::createFromAscii(*rt, "writerKey")));
+  Object obj(*rt);
+  obj.setProperty(*rt, PropNameID::forString(*rt, key), 42);
+  EXPECT_EQ(obj.getProperty(*rt, "writerKey").getNumber(), 42);
+
+  // A writer that rejects its output.
+  auto rejectAscii = [](void *, char *, size_t, size_t) noexcept {
+    return false;
+  };
+  auto rejectUtf16 = [](void *, char16_t *, size_t, size_t) noexcept {
+    return false;
+  };
+  EXPECT_THROW(
+      writer->createStringFromAsciiWriter(1, nullptr, rejectAscii), JSError);
+  EXPECT_THROW(
+      writer->createStringFromAsciiWriter(100, nullptr, rejectAscii), JSError);
+  EXPECT_THROW(
+      writer->createStringFromUtf16Writer(100, nullptr, rejectUtf16), JSError);
+
+  // Too long: a RangeError, and the writer is never called.
+  auto unreachable = [](void *, char *, size_t, size_t) noexcept {
+    ADD_FAILURE() << "writer called";
+    return false;
+  };
+  const size_t tooLong = size_t(256) * 1024 * 1024 + 1;
+  try {
+    writer->createStringFromAsciiWriter(tooLong, nullptr, unreachable);
+    ADD_FAILURE() << "expected a RangeError";
+  } catch (const JSError &e) {
+    EXPECT_TRUE(e.value().asObject(*rt).instanceOf(
+        *rt, rt->global().getPropertyAsFunction(*rt, "RangeError")));
+  }
+}
+
 TEST_P(HermesRuntimeTest, DescriptionTest) {
   // Minimally, if the description doesn't include "Hermes", something
   // is wrong.
