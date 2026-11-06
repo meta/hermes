@@ -709,24 +709,57 @@ static inline unsigned _sh_tryfast_f64_to_u32_cvt(double x) {
 //
 // Wasm
 //
-// Fortunately Clang avoids UB when compiling the conversion to Wasm, so we
-// don't need to do anything special.
-
-static inline int32_t _sh_tryfast_f64_to_i32_cvt(double x) {
-  return (int32_t)x;
-}
-static inline uint32_t _sh_tryfast_f64_to_u32_cvt(double x) {
-  return (uint32_t)x;
-}
+// A C cast is undefined for out-of-range values even if the final Wasm
+// instruction saturates. LLVM can consequently remove the range check from
+// the conversion's round trip, accepting negative inputs as unsigned zero.
+// Use defined saturating intrinsics when the target supports them, and guard
+// the casts otherwise, so that the round-trip check is preserved.
 
 #define HERMES_TRYFAST_F64_TO_64_IS_FAST 1
 
+#if defined(__wasm_nontrapping_fptoint__)
+
+static inline int32_t _sh_tryfast_f64_to_i32_cvt(double x) {
+  return __builtin_wasm_trunc_saturate_s_i32_f64(x);
+}
+static inline uint32_t _sh_tryfast_f64_to_u32_cvt(double x) {
+  return __builtin_wasm_trunc_saturate_u_i32_f64(x);
+}
+
 static inline int64_t _sh_tryfast_f64_to_i64_cvt(double x) {
-  return (int64_t)x;
+  int64_t result = __builtin_wasm_trunc_saturate_s_i64_f64(x);
+  // Reject saturated values that round back to the overflowing input double.
+  // See the file doc-comment for the same mitigation on other architectures.
+  return (int64_t)((uint64_t)result << 1) >> 1;
 }
 static inline uint64_t _sh_tryfast_f64_to_u64_cvt(double x) {
-  return (uint64_t)x;
+  return __builtin_wasm_trunc_saturate_u_i64_f64(x) & ~(1ull << 63);
 }
+
+#else
+
+// Ordered comparisons reject NaN as well as infinities before any C cast.
+// Check the range of the truncated value, including fractions just below the
+// minimum integer and just above the maximum integer.
+static inline int32_t _sh_tryfast_f64_to_i32_cvt(double x) {
+  return x > -2147483649.0 && x < 2147483648.0 ? (int32_t)x : 0;
+}
+static inline uint32_t _sh_tryfast_f64_to_u32_cvt(double x) {
+  return x > -1.0 && x < 4294967296.0 ? (uint32_t)x : 0;
+}
+
+// INT64_MAX and UINT64_MAX round up to powers of two as doubles. Exclusive
+// upper bounds reject those overflowing values before conversion, so these
+// results do not need the saturated-result mitigation above.
+static inline int64_t _sh_tryfast_f64_to_i64_cvt(double x) {
+  return x >= -9223372036854775808.0 && x < 9223372036854775808.0 ? (int64_t)x
+                                                                  : 0;
+}
+static inline uint64_t _sh_tryfast_f64_to_u64_cvt(double x) {
+  return x > -1.0 && x < 18446744073709551616.0 ? (uint64_t)x : 0;
+}
+
+#endif
 
 #else
 // =============================================================================

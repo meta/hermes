@@ -15,6 +15,37 @@ using namespace hermes;
 
 namespace {
 
+TEST(ConversionsTest, DynamicTruncateBoundaries) {
+  const struct {
+    double input;
+    uint32_t expected;
+  } cases[] = {
+      {-1, 0xffffffffu},
+      {-2147483648.0, 0x80000000u},
+      {-4294967297.0, 0xffffffffu},
+      {-1.5, 0xffffffffu},
+      {4294967295.0, 0xffffffffu},
+      {4294967296.0, 0},
+      {9007199254740991.0, 0xffffffffu},
+      {9223372036854775808.0, 0},
+      {-9223372036854775808.0, 0},
+      {18446744073709551616.0, 0},
+      {1e20, 1661992960u},
+      {-1e20, 2632974336u},
+      {std::numeric_limits<double>::infinity(), 0},
+      {-std::numeric_limits<double>::infinity(), 0},
+      {std::numeric_limits<double>::quiet_NaN(), 0},
+  };
+  for (const auto &test : cases) {
+    // Bypass the constant-folding shortcut to exercise the dynamic conversion
+    // and its round-trip rejection of out-of-range floating-point values.
+    volatile double input = test.input;
+    EXPECT_EQ(test.expected, hermes::truncateToUInt32(input));
+    EXPECT_EQ(
+        static_cast<int32_t>(test.expected), hermes::truncateToInt32(input));
+  }
+}
+
 TEST(ConversionsTest, toInt32Test) {
   EXPECT_EQ(0, hermes::truncateToInt32(0));
   EXPECT_EQ(0, hermes::truncateToInt32(-0.1));
