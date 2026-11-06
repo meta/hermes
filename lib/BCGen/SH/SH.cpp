@@ -852,9 +852,16 @@ class InstrGen {
   void generateTypeOfIsInst(TypeOfIsInst &inst) {
     os_.indent(2);
     generateRegister(inst);
-    os_ << " = _sh_ljs_bool(_sh_ljs_typeof_is(";
+    // Every value has exactly one type, so test whichever of the set and its
+    // complement has fewer types: the inline check grows with each type.
+    TypeOfIsTypes types = inst.getTypes()->getData();
+    bool negate = types.count() > types.invert().count();
+    if (negate)
+      types = types.invert();
+    os_ << " = _sh_ljs_bool(" << (negate ? "!" : "")
+        << "_sh_ljs_typeof_is_inline(";
     generateValue(*inst.getArgument());
-    os_ << ", " << inst.getTypes()->getData().getRaw() << "));\n";
+    os_ << ", " << types.getRaw() << "));\n";
   }
   void generateUnaryOperatorInst(UnaryOperatorInst &inst) {
     os_.indent(2);

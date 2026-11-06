@@ -8,24 +8,14 @@
 #ifndef HERMES_FRONTENDDEFS_TYPEOF_H
 #define HERMES_FRONTENDDEFS_TYPEOF_H
 
-#include <cstdint>
-
+#include "hermes/FrontEndDefs/TypeOfIsTypes.h"
 #include "llvh/ADT/FoldingSet.h"
 #include "llvh/Support/MathExtras.h"
 #include "llvh/Support/raw_ostream.h"
 
-namespace hermes {
+#include <cstdint>
 
-#define HERMES_TYPEOF_IS_TYPES           \
-  HERMES_TYPEOF_IS_TYPES_TYPE(Undefined) \
-  HERMES_TYPEOF_IS_TYPES_TYPE(Object)    \
-  HERMES_TYPEOF_IS_TYPES_TYPE(String)    \
-  HERMES_TYPEOF_IS_TYPES_TYPE(Symbol)    \
-  HERMES_TYPEOF_IS_TYPES_TYPE(Boolean)   \
-  HERMES_TYPEOF_IS_TYPES_TYPE(Number)    \
-  HERMES_TYPEOF_IS_TYPES_TYPE(Bigint)    \
-  HERMES_TYPEOF_IS_TYPES_TYPE(Function)  \
-  HERMES_TYPEOF_IS_TYPES_TYPE(Null)
+namespace hermes {
 
 /// Bitfield for the flags in the TypeOfIs IR and bytecode instructions.
 /// Guaranteed to fit in a uint16_t.

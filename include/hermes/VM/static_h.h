@@ -8,6 +8,7 @@
 #ifndef HERMES_STATIC_H_H
 #define HERMES_STATIC_H_H
 
+#include "hermes/FrontEndDefs/TypeOfIsTypes.h"
 #include "hermes/Support/sh_tryfast_fp_cvt.h"
 #include "hermes/VM/sh_legacy_value.h"
 #include "hermes/VM/sh_mirror.h"
@@ -1376,6 +1377,44 @@ _sh_string_concat(SHRuntime *shr, uint32_t argCount, ...);
 
 SHERMES_EXPORT SHLegacyValue _sh_ljs_typeof(SHRuntime *shr, SHLegacyValue *v);
 SHERMES_EXPORT bool _sh_ljs_typeof_is(SHLegacyValue val, uint16_t types);
+
+/// Bit positions of the TypeOfIsTypes passed to _sh_ljs_typeof_is().
+enum {
+#define HERMES_TYPEOF_IS_TYPES_TYPE(name) SH_TYPEOF_IS_##name##_INDEX,
+  HERMES_TYPEOF_IS_TYPES
+#undef HERMES_TYPEOF_IS_TYPES_TYPE
+};
+
+/// Bits of the TypeOfIsTypes passed to _sh_ljs_typeof_is().
+enum {
+#define HERMES_TYPEOF_IS_TYPES_TYPE(name) \
+  SH_TYPEOF_IS_##name = 1 << SH_TYPEOF_IS_##name##_INDEX,
+  HERMES_TYPEOF_IS_TYPES
+#undef HERMES_TYPEOF_IS_TYPES_TYPE
+};
+
+/// Inline version of _sh_ljs_typeof_is(). Meant to be called with constant
+/// \p types, so that it folds to the few checks that matter.
+static inline bool _sh_ljs_typeof_is_inline(SHLegacyValue val, uint16_t types) {
+  if (_sh_ljs_is_object(val)) {
+    const uint16_t objOrFunc = SH_TYPEOF_IS_Object | SH_TYPEOF_IS_Function;
+    if ((types & objOrFunc) == 0)
+      return false;
+    if ((types & objOrFunc) == objOrFunc)
+      return true;
+    unsigned kind = ((SHGCCell *)_sh_ljs_get_pointer(val))->kindAndSize.kind;
+    bool isCallable =
+        kind >= SHCellKind_Callable_first && kind <= SHCellKind_Callable_last;
+    return (types & SH_TYPEOF_IS_Function) ? isCallable : !isCallable;
+  }
+  return ((types & SH_TYPEOF_IS_Undefined) && _sh_ljs_is_undefined(val)) ||
+      ((types & SH_TYPEOF_IS_Null) && _sh_ljs_is_null(val)) ||
+      ((types & SH_TYPEOF_IS_String) && _sh_ljs_is_string(val)) ||
+      ((types & SH_TYPEOF_IS_Symbol) && _sh_ljs_is_symbol(val)) ||
+      ((types & SH_TYPEOF_IS_Boolean) && _sh_ljs_is_bool(val)) ||
+      ((types & SH_TYPEOF_IS_Number) && _sh_ljs_is_double(val)) ||
+      ((types & SH_TYPEOF_IS_Bigint) && _sh_ljs_is_bigint(val));
+}
 
 SHERMES_EXPORT SHLegacyValue _sh_ljs_new_object(SHRuntime *shr);
 SHERMES_EXPORT SHLegacyValue _sh_ljs_new_object_with_parent(
