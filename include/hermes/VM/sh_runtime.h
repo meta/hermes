@@ -103,6 +103,7 @@ typedef struct SHRuntime {
 #ifdef HERMESVM_COMPRESSED_POINTERS
 
 /// A struct representing a compressed pointer in C code.
+#define SH_COMPRESSED_POINTER_SIZE 4
 typedef struct SHCompressedPointer {
   uint32_t raw;
 } SHCompressedPointer;
@@ -206,6 +207,7 @@ static inline void *_sh_cp_decode_non_null(
 
 /// A struct that wraps an ordinary pointer, to be used in place of a compressed
 /// pointer when compressed pointers are disabled.
+#define SH_COMPRESSED_POINTER_SIZE HERMESVM_SIZEOF_VOID_P
 typedef struct SHCompressedPointer {
   uintptr_t raw;
 } SHCompressedPointer;

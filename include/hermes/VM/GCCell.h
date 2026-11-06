@@ -51,6 +51,17 @@ class KindAndSize {
       sizeof(CellKind) * 8 <= kNumKindBits,
       "CellKind size wider than available kind bits.");
 
+  static_assert(
+      sizeof(SHKindAndSize) == sizeof(RawType),
+      "type is the wrong size");
+  static_assert(SH_KINDANDSIZE_NUM_BITS == kNumBits, "num bits is incorrect");
+  static_assert(
+      SH_KINDANDSIZE_NUM_KIND_BITS == kNumKindBits,
+      "num kind bits is incorrect");
+  static_assert(
+      SH_KINDANDSIZE_NUM_SIZE_BITS == kNumSizeBits,
+      "num size bits is incorrect");
+
   /// The size of the cell. Due to heap alignment, we are guaranteed that the
   /// least significant bit will always be zero, so it can be used for the
   /// mark bit. In order for that to work, this has to come first.
@@ -279,6 +290,21 @@ class GCCell {
 };
 
 static_assert(sizeof(GCCell) == sizeof(SHGCCell));
+static_assert(sizeof(KindAndSize) == sizeof(SHKindAndSize));
+// SHCellKind must match CellKind, since inline native code compares kinds.
+#define CELL_KIND(name)                                    \
+  static_assert(                                           \
+      (int)CellKind::name##Kind == (int)SHCellKind_##name, \
+      "SHCellKind_" #name " does not match CellKind");
+#define SHARED_CELL_KIND(name) CELL_KIND(name)
+#define CELL_RANGE(rangeName, first, last)           \
+  static_assert(                                     \
+      (int)CellKind::rangeName##Kind_first ==        \
+              (int)SHCellKind_##rangeName##_first && \
+          (int)CellKind::rangeName##Kind_last ==     \
+              (int)SHCellKind_##rangeName##_last,    \
+      "SHCellKind range " #rangeName " does not match CellKind");
+#include "hermes/VM/CellKinds.def"
 /// We should be able to assume that any allocation in a FixedSizeHeapSegment
 /// has its size stored inline.
 static_assert(GCCell::maxNormalSize() >= FixedSizeHeapSegment::maxSize());

@@ -12,6 +12,8 @@
 #include "hermes/VM/sh_legacy_value.h"
 #include "hermes/VM/sh_runtime.h"
 
+#include <stddef.h>
+
 #ifdef HERMESVM_COMPRESSED_POINTERS
 typedef uint32_t SHCompressedPointerRawType;
 #else
@@ -46,9 +48,28 @@ typedef struct SHPrivateNameCacheEntry {
   uint32_t slot;
 } SHPrivateNameCacheEntry;
 
+// Constants for the SHKindAndSize struct.
+#define SH_KINDANDSIZE_NUM_KIND_BITS 8
+
+// Conditioned on the size of SHCompressedPointerRawType.
+#if SH_COMPRESSED_POINTER_SIZE == 4
+#define SH_KINDANDSIZE_NUM_BITS 32
+#define SH_KINDANDSIZE_NUM_SIZE_BITS 24
+#else
+#define SH_KINDANDSIZE_NUM_BITS 64
+#define SH_KINDANDSIZE_NUM_SIZE_BITS 32
+#endif
+
+/// Struct mirroring the layout of KindAndSize class.
+/// This mirrors the single raw field layout from KindAndSize.
+typedef struct SHKindAndSize {
+  SHCompressedPointerRawType size : SH_KINDANDSIZE_NUM_SIZE_BITS;
+  SHCompressedPointerRawType kind : SH_KINDANDSIZE_NUM_KIND_BITS;
+} SHKindAndSize;
+
 /// Struct mirroring the layout of GCCell.
 typedef struct SHGCCell {
-  SHCompressedPointerRawType kindAndSize;
+  SHKindAndSize kindAndSize;
 #ifndef NDEBUG
   uint16_t magic;
   uint32_t debugAllocationId;
@@ -159,5 +180,14 @@ typedef struct SHHiddenClass {
   SHTransitionMap transitionMap;
   void *parentTransitionMap;
 } SHHiddenClass;
+
+enum SHCellKind {
+#define CELL_KIND(name) SHCellKind_##name,
+#define SHARED_CELL_KIND(name) SHCellKind_##name,
+#define CELL_RANGE(rangeName, first, last)             \
+  SHCellKind_##rangeName##_first = SHCellKind_##first, \
+  SHCellKind_##rangeName##_last = SHCellKind_##last,
+#include "hermes/VM/CellKinds.def"
+};
 
 #endif
