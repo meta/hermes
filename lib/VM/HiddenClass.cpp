@@ -366,22 +366,38 @@ llvh::Optional<NamedPropertyDescriptor> HiddenClass::findPropertyNoAlloc(
     HiddenClass *self,
     PointerBase &base,
     SymbolID name) {
+  // The flags of the newest flags transition of \p name seen so far. A flags
+  // transition keeps the property's slot, so the slot still has to come from
+  // the class that added the property, or from a map.
+  llvh::Optional<PropertyFlags> newestFlags;
   for (HiddenClass *curr = self; curr; curr = curr->parent_.get(base)) {
     if (curr->propertyMap_) {
       // If a property map exists, just search this hidden class
       auto found =
           DictPropertyMap::find(curr->propertyMap_.getNonNull(base), name);
       if (found) {
-        return DictPropertyMap::getDescriptorPair(
-                   curr->propertyMap_.getNonNull(base), *found)
-            ->second;
+        NamedPropertyDescriptor desc =
+            DictPropertyMap::getDescriptorPair(
+                curr->propertyMap_.getNonNull(base), *found)
+                ->second;
+        if (newestFlags)
+          desc.flags = *newestFlags;
+        return desc;
       }
     }
     // Else, no property map exists. Check the current hidden class before
     // moving up.
     if (curr->symbolID_ == name) {
+      if (curr->propertyFlags_.flagsTransition) {
+        if (!newestFlags) {
+          newestFlags = curr->propertyFlags_;
+          newestFlags->flagsTransition = 0;
+        }
+        continue;
+      }
       return NamedPropertyDescriptor{
-          curr->propertyFlags_, curr->numProperties_ - 1};
+          newestFlags ? *newestFlags : curr->propertyFlags_,
+          curr->numProperties_ - 1};
     }
   }
   // Reached the root hidden class without finding a property map or the

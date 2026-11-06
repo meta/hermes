@@ -336,6 +336,88 @@ TEST_F(HiddenClassTest, AccessorsTest) {
   }
 }
 
+/// findPropertyNoAlloc() on classes without a property map, below a flags
+/// transition of the property looked up: the slot must come from the class
+/// that added the property, the flags from the newest flags transition.
+TEST_F(HiddenClassTest, FindPropertyNoAllocFlagsTransitionTest) {
+  GCScope gcScope{
+      runtime, "HiddenClassTest.FindPropertyNoAllocFlagsTransitionTest", 48};
+
+  auto getSym = [this](const char16_t *name) {
+    return *runtime.getIdentifierTable().getSymbolHandle(
+        runtime, createUTF16Ref(name));
+  };
+  auto aHnd = getSym(u"a");
+  auto bHnd = getSym(u"b");
+  auto cHnd = getSym(u"c");
+  auto dHnd = getSym(u"d");
+  auto eHnd = getSym(u"e");
+
+  MutableHandle<HiddenClass> clazz{runtime};
+  clazz = HiddenClass::createRoot(
+      runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{});
+  auto add = [this, &clazz](Handle<SymbolID> name) {
+    auto addRes = HiddenClass::addProperty(
+        clazz, runtime, *name, PropertyFlags::defaultNewNamedPropertyFlags());
+    ASSERT_RETURNED(addRes);
+    clazz = *addRes->first;
+  };
+  // Make the existing property \p name non-writable, then non-enumerable:
+  // two flags transitions.
+  auto update = [this, &clazz](Handle<SymbolID> name) {
+    NamedPropertyDescriptor desc;
+    auto found = HiddenClass::findProperty(clazz, runtime, *name, desc);
+    ASSERT_TRUE(found);
+    desc.flags.writable = false;
+    clazz = *HiddenClass::updateProperty(clazz, runtime, *found, desc.flags);
+    found = HiddenClass::findProperty(clazz, runtime, *name, desc);
+    ASSERT_TRUE(found);
+    desc.flags.enumerable = false;
+    clazz = *HiddenClass::updateProperty(clazz, runtime, *found, desc.flags);
+  };
+
+  // {a, b, c}, then b's flags change twice. b keeps slot 1, while the
+  // transition classes for b have three properties.
+  add(aHnd);
+  add(bHnd);
+  add(cHnd);
+  Handle<HiddenClass> cClass = runtime.makeHandle(*clazz);
+  update(bHnd);
+  Handle<HiddenClass> flagsClass = runtime.makeHandle(*clazz);
+  // Adding d moves the map from flagsClass to the new class, and adding e
+  // moves it on again, so neither flagsClass nor dClass has a map.
+  add(dHnd);
+  Handle<HiddenClass> dClass = runtime.makeHandle(*clazz);
+  add(eHnd);
+
+  for (Handle<HiddenClass> start : {flagsClass, dClass}) {
+    auto desc = HiddenClass::findPropertyNoAlloc(*start, runtime, *bHnd);
+    ASSERT_TRUE(desc.hasValue());
+    EXPECT_EQ(1u, desc->slot);
+    EXPECT_FALSE(desc->flags.writable);
+    EXPECT_FALSE(desc->flags.enumerable);
+    EXPECT_FALSE(desc->flags.flagsTransition);
+  }
+  // findProperty() rebuilds a map on cClass, which predates the flags
+  // transitions. The walk from flagsClass then takes b's slot from that map,
+  // and the newest flags must still replace the map's stale ones.
+  {
+    NamedPropertyDescriptor cDesc;
+    ASSERT_TRUE(HiddenClass::findProperty(cClass, runtime, *bHnd, cDesc));
+    ASSERT_TRUE(cDesc.flags.writable);
+    auto desc = HiddenClass::findPropertyNoAlloc(*flagsClass, runtime, *bHnd);
+    ASSERT_TRUE(desc.hasValue());
+    EXPECT_EQ(1u, desc->slot);
+    EXPECT_FALSE(desc->flags.writable);
+    EXPECT_FALSE(desc->flags.enumerable);
+    EXPECT_FALSE(desc->flags.flagsTransition);
+  }
+  // A property added below the flags transitions is unaffected.
+  auto dDesc = HiddenClass::findPropertyNoAlloc(*dClass, runtime, *dHnd);
+  ASSERT_TRUE(dDesc.hasValue());
+  EXPECT_EQ(3u, dDesc->slot);
+}
+
 TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
   GCScope gcScope{
       runtime, "HiddenClassTest.UpdatePropertyFlagsWithoutTransitionsTest", 48};
