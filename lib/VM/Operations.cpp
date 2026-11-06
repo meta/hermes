@@ -3469,6 +3469,9 @@ extern "C" bool _sh_ljs_equal_rjs(
 }
 
 extern "C" bool _sh_ljs_strict_equal(SHLegacyValue a, SHLegacyValue b) {
+  static_assert(
+      HVTag_BigInt == HVTag_Str + 1,
+      "_sh_ljs_strict_equal_inline range-checks Str..BigInt");
   return strictEqualityTest(
       HermesValue::fromRaw(a.raw), HermesValue::fromRaw(b.raw));
 }

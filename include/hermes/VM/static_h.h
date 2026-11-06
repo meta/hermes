@@ -1057,6 +1057,12 @@ static inline bool _sh_ljs_equal_rjs_inline(
   if (a->raw == b->raw) {
     return !_sh_ljs_is_double(*a);
   }
+  // Fast path: comparison with null or undefined, usually a constant.
+  // Null and undefined share a tag.
+  if (_sh_ljs_get_tag(*b) == HVTag_UndefinedNull)
+    return _sh_ljs_get_tag(*a) == HVTag_UndefinedNull;
+  if (_sh_ljs_get_tag(*a) == HVTag_UndefinedNull)
+    return false;
 
   // Otherwise: go to out-of-line slow path.
   return _sh_ljs_equal_rjs(shr, a, b);
@@ -1066,9 +1072,8 @@ SHERMES_EXPORT bool _sh_ljs_strict_equal(SHLegacyValue a, SHLegacyValue b);
 
 /// Inline fast path for strict equality (===).
 /// Handles the common cases inline: same raw bits (identity check for objects,
-/// bools, null, undefined, symbols) and both-number comparison. Falls back to
-/// out-of-line for string/bigint deep compare, different types, and mixed NaN
-/// patterns.
+/// bools, null, undefined, symbols), both-number comparison, and different
+/// types. Falls back to out-of-line only for string/bigint deep compare.
 static inline bool _sh_ljs_strict_equal_inline(
     SHLegacyValue a,
     SHLegacyValue b) {
@@ -1082,7 +1087,13 @@ static inline bool _sh_ljs_strict_equal_inline(
   // Handles +0 === -0 (true) and different numeric values.
   if (_sh_ljs_are_both_non_nan_numbers(a, b))
     return a.f64 == b.f64;
-  // Out-of-line: string/bigint deep compare, different types, mixed NaN.
+  // Only two strings or two bigints with different bits can still be equal.
+  // Str and BigInt are adjacent tags (asserted in _sh_ljs_strict_equal), so
+  // one range check covers both.
+  enum HVTag tag = _sh_ljs_get_tag(a);
+  if (tag != _sh_ljs_get_tag(b) || (unsigned)(tag - HVTag_Str) > 1)
+    return false;
+  // Out-of-line: string/bigint deep compare.
   return _sh_ljs_strict_equal(a, b);
 }
 
