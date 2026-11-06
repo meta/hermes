@@ -12,7 +12,7 @@ reproducing one) would run, and what each run actually proves. Written
 
 | # | Config | Build dir | Notes |
 |---|---|---|---|
-| 1 | arm64, qemu-user (HV64 only) | `cmake-build-arm64` | Cross-compiled, run under `qemu-aarch64-static`; the only way to execute the JIT without arm64 hardware. See `aarch64/README.md`. No HV32/BOXED arm64 build exists in this matrix. |
+| 1 | arm64, qemu-user | `cmake-build-arm64` (HV64), `cmake-build-arm64-hv32`, `cmake-build-arm64-boxed` | Cross-compiled, run under `qemu-aarch64-static`; the only way to execute the JIT without arm64 hardware. See `aarch64/README.md`. All three heap-value modes are built and gated (rows 1/1a/1b below); only HV64 has a stored G3 dump baseline. |
 | 2 | x86-64, HV64, ASan+Debug | `cmake-build-x86jit` | The default/reference x86-64 dev build. |
 | 3 | x86-64, HV32 (`HEAP_HV_PREFER32`), ASan+Debug | `cmake-build-x86jit-hv32` | Compressed pointers + boxed doubles + contiguous heap. |
 | 4 | x86-64, BOXED (`HEAP_HV_BOXED`), ASan+Debug | `cmake-build-x86jit-boxed` | Boxed doubles only, no pointer compression. |
@@ -98,6 +98,34 @@ the per-config table below can just list which ones apply.
   "Release-build validation" below. The other two unsupported files are
   the same in every x86-64 config: the arm64 `-emitted` pin tests,
   which carry `REQUIRES: jit-arch-arm64`.
+
+  (The 78/3 and 54/27 figures above are the pre-arm64-parity-port
+  baseline, quoted for the historical membership reasoning in this
+  paragraph; see the 2026-09-18 update immediately below for the
+  current counts on configs 1/1a/1b/2. Configs 3-4-5 were not
+  re-measured this port and still show the pre-port figures where
+  referenced elsewhere in this document.)
+
+  **2026-09-18 update (arm64 JIT parity port).** The
+  ById-recompile, PutByVal, GetByVal, and GetByIndex policy/semantics
+  corpus — 39 files, previously gated to x86-64 only by directory —
+  relocated from `test/jit/x86-64/` into the arch-neutral `test/jit/`
+  and now runs identically on every JIT architecture (both backends
+  emit the same tier COMMENT strings and shared-driver banners these
+  tests pin, so arm64 exercises the same policy, not a stand-in). G1
+  counts at the end of the port, derived from the test inventory (137
+  files: 107 in `test/jit/`, 30 in `test/jit/x86-64/`): x86-64 HV64
+  ASan+Debug 130 pass / 7 unsupported (the six `-emitted-arm64` pin
+  files plus `large_literal_obj.js` under `!slow_debug`); arm64,
+  identically on all three trees (`cmake-build-arm64`,
+  `cmake-build-arm64-hv32`, `cmake-build-arm64-boxed`), 107 pass / 30
+  unsupported (the x86-64-only files; `large_literal_obj.js` is skipped
+  too on a tree with `slow_debug`). The arm64 unsupported count dropped
+  from 69 by exactly the 39 relocated files, and the port's runs showed
+  zero failures on any tree. The full jit suite was also re-verified
+  green with `aarch64/qemu-sanity.sh` (9/9) on all three arm64 trees. The x86-64 HV32/BOXED/Release counts
+  elsewhere in this document predate this port and were not
+  re-measured here.
 - **G2 — full `check-hermes`**: the whole lit suite plus unit tests plus
   NAPI, with the JIT compiled in but not forced on (`test/jit` is still
   the only directory that forces it). Confirms the JIT-enabled build
@@ -155,10 +183,10 @@ takes a build directory, so it runs against each of the three arm64 trees.
 
 | Config | G1 | G2 | G3 | G4 | G5 | G6 |
 |---|---|---|---|---|---|---|
-| 1. arm64-qemu HV64 | yes (54/27) | yes (see README) | yes (own baseline) | yes (`qemu-sanity.sh`) | no | n/a (qemu timings are meaningless — see README "Limitations") |
-| 1a. arm64-qemu HV32 | yes (54/27) | not run separately (as for x86-64 HV32) | n/a (only HV64 has a stored baseline) | yes (`qemu-sanity.sh <dir>`) | no | n/a |
-| 1b. arm64-qemu BOXED | yes (54/27) | not run separately | n/a | yes (`qemu-sanity.sh <dir>`) | no | n/a |
-| 2. x86-64 HV64 ASan | yes (78/3) | yes (4333 tests: 4176 pass / 6 xfail / 151 unsupported) | yes (own baseline) | yes | yes (480/497) | n/a (ASan skews timings) |
+| 1. arm64-qemu HV64 | yes (107/30 — see G1 update above) | yes (see README) | yes (own baseline, rerolled 2026-09-18) | yes (`qemu-sanity.sh`, 9/9) | no | n/a (qemu timings are meaningless — see README "Limitations") |
+| 1a. arm64-qemu HV32 | yes (107/30) | not run separately (as for x86-64 HV32) | n/a (only HV64 has a stored baseline) | yes (`qemu-sanity.sh <dir>`, 9/9) | no | n/a |
+| 1b. arm64-qemu BOXED | yes (107/30) | not run separately | n/a | yes (`qemu-sanity.sh <dir>`, 9/9) | no | n/a |
+| 2. x86-64 HV64 ASan | yes (130/7 — see G1 update above) | yes (4411 tests: 4248 pass / 6 xfail / 157 unsupported, 2026-09-18) | yes (own baseline, rerolled 2026-09-18) | yes | yes (480/497 — not re-run this port) | n/a (ASan skews timings) |
 | 3. x86-64 HV32 ASan | yes (78/3) | not run separately (G1 + G4 + G5 are the gate for this config; G2 is HV64's job) | n/a (only HV64 has a stored baseline — the emitted code differs by design across modes, see `doc/JIT.md`) | yes | yes (479/497 — one file crosses the sweep's 10s timeout under this mode's extra decode) | n/a |
 | 4. x86-64 BOXED ASan | yes (78/3) | not run separately | n/a | yes | yes (480/497) | n/a |
 | 5. x86-64 Release | yes (78/3, `getbyid-fast.js` unsupported instead of `large_literal_obj.js`, plus the two arm64 pin tests — see G1 above) | not run (not requested; G1 is the release-specific gate — see below) | not run this task (no release baseline captured; G3's byte-identical-refactor workflow is a dev-loop tool for the ASan tree, not a release CI gate) | yes | not run (no emitter change to re-verify; G4 already covers behavior) | **yes — new this milestone, see below** |
@@ -188,6 +216,16 @@ cmake --build <dir> --target hermes
 utils/jit/jit-diff.sh /tmp/hermes-before <dir>/bin/hermes
 ```
 
+The canonicalization pipeline itself (constant materialization -> a
+`CONST` token, `RO_DATA` contents dropped, wide ASLR-sensitive hex ->
+`ADDR`) lives in one place, `utils/jit/jit-canon.sh`, shared by
+`jit-dump.sh` (piped after the raw `-Xdump-jitcode=3` capture) and by
+`test/jit/recompile-deterministic.js`'s own normalization of its two
+`-Xdump-jitcode=3` runs -- one script, two consumers, so a new
+canonicalization rule (e.g. arm64's `isCheapConst()`-driven
+`mov`/`movk` vs. RO-data-`ldr` split) only needs writing once to keep
+both in sync.
+
 Both arm64 (`cmake-build-arm64/jit-baseline.dump`) and x86-64
 (`cmake-build-x86jit/jit-baseline.dump`) have a captured baseline; both
 are untracked build artifacts, recaptured with `jit-dump.sh -o ...` after
@@ -199,6 +237,38 @@ isn't true of the raw `-Xdump-jitcode` output). No release-tree baseline
 is captured or expected: the workflow is a dev-loop tool for verifying a
 refactor didn't change codegen, which is only useful against the tree
 you're actively editing (the ASan+Debug ones).
+
+`jit-dump.sh`'s default corpus is every `test/jit/*.js`, run untyped or
+`-typed` per each file's own RUN line, with nothing excluded. A file
+whose own RUN lines use `-Xhermes-internal-test-methods` is given that
+flag — seven files today: `getidx-guards.js`, `getval-guards.js`,
+`taval-guards.js`, the three `recompile-*-demote-carried.js`, and
+`recompile-taval-fractional.js`. The three `*-guards.js` call
+`HermesInternal.detachArrayBuffer` and would throw before emitting any
+JIT code without it; the other four only carry the flag on their RUN
+lines, and get it here so their dump sections match what lit runs. The
+choice is made per file, from the file's own
+RUN lines, inside `run_one`, so it covers `-c`/`-t` files exactly as it
+covers the default corpus — naming one of these files explicitly works
+because of that, and did not work before it.
+
+The flag is not handed to the whole corpus, because it is not free:
+registering the extra `HermesInternal` methods shifts every symbol ID
+past them and moves a couple of `Runtime` displacements, so a
+corpus-wide flag would rewrite the immediates in every other file's
+section of the baseline. It leaves the emitted instruction sequences
+themselves alone, which is why the files that do ask for it can simply
+have it.
+
+**2026-09-18 baseline reroll (arm64 JIT parity port).** Both untracked
+baselines were recaptured with the fixed corpus after the arm64 port
+(after rebuilding `cmake-build-host` and then each tree, per the
+stale-host-compilers trap above). arm64's changed throughout, because
+inline tiers replace bare helper calls; x86-64's gained only the
+sections for the seven files that previously aborted the capture, plus
+`test/jit/recompile-getbyid-cold.js`. Both recaptured dumps were
+verified deterministic (a second immediate capture on the same binary
+is byte-identical) before being treated as the new baseline.
 
 `jit-dump.sh` passes `-Xjit-max-recompiles=0` (see `doc/JIT.md`'s
 "Recompilation"), and that flag is load-bearing, not just a guard: the

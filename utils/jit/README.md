@@ -151,6 +151,15 @@ passes `-typed`. That matters more than it sounds: running a typed test
 untyped does not just lose coverage, it fails to compile, so the file
 contributes a syntax error to the dump instead of any JIT code.
 
+`-Xhermes-internal-test-methods` is handed out on the same per-file basis:
+a file whose own `RUN:` lines use it gets it, and nothing else does. The
+files that need it call `HermesInternal.detachArrayBuffer` and would throw
+before emitting any JIT code without it; the files that do not are kept
+away from it because registering those methods shifts every symbol ID past
+them, which would churn the immediates in every other section of the
+baseline. The choice is made in `run_one`, so it covers `-c`/`-t` files
+too.
+
 Override with `-c FILE` (untyped) and `-t FILE` (compiled with `-typed`),
 both repeatable. Supplying either replaces the whole default corpus.
 

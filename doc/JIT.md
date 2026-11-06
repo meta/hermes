@@ -715,12 +715,13 @@ activation keeps running its old body until it returns. No async or
 background compilation: recompiles are synchronous, like today's
 threshold compiles.
 
-Both backends pass each body's version record to its helpers, but
-arm64 stays dormant: its `Emitter` never appends to the cold-site
-lists, so a freshly compiled body's `coldByIdSites` is always zero and
-`considerRecompile`'s gate never lets a recompile fire. The tree builds
-and the jit suite passes there; live recompilation arrives with the
-arm64 port.
+Both backends pass each body's version record to its helpers and both
+report cold sites for BOTH PutById and GetById: PutById when the write
+cache names no class yet, GetById when the fast-path's `numGoodChanges
+== 1` specialization check misses and the read cache names no class
+yet either -- the same condition, the same append (`coldWriteCacheIdxs_`
+/ `coldReadCacheIdxs_`), at the same two call sites on either
+architecture, so `considerRecompile`'s gate fires identically.
 
 **ByVal shape records.** The Records paragraph above named `consumerRecords`
 for future per-site feedback; it now holds a `JitConsumerRecords`, a deque of
@@ -794,10 +795,34 @@ write barrier, and its only heap-encoding-sensitive steps are the
 compressed-pointer decodes it shares with the fast-array tier, so it is
 heap-mode-neutral across HV64, HV32, and BOXED. It is also GC-kind-neutral in
 the other direction: the JSArray tier exists only where
-`HERMES_JIT_INLINE_SAFE_STORE` is nonzero (MallocGC disables it), but the
-typed-array tier needs no write barrier and stays available unconditionally on
-x86-64, which is why `classFlagsFastArrayMask()`/`Value()` moved out of
-RuntimeOffsets.h's Hades-only section.
+`HERMES_JIT_INLINE_SAFE_STORE` is nonzero (MallocGC disables it, on either
+backend -- the macro is driven by `HERMESVM_GCKIND`, not architecture,
+`include/hermes/VM/JIT/Config.h`), but the typed-array tier needs no write
+barrier and so is never wrapped in that gate at all, on x86-64 or on arm64
+(`emitPutByValTypedArrayTier` sits entirely outside the
+`#if HERMES_JIT_INLINE_SAFE_STORE` block that guards the JSArray tier's call
+on both backends) -- which is why `classFlagsFastArrayMask()`/`Value()`
+moved out of RuntimeOffsets.h's Hades-only section.
+
+Both backends implement this tier and accept exactly the same value domain;
+they differ only in the machine idiom each uses to test it. x86-64's integer
+kinds convert with `cvttsd2si` and compare the result against that
+instruction's own integer-indefinite sentinel, which is unsound on arm64
+(`fcvtzs` saturates instead of producing a sentinel), so arm64 uses two
+explicit exits ahead of the truncating convert instead: `fcmp dValue, dValue;
+b.vs helper` (unordered = NaN = every non-number) and `fabs dTmp, dValue;
+fcmp dTmp, d2p63; b.ge helper` (rejects both infinities and every |x| >= 2^63,
+including the -2^63 case that would otherwise be a valid truncation), then
+`fcvtzs xT, dValue`. The key check accepts exactly the same set on both
+backends but does not spend the same number of exits on it: x86-64's
+`emit_double_is_uint32` is followed by `jne` AND `jp`, because `vucomisd`
+reports an unordered compare (a NaN operand, i.e. any non-number key) as
+EQUAL and the parity flag is the only thing that separates the two,
+while arm64's `fcmp` leaves Z clear on unordered, so the same rejection
+folds into a single `b.ne`. Neither needs a separate 0xFFFFFFFF
+exclusion: the bounds check already rejects it. And the typed-array base offset (`offset_`) is
+computed into a real allocated temp on arm64, never into the scratch register
+`emit_cmp_imm32`/the mask sequences use, to keep it out of a long live range.
 
 **Slow-path demotion.** A site's demotion state lives entirely in its helper
 slot: while it points at a recording helper the site is still being watched;
@@ -852,13 +877,16 @@ recompiles cover the common case of one improvement per consumer family
 (monotone emission, poison, demotion -- supersedes the first document's
 sticky-flag instrumentation and drop-tier rules where they disagree).
 
-Tests: `test/jit/x86-64/recompile-byid-warm.js` (headline: the tier is
+Tests (arch-neutral, `test/jit/`, run on both backends since the arm64
+port): `recompile-byid-warm.js` (headline: the tier is
 absent at version 1, present at version 2, and absent entirely under
 `-Xjit-max-recompiles=0`), `recompile-cold-sites.js`,
 `recompile-mid-recursion.js` (a retired body still on the native stack
 during its own replacement), `recompile-deterministic.js` (two runs
 of the headline test produce identical dumps, modulo ASLR-sensitive
-hex), `recompile-staleness-budget.js` (a two-phase pin: a retired
+hex and, on arm64, `isCheapConst()`'s value-dependent choice between
+`mov`/`movk` and an RO-data `ldr` -- `utils/jit/jit-canon.sh` handles
+both), `recompile-staleness-budget.js` (a two-phase pin: a retired
 body's declines during a deep unwind must not spend the current
 version's budget, and the current version must still trigger
 afterward, proving the gate suppresses the stale declines specifically
@@ -932,18 +960,21 @@ second kind predicate:
   uses, verified by `recompile-getval-duo.js`.
 
 Tests (the get twins of the put set, plus the semantics files new to this
-feature): `test/jit/x86-64/recompile-getval-{trigger,mono-jsarray,duo,
+feature, all arch-neutral and in `test/jit/` since the arm64 port):
+`recompile-getval-{trigger,mono-jsarray,duo,
 poisoned-int32-first,poisoned-float64-first,demote,demote-delay,
 demote-carried,demote-retired,demote-budget0}.js`,
-`getbyval-inline-emitted.js` (pins the indirect recording call, the JSArray
-tier's empty-check decline, and a specialized TA tier's load+convert),
-`getval-conversions-emitted.js` (the dumped instructions for each supported
-kind), and the arch-neutral `test/jit/getval-conversions.js` (bit-pattern
-round-trips per kind, including the NaN-canonicalization pin), `getval-guards.js`
-(hole/prototype/accessor semantics, out-of-bounds and detached-buffer
-`undefined` reads, non-uint32 keys, Arguments decline) and `getbyval-inline.js`
--- all diffed against the interpreter, and exercised on arm64's helper path
-too.
+`test/jit/x86-64/getbyval-inline-emitted.js` (pins the indirect recording
+call, the JSArray tier's empty-check decline, and a specialized TA tier's
+load+convert; `getbyval-inline-emitted-arm64.js` is its arm64 counterpart),
+`test/jit/x86-64/getval-conversions-emitted.js` (the dumped instructions for
+each supported kind; `getval-conversions-emitted-arm64.js` is its arm64
+counterpart), and the arch-neutral `test/jit/getval-conversions.js`
+(bit-pattern round-trips per kind, including the NaN-canonicalization pin),
+`getval-guards.js` (hole/prototype/accessor semantics, out-of-bounds and
+detached-buffer `undefined` reads, non-uint32 keys, Arguments decline) and
+`getbyval-inline.js` -- all diffed against the interpreter, and exercised
+identically on both backends' inline tiers.
 
 **GetByIndex (the constant-key GetByVal twin).** `GetByIndex Reg8, Reg8, UInt8`
 is the compiler's lowering of a literal uint8 property key (`a[0]`, tuple/vec
@@ -1028,14 +1059,18 @@ storage-state cases a constant key does not eliminate -- a nonzero
 `beginIndex_` array hit, a `beginIndex_ > K` decline, an empty array -- and
 the typed-array equality-boundary matrix: `K == length`, `K > length`,
 `K == length - 1`, `K == 0` on a zero-length view, and `K == 255` on views of
-length 255 and 256); the slim x86-64-only policy set
-`test/jit/x86-64/recompile-getidx-{trigger,duo,demote,demote-carried,
+length 255 and 256); the slim, now arch-neutral, policy set
+`test/jit/recompile-getidx-{trigger,duo,demote,demote-carried,
 budget0}.js` (the demotion machinery itself is shared and already proven by
 the six GetByVal policy files, so these pin only the per-opcode wiring and the
-fourth helper identity); and `test/jit/x86-64/getbyindex-inline-emitted.js`
+fourth helper identity, and run identically on both backends since the arm64
+port); and `test/jit/x86-64/getbyindex-inline-emitted.js`
 (the JSArray begin-relative compare, the indirect recording call, the
 bounds-fail undefined path, and version-2 emission pins for all nine
-typed-array kinds through the ByIndex address form). Benchmark:
+typed-array kinds through the ByIndex address form; `getbyindex-inline-emitted-arm64.js`
+is its arm64 counterpart, with no `handle_san` gate -- GetByIndex has no
+encode step at all, so nothing it emits references
+`HERMESVM_SANITIZE_HANDLES`). Benchmark:
 `benchmarks/jit-benches/typed-array-index.js`.
 
 ### Arithmetic, comparisons and NaN handling
@@ -1299,6 +1334,27 @@ bring-up milestones are done:
     of the two `-emitted` tests, `REQUIRES: jit-arch-arm64` and so
     unsupported on the x86-64 trees (and `UNSUPPORTED: handle_san` for
     the same reason as the others).
+
+  The 2026-09-18 arm64 JIT parity port (GetByVal/GetByIndex tiers) added
+  three more arm64-only pin files, same `REQUIRES: jit-arch-arm64`
+  membership and so unsupported on x86-64. Unlike the PutById/PutByVal
+  pairs above, NONE of the three carries a `handle_san` gate -- not
+  `getbyval-inline-emitted-arm64.js`, not
+  `getbyindex-inline-emitted-arm64.js`, and not
+  `getval-conversions-emitted-arm64.js`. All three pin LOADS, and a load
+  has no encode step to decline in the first place: the JSArray tiers
+  only ever DECODE an already-stored `SmallHermesValue`, and the
+  typed-array tiers read raw machine values out of a malloc'd buffer and
+  write a plain number `HermesValue`. The gate on the PutById/PutByVal
+  files exists because `HERMESVM_SANITIZE_HANDLES` changes the code
+  `emit_shv_encode_or_slow()` emits -- that function, in each backend's
+  `JitEmitter-internal.cpp`, is the only place in either emitter that
+  mentions the macro at all, and no load tier calls it -- so nothing any
+  of the three load files pins can move under Handle-San, and gating
+  them would only hide the tiers from that configuration's suite. (The
+  x86-64 sibling `test/jit/x86-64/getval-conversions-emitted.js` does
+  still carry the gate; that is its own file's business, not a claim
+  about the load tiers.)
 - The `aarch64/jit-stress.js` differential matrix -- interpreter vs.
   `-Xjit=force`, with and without `-Xjit-emit-type-asserts`, at both
   `-O` and `-O0` -- is byte-identical on every config exercised,

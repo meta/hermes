@@ -355,3 +355,5 @@ dense-array loop is unchanged.
 Tests: test/jit/x86-64/recompile-taval-*.js, taval-conversions.js,
 taval-guards.js. Verified on all three heap modes plus MallocGC;
 arm64 remains dormant.
+
+Ported to arm64 2026-09-18: see 2026-09-18-arm64-jit-parity-design.md.

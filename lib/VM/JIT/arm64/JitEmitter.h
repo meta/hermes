@@ -480,16 +480,15 @@ class Emitter {
   /// The IP of the instruction being emitted.
   const inst::Inst *emittingIP{nullptr};
   /// Write-cache indices of PutById sites whose specialization was
-  /// skipped in this compile because the cache had no class yet. Moved
-  /// into the candidate JitVersionData::coldWriteCacheIdxs by the
-  /// compile driver. The arm64 emitter does not yet report cold sites,
-  /// so this stays empty and the recompilation mechanism is dormant on
-  /// arm64; its cold-site reporting arrives with the arm64 port.
+  /// skipped in this compile because the cache had no class yet. Fresh
+  /// per compile (the Emitter is per-compile); moved into the candidate
+  /// JitVersionData::coldWriteCacheIdxs by the compile driver, which
+  /// uses them to require that one of these specific sites -- not some
+  /// unrelated cache -- has warmed before spending recompile budget.
   llvh::SmallVector<uint8_t, 4> coldWriteCacheIdxs_;
   /// Read-cache indices of GetById sites whose specialization was
   /// skipped in this compile because the cache had no class yet. Same
-  /// role as coldWriteCacheIdxs_, for GetById sites; also never appended
-  /// to on arm64 today.
+  /// role as coldWriteCacheIdxs_, for GetById sites.
   llvh::SmallVector<uint8_t, 4> coldReadCacheIdxs_;
 
   /// \return the candidate version record's ByVal site entry for

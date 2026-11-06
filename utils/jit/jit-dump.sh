@@ -94,6 +94,10 @@ fi
 # A JIT test is run typed iff its own lit RUN line passes -typed. Running a
 # typed test untyped does not merely reduce coverage: it fails to compile, and
 # the corpus then contributes a syntax error instead of any JIT code.
+#
+# Nothing is excluded here. A file that needs -Xhermes-internal-test-methods
+# gets it, from run_one, on exactly the same per-file basis -- see the comment
+# there.
 if [ ${#UNTYPED[@]} -eq 0 ] && [ ${#TYPED[@]} -eq 0 ]; then
   while IFS= read -r f; do
     if grep -qE '^// *RUN:.*[[:space:]]-typed([[:space:]]|$)' "$f"; then
@@ -134,6 +138,25 @@ canonicalize() {
 run_one() {
   local label="$1" file="$2"; shift 2
   local before after
+  # A file whose own RUN lines use -Xhermes-internal-test-methods needs it
+  # here too, or it throws before emitting any JIT code and the run is a hard
+  # failure below. Seven files today: the three *-guards.js call
+  # HermesInternal.detachArrayBuffer, which the flag gates; the three
+  # recompile-*-demote-carried.js and recompile-taval-fractional.js only
+  # carry it on their RUN lines, and get it so their sections match lit.
+  #
+  # Decided per file, from the file's own RUN lines, and therefore applied to
+  # the default corpus and to anything named with -c/-t alike. Per file and
+  # not globally because the flag is not free: registering the extra
+  # HermesInternal methods shifts every symbol ID past them and moves a
+  # couple of Runtime displacements, so a corpus-wide flag would rewrite the
+  # immediates in every other file's section of the baseline for the sake of
+  # these few. It leaves the emitted instruction sequences themselves alone,
+  # which is why the files that do ask for it can simply have it.
+  local -a extra=()
+  if grep -qE '^// *RUN:.*-Xhermes-internal-test-methods' "$file"; then
+    extra+=(-Xhermes-internal-test-methods)
+  fi
   # Snapshot the whole pipeline status: hermes failing and canonicalization
   # failing both yield a dump that is wrong but looks plausible.
   local -a pstatus
@@ -141,7 +164,8 @@ run_one() {
   before=$(wc -l < "$TMP")
   # Recompilation would put multiple bodies per function in the dump;
   # baselines are defined as first-compile output.
-  "$HERMES" "$@" -Xjit=force -Xjit-threshold=1 -Xjit-max-recompiles=0 \
+  "$HERMES" "$@" ${extra[@]+"${extra[@]}"} \
+    -Xjit=force -Xjit-threshold=1 -Xjit-max-recompiles=0 \
     -Xdump-jitcode=3 "$file" 2>&1 \
     | canonicalize >> "$TMP"
   pstatus=("${PIPESTATUS[@]}")

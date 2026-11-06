@@ -424,3 +424,5 @@ baseline helper; fixed per-call kernel overhead compressing a
 3-term dot product's ratio) is the mechanism. No follow-up is
 filed: the paths past this ceiling are the same optimizing-tier
 capabilities already considered and rejected for ByVal.
+
+Ported to arm64 2026-09-18: see 2026-09-18-arm64-jit-parity-design.md.

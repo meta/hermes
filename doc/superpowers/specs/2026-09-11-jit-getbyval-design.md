@@ -388,3 +388,5 @@ practical paths are filed as:
 - dz 01a0900d-2318 — the pre-existing MallocGC ById-timing
   divergence discovered by the new MallocGC jit-suite gate
   (9 tests to un-gate once fixed)
+
+Ported to arm64 2026-09-18: see 2026-09-18-arm64-jit-parity-design.md.

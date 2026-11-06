@@ -364,3 +364,5 @@ Every individual run (not just the averages) is recorded in
 dz 01a083c3 (the strategy issue both invariants trace back to) carries
 these numbers and stays open as the strategy home for the HC-keyed
 per-site cache follow-up.
+
+Ported to arm64 2026-09-18: see 2026-09-18-arm64-jit-parity-design.md.
