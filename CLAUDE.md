@@ -305,6 +305,11 @@ Community contributions go in `extensions/contrib/`. These are:
 
 See `API/hermes/extensions/contrib/README.md` for contributor guidelines.
 
+## Specs and Plans
+
+Before writing or reviewing a design spec or implementation plan, read
+`DESIGN-PRINCIPLES.md` and apply it.
+
 ## Issue Tracking
 
 Bugs and follow-ups that outlive a session live in `dz/`, a
