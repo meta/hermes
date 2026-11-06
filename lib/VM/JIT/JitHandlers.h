@@ -224,6 +224,19 @@ SHLegacyValue _jit_get_by_val(
     SHJitVersionData *versionData,
     uint32_t siteId);
 
+/// Slow path of GetByIndex, and the recording site for the ByIndex load
+/// tier's declines: records the observed source shape into
+/// \p versionData's entry for \p siteId, counts the decline (possibly
+/// triggering a recompile), then forwards to the plain SH helper and
+/// returns its value.
+/// \param siteId the GetByIndex instruction's bytecode offset.
+SHLegacyValue _jit_get_by_index(
+    SHRuntime *shr,
+    SHLegacyValue *source,
+    uint32_t key,
+    SHJitVersionData *versionData,
+    uint32_t siteId);
+
 /// Assumes that table  at index \p tableIndex is an initialized string switch
 /// runtime table. Pass the runtimeModule+index in order to avoid relying on
 /// potentially reallocating storage in RuntimeModule.

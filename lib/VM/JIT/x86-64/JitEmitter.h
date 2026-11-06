@@ -1907,6 +1907,169 @@ class Emitter {
       const asmjit::Label &kindMissLab,
       const asmjit::Label &helperLab);
 
+  /// Emit the per-kind element access of an inline typed-array load: the
+  /// sized, scaled load of one element of \p kind, its widening to a
+  /// double, the NaN canonicalization the two float kinds need, and the
+  /// encode of the result as a number HermesValue in \p res. Every path
+  /// ends in a jump to \p doneLab, so nothing falls out of this.
+  ///
+  /// \p elemBase is the address of element zero: a base register, an
+  /// optional index register, and a displacement. An index register, if
+  /// present, holds an ELEMENT index and is scaled here by \p kind's
+  /// element size -- a caller whose index is a constant folds it into the
+  /// displacement and supplies no index register instead.
+  ///
+  /// This is the tail shared by the typed-array load tiers; everything
+  /// before it -- the guards, the bounds check, and the materialization of
+  /// \p elemBase -- belongs to the individual tier, as does the
+  /// `undefined` block \p doneLab's binding follows.
+  ///
+  /// Allocates nothing: \p res, \p temp1 and \p valTmp are all chosen by
+  /// the tier's caller, which must have finished its register-allocator
+  /// bookkeeping before any of the chain was emitted.
+  void emitTypedArrayElementLoad(
+      CellKind kind,
+      const asmjit::x86::Mem &elemBase,
+      const x86::Gp &res,
+      const x86::Gp &temp1,
+      const x86::Xmm &valTmp,
+      const asmjit::Label &doneLab);
+
+  /// The register assignment the inline GetByIndex tiers run on -- the
+  /// GetByValRegs of the constant-key opcode. It is made ONCE, by
+  /// getByIndexImpl(), and handed to every tier, for the same two reasons
+  /// GetByValRegs exists: the tiers must agree on which register the
+  /// result lands in, and the source is loaded once for the whole chain.
+  /// There is no \c key/\c keyTmp pair: the key is an emit-time uint8
+  /// constant, never a frame value, so there is nothing to load or
+  /// convert. The typed-array tier reuses \c loc/\c temp1/\c res exactly
+  /// as GetByValRegs's typed-array tier does, plus its own \c valTmp; it
+  /// has no use for \c idx at all, since the constant element index is
+  /// folded into the element access's displacement.
+  ///
+  /// Every field is a temp the caller has ALREADY released back to the
+  /// allocator (see getByIndexImpl()), so a tier may clobber any of them
+  /// freely -- except that \c source must survive a tier that declines,
+  /// because the next tier in the chain reads it, and \c res must be
+  /// written LAST, since it may alias \c loc or \c idx.
+  struct GetByIndexRegs {
+    /// The source operand, as a raw HermesValue.
+    x86::Gp source;
+    /// Scratch: the object pointer, then the storage, then the element
+    /// address.
+    x86::Gp loc;
+    /// Scratch: the constant key K, then K's storage-relative index
+    /// (K - beginIndex_), zero-extended so it is directly usable as a
+    /// scaled 64-bit index.
+    x86::Gp idx;
+    /// General scratch.
+    x86::Gp temp1;
+    /// Scratch holding the typed-array element as a double. Invalid unless
+    /// a typed-array tier is emitted at this site.
+    x86::Xmm valTmp;
+    /// Where the result HermesValue must land, on every path.
+    x86::Gp res;
+  };
+
+  /// Emit the GetByIndex inline fast array load: the constant-key twin of
+  /// emitGetByValFastArrayTier(), reusing its object/kind guard and its
+  /// empty-check/unbox tail verbatim but replacing the key-conversion
+  /// block with nothing (K is an emit-time constant) and its range test
+  /// with the constant-K begin-relative form. Falling through means the
+  /// load is done and \c regs.res holds it; every guard that fails jumps
+  /// to \p helperLab, whose helper call resolves the read exactly (the
+  /// prototype chain may carry the answer).
+  ///
+  /// Unconditional, for the same reason as emitGetByValFastArrayTier(): a
+  /// load takes no write barrier, so this needs no
+  /// HERMES_JIT_INLINE_SAFE_STORE gate and is emitted at every GetByIndex
+  /// site, in every version, under every GC/heap-value mode.
+  ///
+  /// The guards mirror ArrayImpl::at() and tryFastGetComputedNoAlloc()'s
+  /// JSArray branch, exactly as emitGetByValFastArrayTier()'s doc comment
+  /// describes, with one storage-layout correction the constant key does
+  /// NOT remove: K being constant does not make the storage offset
+  /// constant, because the stored fields are \c beginIndex_ and
+  /// \c elemCount_ (JSArray.h) and a first indexed write can set
+  /// \c beginIndex_ to any index (JSArray.cpp). The range test is
+  /// therefore still `K - beginIndex_ < elemCount_` unsigned -- one
+  /// comparison that covers both `K < beginIndex_` (via unsigned wrap) and
+  /// `K >= beginIndex_ + elemCount_` -- emitted as the executable form
+  /// asmjit has no `sub(Imm, Gp)` for: `mov idx32, Imm(K)`,
+  /// `sub idx32, dword ptr [beginIndex_]`,
+  /// `cmp idx32, dword ptr [elemCount_]`, `jae helperLab`. Out of range is
+  /// a DECLINE, not `undefined`, and so is a hole (an `empty` slot),
+  /// exactly as on the ByVal side.
+  ///
+  /// \param sourceKnownObject true when an earlier tier at this site -- a
+  ///   typed-array tier, at a site that earned one -- has already proved
+  ///   the source an object, in which case the object check is skipped.
+  ///
+  /// On entry the source must already be synced to the frame, because
+  /// \p helperLab reads it from there, and it must be live in
+  /// \c regs.source. This emits no register-allocator bookkeeping at all
+  /// -- getByIndexImpl() has already left the allocator in the state the
+  /// shared helper call needs.
+  void emitGetByIndexFastArrayTier(
+      const GetByIndexRegs &regs,
+      uint32_t key,
+      const asmjit::Label &helperLab,
+      bool sourceKnownObject);
+
+  /// Emit the inline typed-array load tier of GetByIndex, specialized for
+  /// exactly \p kind at the emit-time constant index \p key -- the
+  /// constant-key twin of emitGetByValTypedArrayTier(). A kind mismatch on
+  /// an object source branches to \p kindMissLab (the JSArray tier, which
+  /// is always emitted after this one); a non-object source declines to
+  /// \p helperLab. There is nothing else left to decline: with the key a
+  /// constant there is no key conversion and so no parity exit.
+  ///
+  /// Semantics authority, and the two load-side-only differences from the
+  /// store tier (no object-flags check; an out-of-bounds index and a
+  /// detached buffer are inline `undefined` rather than declines, and
+  /// therefore record nothing), are exactly as
+  /// emitGetByValTypedArrayTier()'s doc comment describes.
+  ///
+  /// Two things differ from that tier, both consequences of the constant
+  /// key:
+  ///   - the bounds test compares the length field against Imm(K)
+  ///     DIRECTLY -- `cmp dword ptr [length_], Imm(K)`, `jbe undefined` --
+  ///     the reverse operand order of the ByVal tier's `cmp idx, length_`
+  ///     / `jae`, and therefore the reverse condition. Both accept
+  ///     STRICTLY: `jbe` is taken when `length_ <= K`, i.e. exactly when
+  ///     K is NOT a valid index;
+  ///   - the shared element-load tail is handed a constant-displacement
+  ///     memory operand -- the `data_ + offset_` base register plus a
+  ///     `K * elementWidth` displacement, and NO index register -- rather
+  ///     than a base+index form.
+  ///
+  /// On entry the source must already be synced to the frame, because
+  /// \p helperLab reads it from there, and it must be live in
+  /// \c regs.source. \c regs.valTmp must be valid. Like the fast array
+  /// tier, this emits no register-allocator bookkeeping.
+  void emitGetByIndexTypedArrayTier(
+      const GetByIndexRegs &regs,
+      uint32_t key,
+      CellKind kind,
+      const asmjit::Label &kindMissLab,
+      const asmjit::Label &helperLab);
+
+  /// Split out of getByIndex(): the tier-selection sequence for the
+  /// constant-key twin of getByValImpl(), and the same shape -- the
+  /// evidence-driven typed-array tier first (its kind miss chaining into
+  /// the JSArray tier, never into the helper), the unconditional JSArray
+  /// tier second, and the per-site INDIRECT recording call to
+  /// _jit_get_by_index as the shared slow path. Registers, including the
+  /// result register, are allocated ONCE here and handed to the tiers via
+  /// GetByIndexRegs, never allocated by a tier itself.
+  ///
+  /// Tier selection reads the PRIOR version's record for this site, with
+  /// the LOAD predicate, exactly as getByValImpl() does; GetByIndex sites
+  /// join the same JitConsumerRecords::byValSites deque (siteId is the
+  /// bytecode offset, and GetByIndex is a distinct opcode, so no
+  /// collision with a ByVal site is possible).
+  void getByIndexImpl(FR frRes, FR frSource, uint32_t key);
+
   void putByIdImpl(
       FR frTarget,
       SHSymbolID symID,

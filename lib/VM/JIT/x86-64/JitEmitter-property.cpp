@@ -1329,15 +1329,113 @@ void Emitter::emitGetByValFastArrayTier(
   a.bind(doneLab);
 }
 
+void Emitter::emitTypedArrayElementLoad(
+    CellKind kind,
+    const asmjit::x86::Mem &elemBase,
+    const x86::Gp &res,
+    const x86::Gp &temp1,
+    const x86::Xmm &valTmp,
+    const asmjit::Label &doneLab) {
+  const bool isFloat64 = kind == CellKind::Float64ArrayKind;
+  const bool isFloat32 = kind == CellKind::Float32ArrayKind;
+
+  // The element's address at this kind's width and scale. The size is the
+  // element size; the scale applies only to a caller that supplied an index
+  // register holding an element index -- a caller that folded a constant
+  // index into the displacement has none to scale.
+  auto elemPtr = [&elemBase](uint32_t size, uint32_t logSize) {
+    asmjit::x86::Mem m = elemBase;
+    m.setSize(size);
+    if (m.hasIndex())
+      m.setShift(logSize);
+    return m;
+  };
+
+  // The element load and its widening to a double.
+  //
+  // Every integer kind goes through a 32-bit load into temp1 and a
+  // vcvtsi2sd, which is exact for all of them:
+  //  - the signed kinds sign-extend, and the 32-bit signed conversion is
+  //    their own conversion;
+  //  - Uint8/Uint8Clamped/Uint16 zero-extend to a value at most 65535,
+  //    which the SIGNED 32-bit conversion represents exactly -- no
+  //    unsigned form (which x86 does not have) is needed;
+  //  - Uint32 alone can exceed INT32_MAX, so its zero-extended 32-bit load
+  //    (a 32-bit mov clears the upper half) is converted as a SIGNED
+  //    64-bit value, which is exact for every value in [0, 2^32).
+  // Uint8Clamped reads exactly like Uint8: clamping is a store-side
+  // conversion and leaves no trace in the stored byte.
+  switch (kind) {
+    case CellKind::Int8ArrayKind:
+      a.movsx(temp1.r32(), elemPtr(1, 0));
+      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
+      break;
+    case CellKind::Uint8ArrayKind:
+    case CellKind::Uint8ClampedArrayKind:
+      a.movzx(temp1.r32(), elemPtr(1, 0));
+      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
+      break;
+    case CellKind::Int16ArrayKind:
+      a.movsx(temp1.r32(), elemPtr(2, 1));
+      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
+      break;
+    case CellKind::Uint16ArrayKind:
+      a.movzx(temp1.r32(), elemPtr(2, 1));
+      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
+      break;
+    case CellKind::Int32ArrayKind:
+      a.mov(temp1.r32(), elemPtr(4, 2));
+      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
+      break;
+    case CellKind::Uint32ArrayKind:
+      a.mov(temp1.r32(), elemPtr(4, 2));
+      a.vcvtsi2sd(valTmp, valTmp, temp1);
+      break;
+    case CellKind::Float32ArrayKind:
+      a.vmovss(valTmp, elemPtr(4, 2));
+      a.vcvtss2sd(valTmp, valTmp, valTmp);
+      break;
+    case CellKind::Float64ArrayKind:
+      a.vmovsd(valTmp, elemPtr(8, 3));
+      break;
+    default:
+      llvm_unreachable("unsupported typed-array load tier kind");
+  }
+
+  // Encode the double as a number HermesValue, which under NaN-boxing is
+  // its raw bit pattern -- but only for a bit pattern that IS a number.
+  //
+  // NaN CANONICALIZATION, float kinds only. A float element holds whatever
+  // 32 or 64 bits were written into it, and every NaN payload is a legal
+  // element value; the tag space this engine encodes non-numbers in lives
+  // inside the NaN space, so moving such an element's bits into the result
+  // verbatim would forge a pointer, a bool or a symbol out of a number.
+  // encodeUntrustedNumberValue() is what the interpreter's own read applies
+  // here, and this is its inline form: self-compare, and on unordered
+  // (which no other value gives) replace the whole pattern with the
+  // canonical quiet NaN. vmovq sets no flags, so it sits between the
+  // compare and the branch for free. The integer kinds cannot produce a
+  // NaN at all -- vcvtsi2sd of any integer is finite -- so they encode
+  // straight through, as encodeTrustedNumberValue() does.
+  if (isFloat32 || isFloat64) {
+    a.vucomisd(valTmp, valTmp);
+    a.vmovq(res, valTmp);
+    a.jnp(doneLab);
+    loadBits64InGp(
+        res, (uint64_t)HermesValue::encodeNaNValue().getRaw(), "canonical NaN");
+    a.jmp(doneLab);
+  } else {
+    a.vmovq(res, valTmp);
+    a.jmp(doneLab);
+  }
+}
+
 void Emitter::emitGetByValTypedArrayTier(
     const GetByValRegs &regs,
     CellKind kind,
     const asmjit::Label &kindMissLab,
     const asmjit::Label &helperLab) {
   comment("// Inline typed array load (kind %u)", (unsigned)kind);
-
-  const bool isFloat64 = kind == CellKind::Float64ArrayKind;
-  const bool isFloat32 = kind == CellKind::Float32ArrayKind;
 
   // Every register this runs on was chosen by getByValImpl(); see
   // GetByValRegs. Nothing here allocates or frees.
@@ -1416,85 +1514,11 @@ void Emitter::emitGetByValTypedArrayTier(
   a.jz(undefLab);
   a.add(loc, xScratch);
 
-  // The element load and its widening to a double. idx is a scaled element
-  // index: emit_double_is_uint32() leaves its upper 32 bits zero, so the
-  // 64-bit addressing mode is the uint32 one.
-  //
-  // Every integer kind goes through a 32-bit load into temp1 and a
-  // vcvtsi2sd, which is exact for all of them:
-  //  - the signed kinds sign-extend, and the 32-bit signed conversion is
-  //    their own conversion;
-  //  - Uint8/Uint8Clamped/Uint16 zero-extend to a value at most 65535,
-  //    which the SIGNED 32-bit conversion represents exactly -- no
-  //    unsigned form (which x86 does not have) is needed;
-  //  - Uint32 alone can exceed INT32_MAX, so its zero-extended 32-bit load
-  //    (a 32-bit mov clears the upper half) is converted as a SIGNED
-  //    64-bit value, which is exact for every value in [0, 2^32).
-  // Uint8Clamped reads exactly like Uint8: clamping is a store-side
-  // conversion and leaves no trace in the stored byte.
-  switch (kind) {
-    case CellKind::Int8ArrayKind:
-      a.movsx(temp1.r32(), x86::byte_ptr(loc, idx, 0));
-      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
-      break;
-    case CellKind::Uint8ArrayKind:
-    case CellKind::Uint8ClampedArrayKind:
-      a.movzx(temp1.r32(), x86::byte_ptr(loc, idx, 0));
-      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
-      break;
-    case CellKind::Int16ArrayKind:
-      a.movsx(temp1.r32(), x86::word_ptr(loc, idx, 1));
-      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
-      break;
-    case CellKind::Uint16ArrayKind:
-      a.movzx(temp1.r32(), x86::word_ptr(loc, idx, 1));
-      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
-      break;
-    case CellKind::Int32ArrayKind:
-      a.mov(temp1.r32(), x86::dword_ptr(loc, idx, 2));
-      a.vcvtsi2sd(valTmp, valTmp, temp1.r32());
-      break;
-    case CellKind::Uint32ArrayKind:
-      a.mov(temp1.r32(), x86::dword_ptr(loc, idx, 2));
-      a.vcvtsi2sd(valTmp, valTmp, temp1);
-      break;
-    case CellKind::Float32ArrayKind:
-      a.vmovss(valTmp, x86::dword_ptr(loc, idx, 2));
-      a.vcvtss2sd(valTmp, valTmp, valTmp);
-      break;
-    case CellKind::Float64ArrayKind:
-      a.vmovsd(valTmp, x86::qword_ptr(loc, idx, 3));
-      break;
-    default:
-      llvm_unreachable("unsupported typed-array load tier kind");
-  }
-
-  // Encode the double as a number HermesValue, which under NaN-boxing is
-  // its raw bit pattern -- but only for a bit pattern that IS a number.
-  //
-  // NaN CANONICALIZATION, float kinds only. A float element holds whatever
-  // 32 or 64 bits were written into it, and every NaN payload is a legal
-  // element value; the tag space this engine encodes non-numbers in lives
-  // inside the NaN space, so moving such an element's bits into the result
-  // verbatim would forge a pointer, a bool or a symbol out of a number.
-  // encodeUntrustedNumberValue() is what the interpreter's own read applies
-  // here, and this is its inline form: self-compare, and on unordered
-  // (which no other value gives) replace the whole pattern with the
-  // canonical quiet NaN. vmovq sets no flags, so it sits between the
-  // compare and the branch for free. The integer kinds cannot produce a
-  // NaN at all -- vcvtsi2sd of any integer is finite -- so they encode
-  // straight through, as encodeTrustedNumberValue() does.
-  if (isFloat32 || isFloat64) {
-    a.vucomisd(valTmp, valTmp);
-    a.vmovq(res, valTmp);
-    a.jnp(doneLab);
-    loadBits64InGp(
-        res, (uint64_t)HermesValue::encodeNaNValue().getRaw(), "canonical NaN");
-    a.jmp(doneLab);
-  } else {
-    a.vmovq(res, valTmp);
-    a.jmp(doneLab);
-  }
+  // The element access itself. idx is an UNSCALED element index, and
+  // emit_double_is_uint32() left its upper 32 bits zero, so the shared tail
+  // can scale it with the 64-bit addressing mode's uint32 form.
+  emitTypedArrayElementLoad(
+      kind, x86::ptr(loc, idx), res, temp1, valTmp, doneLab);
 
   a.bind(undefLab);
   loadBits64InGp(res, (uint64_t)_sh_ljs_undefined().raw, "undefined");
@@ -1656,24 +1680,353 @@ void Emitter::getByVal(FR frRes, FR frSource, FR frKey) {
   getByValImpl(frRes, frSource, frKey);
 }
 
-void Emitter::getByIndex(FR frRes, FR frSource, uint32_t key) {
+void Emitter::emitGetByIndexFastArrayTier(
+    const GetByIndexRegs &regs,
+    uint32_t key,
+    const asmjit::Label &helperLab,
+    bool sourceKnownObject) {
+  comment("// Inline fast array load");
+
+  // Every register this runs on was chosen by getByIndexImpl(); see
+  // GetByIndexRegs. Nothing here allocates or frees, so this emits code and
+  // nothing else.
+  const x86::Gp &source = regs.source;
+  // Holds the object, then the indexed storage, then the element address.
+  const x86::Gp &loc = regs.loc;
+  const x86::Gp &idx = regs.idx;
+  const x86::Gp &temp1 = regs.temp1;
+  const x86::Gp &res = regs.res;
+
+  // Is the source an object? At a site with a typed-array tier ahead of
+  // this one, that tier has already proved it, and nothing runs between
+  // the two tiers that could change the answer.
+  if (!sourceKnownObject) {
+    emit_sh_ljs_is_object(a, temp1, source);
+    a.jne(helperLab);
+  }
+  // loc is the pointer to the object.
+  emit_sh_ljs_get_pointer(a, loc, source);
+
+  // Is it a JSArray, and nothing else? Exactly emitGetByValFastArrayTier()'s
+  // guard: the exact CellKind is what lets this code skip ObjectVTable
+  // dispatch, and restricting to JSArray (rather than all of ArrayImpl) is
+  // what lets an Arguments object decline to the helper instead of being
+  // read inline.
+  a.cmp(
+      x86::byte_ptr(
+          loc,
+          (int32_t)(offsetof(SHGCCell, kindAndSize) +
+                    RuntimeOffsets::kindAndSizeKind)),
+      asmjit::Imm((uint8_t)CellKind::JSArrayKind));
+  a.jne(helperLab);
+
+  // No fastIndexProperties/frozen check here, for the same reason
+  // emitGetByValFastArrayTier() has none: the empty check below already
+  // subsumes it.
+
+  // ArrayImpl::at()'s range test, with K an emit-time constant:
+  // `K - beginIndex_ < elemCount_`, unsigned, one comparison for both ends.
+  // K being constant does NOT make the storage offset constant -- a first
+  // indexed write can set beginIndex_ to any index (JSArray.cpp) -- so the
+  // subtraction still has to happen at run time. asmjit has no
+  // `sub(Imm, Gp)` form, hence the constant is loaded into idx first; the
+  // 32-bit mov/sub/cmp sequence zero-extends idx so the surviving relative
+  // index scales directly into the storage access below. Out of range is a
+  // DECLINE, not `undefined`: the prototype chain may carry an indexed
+  // property at that index, so only the full path can answer.
+  a.mov(idx.r32(), asmjit::Imm(key));
+  a.sub(idx.r32(), x86::dword_ptr(loc, RuntimeOffsets::arrayImplBeginIndex));
+  a.cmp(idx.r32(), x86::dword_ptr(loc, RuntimeOffsets::arrayImplElemCount));
+  a.jae(helperLab);
+
+  // The storage. It cannot be null here: elemCount_ is 0 whenever
+  // indexedStorage_ is, which the comparison above has already ruled out.
+  emit_load_cp(a, loc, x86::ptr(loc, RuntimeOffsets::arrayImplIndexedStorage));
+  emit_sh_cp_decode_non_null(a, loc);
+
+  // The address of the element. The scale is the width of a heap value
+  // slot, which is four bytes under compressed pointers and eight
+  // otherwise -- an element index is not a byte offset in any mode.
+  a.lea(
+      loc,
+      x86::ptr(
+          loc,
+          idx,
+          RuntimeOffsets::kLogSmallHermesValueSize,
+          (int32_t)offsetof(SHArrayStorageSmall, storage)));
+
+  // ArrayImpl::at() reports `empty` for a hole -- a read at a hole is not a
+  // fast-path read at all: the runtime resolves the property normally, and
+  // may find a data property or an accessor on the prototype chain. Decline,
+  // and let the helper do that. See emitGetByValFastArrayTier()'s comment
+  // for why the 8-byte-slot case needs its own temp for the check while the
+  // 4-byte one does not.
+  emit_load_shv(a, res, x86::ptr(loc));
+  if constexpr (sizeof(SmallHermesValue) == 4) {
+    a.cmp(
+        res.r32(),
+        asmjit::Imm((uint32_t)SmallHermesValue::encodeEmptyValue().getRaw()));
+  } else {
+    emit_sh_ljs_is_empty(a, temp1, res);
+  }
+  a.je(helperLab);
+
+  // Unbox the SmallHermesValue into the HermesValue the result register
+  // must hold -- the same shared decode emitGetByValFastArrayTier() uses,
+  // which never has anything left to decline.
+  asmjit::Label doneLab = a.newLabel();
+  emit_sh_shv_decode(a, res, doneLab);
+  a.bind(doneLab);
+}
+
+void Emitter::emitGetByIndexTypedArrayTier(
+    const GetByIndexRegs &regs,
+    uint32_t key,
+    CellKind kind,
+    const asmjit::Label &kindMissLab,
+    const asmjit::Label &helperLab) {
+  comment("// Inline typed array load (kind %u)", (unsigned)kind);
+
+  // Every register this runs on was chosen by getByIndexImpl(); see
+  // GetByIndexRegs. Nothing here allocates or frees.
+  const x86::Gp &source = regs.source;
+  // Holds the object, then the buffer, then the element base address.
+  const x86::Gp &loc = regs.loc;
+  const x86::Gp &temp1 = regs.temp1;
+  // Holds the loaded element, widened to the double it must become.
+  const x86::Xmm &valTmp = regs.valTmp;
+  const x86::Gp &res = regs.res;
+
+  // The element width of this kind, in bytes -- what K has to be scaled by
+  // to become the constant displacement below. It matches the sized load
+  // the shared tail emits for the same kind.
+  uint32_t width;
+  switch (kind) {
+    case CellKind::Int8ArrayKind:
+    case CellKind::Uint8ArrayKind:
+    case CellKind::Uint8ClampedArrayKind:
+      width = 1;
+      break;
+    case CellKind::Int16ArrayKind:
+    case CellKind::Uint16ArrayKind:
+      width = 2;
+      break;
+    case CellKind::Int32ArrayKind:
+    case CellKind::Uint32ArrayKind:
+    case CellKind::Float32ArrayKind:
+      width = 4;
+      break;
+    case CellKind::Float64ArrayKind:
+      width = 8;
+      break;
+    default:
+      llvm_unreachable("unsupported typed-array load tier kind");
+  }
+
+  // The object and exact-kind checks come FIRST, for the same reason they
+  // do in emitGetByValTypedArrayTier(): at a duo site a kind miss must
+  // reach the JSArray tier, and a non-object cannot be read by either tier,
+  // so only the kind check chains.
+  emit_sh_ljs_is_object(a, temp1, source);
+  a.jne(helperLab);
+  emit_sh_ljs_get_pointer(a, loc, source);
+  a.cmp(
+      x86::byte_ptr(
+          loc,
+          (int32_t)(offsetof(SHGCCell, kindAndSize) +
+                    RuntimeOffsets::kindAndSizeKind)),
+      asmjit::Imm((uint8_t)kind));
+  a.jne(kindMissLab);
+
+  // No object-flags check, and no key conversion: the read path checks
+  // neither fastIndexProperties nor frozen for a typed array
+  // (tryFastGetComputedNoAlloc(), JSObject-inline.h), and K is an emit-time
+  // constant in [0, 255], so there is nothing to convert and no parity exit.
+
+  // From here on the answer is this tier's, whatever it is: an
+  // out-of-bounds index and a detached buffer both read as `undefined`, so
+  // they branch to a local `mov undefined` rather than to the helper.
+  // Nothing is recorded on that path, and nothing should be: the source's
+  // shape there IS the specialized kind.
+  asmjit::Label undefLab = a.newLabel();
+  asmjit::Label doneLab = a.newLabel();
+
+  // Bounds: K < length_, one unsigned 32-bit compare. With K an immediate
+  // the compare is against the length field DIRECTLY, which reverses both
+  // the operand order and the condition of emitGetByValTypedArrayTier()'s
+  // `cmp idx, length_` / `jae`: `jbe` is taken exactly when
+  // `length_ <= K`, i.e. exactly when K is not a valid index. Acceptance
+  // stays STRICT -- K == length_ is out of bounds, and takes the branch.
+  // This tree has no resizable ArrayBuffers, so length_ is fixed for the
+  // object's lifetime.
+  a.cmp(
+      x86::dword_ptr(loc, RuntimeOffsets::jsTypedArrayBaseLength),
+      asmjit::Imm(key));
+  a.jbe(undefLab);
+
+  // The element base address: the buffer's data_, plus the view's byte
+  // offset_ into it. A detached buffer has a null data_, so the attached
+  // check is free with a load the read needs anyway. Verbatim from
+  // emitGetByValTypedArrayTier(), including its use of the dead xScratch to
+  // carry the offset.
+  a.mov(
+      xScratch.r32(),
+      x86::dword_ptr(loc, RuntimeOffsets::jsTypedArrayBaseOffset));
+  emit_load_cp(a, loc, x86::ptr(loc, RuntimeOffsets::jsTypedArrayBaseBuffer));
+  emit_sh_cp_decode_non_null(a, loc);
+  a.mov(loc, x86::qword_ptr(loc, RuntimeOffsets::jsArrayBufferData));
+  a.test(loc, loc);
+  a.jz(undefLab);
+  a.add(loc, xScratch);
+
+  // The element access itself, through the tail shared with the ByVal tier.
+  // Unlike that tier's base+index operand this one has NO index register at
+  // all: the element index is a constant, so `K * width` is folded into the
+  // displacement here and the tail has nothing left to scale. K <= 255 and
+  // width <= 8, so the product is at most 2040 and cannot overflow the
+  // displacement.
+  emitTypedArrayElementLoad(
+      kind, x86::ptr(loc, (int32_t)(key * width)), res, temp1, valTmp, doneLab);
+
+  a.bind(undefLab);
+  loadBits64InGp(res, (uint64_t)_sh_ljs_undefined().raw, "undefined");
+  a.bind(doneLab);
+}
+
+void Emitter::getByIndexImpl(FR frRes, FR frSource, uint32_t key) {
+  // The GetByIndex instruction's own bytecode offset, unique within this
+  // function and stable across recompiles: identifies this site's entry in
+  // versionData_'s consumer records (see JitFunctionData.h). GetByIndex is
+  // a distinct opcode from GetByVal, so sharing the byValSites deque with
+  // the ByVal sites can never collide.
+  uint32_t siteId =
+      (uint32_t)((const char *)emittingIP - (const char *)codeBlock_->begin());
+
   comment("// getByIdx r%u, r%u, %u", frRes.index(), frSource.index(), key);
 
   syncAllFRTempExcept(frRes != frSource ? frRes : FR());
   syncToFrame(frSource);
-  freeAllFRTempExcept({});
 
+  // Monotone tier selection, exactly getByValImpl()'s -- see its comment
+  // for why the JSArray tier is a static prior rather than a decision, and
+  // why selecting the typed-array tier from the observed field alone is
+  // already monotone. The predicate is the LOAD one, which admits
+  // Uint8Clamped where the store predicate does not; the recording helper
+  // for this site validated the kind against the same predicate before
+  // storing it.
+  JitByValSiteRecord &site = byValSiteRecord(siteId);
+  const bool emitTA = site.taKind != JitByValSiteRecord::kTAKindNone &&
+      isJitSupportedTypedArrayLoadKind((CellKind)site.taKind);
+  site.specializedTAKind =
+      emitTA ? site.taKind : JitByValSiteRecord::kTAKindNone;
+
+  asmjit::Label helperLab = a.newLabel();
+  asmjit::Label contLab = a.newLabel();
+
+  // The register assignment for the whole tier chain, made once (see
+  // GetByIndexRegs) -- the only register-allocator bookkeeping in the
+  // sequence, exactly as getByValImpl() does it. The allocs and frees below
+  // emit no code at all: they only decide which registers the tiers may
+  // use.
+  freeAllFRTempExcept(frSource);
+  // The source is needed as a raw HermesValue in a GP register.
+  HWReg hwSource = getOrAllocFRInGpX(frSource, true);
+  HWReg hwLoc = allocTempGpX();
+  HWReg hwIdx = allocTempGpX();
+  HWReg hwTemp1 = allocTempGpX();
+  HWReg hwValTmp = emitTA ? allocTempVecD() : HWReg{};
+  freeReg(hwLoc);
+  freeReg(hwIdx);
+  freeReg(hwTemp1);
+  if (emitTA)
+    freeReg(hwValTmp);
+  freeFRTemp(frSource);
+  // The result register comes last, so it may overlap the temps just freed
+  // -- the same ordering getByValImpl() uses for hwRes. The gpX(0)/rax hint
+  // is what lets the slow path (whose helper call returns in rax) reconcile
+  // with this register at no cost in the common case.
+  // `false`: this is a fresh output, no current value to load.
+  HWReg hwRes = getOrAllocFRInGpX(frRes, false, HWReg::gpX(0));
+
+  GetByIndexRegs regs;
+  regs.source = hwSource.gpq();
+  regs.loc = hwLoc.gpq();
+  regs.idx = hwIdx.gpq();
+  regs.temp1 = hwTemp1.gpq();
+  if (emitTA)
+    regs.valTmp = hwValTmp.xmm();
+  regs.res = hwRes.gpq();
+  // res may share a register with loc or idx -- both are dead by the time
+  // a tier writes it -- but NOT with temp1, which the fast array tier still
+  // needs after loading the element into res (see its empty check). The
+  // allocation above guarantees it: res is either a global register, which
+  // is never a temp, or rax, which is free here and therefore was handed
+  // out as the FIRST temp, loc.
+  assert(regs.temp1 != regs.res && "the result must not alias temp1");
+
+  if (emitTA) {
+    // The recorded kind is compared first: it is what the site was observed
+    // declining on. Its kind miss chains into the JSArray tier below, never
+    // into the helper.
+    asmjit::Label kindMissLab = a.newLabel();
+    emitGetByIndexTypedArrayTier(
+        regs, key, (CellKind)site.taKind, kindMissLab, helperLab);
+    // Falling out of the inline tier means the load is done.
+    a.jmp(contLab);
+    a.bind(kindMissLab);
+  }
+  emitGetByIndexFastArrayTier(
+      regs, key, helperLab, /* sourceKnownObject */ emitTA);
+  // Falling out of the inline tier means the load is done.
+  a.jmp(contLab);
+  a.bind(helperLab);
+
+  // No freeAllFRTempExcept({}) here: the prologue above already left every
+  // temp free and no FR but frRes registered in one, and frRes's register
+  // must survive into the call below so the slow-path result lands in the
+  // same register the tier used -- the same structure getByValImpl() uses
+  // between its fast path and its shared call.
   a.mov(x86::rdi, xRuntime);
   loadFrameAddr(x86::rsi, frSource);
+  // The key goes into edx BY VALUE, as an immediate: _jit_get_by_index
+  // takes the uint32 itself, matching the plain helper it forwards to, not
+  // a pointer to a frame slot the way _jit_get_by_val's key does.
   a.mov(x86::edx, asmjit::Imm(key));
-  EMIT_RUNTIME_CALL(
-      *this,
-      SHLegacyValue (*)(SHRuntime *, SHLegacyValue *, uint32_t),
-      _sh_ljs_get_by_index_rjs);
+  loadBits64InGp(x86::rcx, (uint64_t)versionData_, "JitVersionData");
+  a.mov(x86::r8d, asmjit::Imm(siteId));
 
-  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  // site.helper is per-site mutable state (spec: "Slow-path demotion: the
+  // pointer flip"): it starts out null on a fresh record and is carried
+  // forward as-is across recompiles, so a demoted slot (flipped by the
+  // runtime to the plain _sh_ljs_get_by_index_rjs) stays demoted. Only a
+  // still-null slot -- never yet flipped -- is initialized here. An
+  // unconditional store would silently restart recording at every
+  // recompile.
+  if (!site.helper)
+    site.helper = (void *)_jit_get_by_index;
+  // Type-check the recording callee against the signature the emitted call
+  // sequence assumes, the same way EMIT_RUNTIME_CALL does for a direct call
+  // -- even though it is not called directly here, since the actual callee
+  // is loaded from site.helper at runtime. The demoted callee takes three
+  // arguments rather than five; under SysV the extra argument registers are
+  // simply ignored, exactly as for the ByVal sites'.
+  using _FnT = SHLegacyValue (*)(
+      SHRuntime *, SHLegacyValue *, uint32_t, SHJitVersionData *, uint32_t);
+  _FnT _fn = _jit_get_by_index;
+  (void)_fn;
+  // WithSavedIP, not the plain indirect call: the fallback resolves the
+  // property, which may run a getter and may throw.
+  callRuntimeWithSavedIPIndirect(
+      (uint64_t)&site.helper, "_jit_get_by_index [indirect]");
+
   movHWFromHW<false>(hwRes, HWReg::gpX(0));
   frUpdatedWithHW(frRes, hwRes);
+
+  a.bind(contLab);
+}
+
+void Emitter::getByIndex(FR frRes, FR frSource, uint32_t key) {
+  getByIndexImpl(frRes, frSource, key);
 }
 
 #if HERMES_JIT_INLINE_SAFE_STORE

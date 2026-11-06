@@ -517,6 +517,25 @@ SHLegacyValue _jit_get_by_val(
   return _sh_ljs_get_by_val_rjs(shr, source, key);
 }
 
+/// Slow path of GetByIndex, and the recording site for the ByIndex load
+/// tier's declines: records the observed source shape into
+/// \p versionData's entry for \p siteId using the LOAD predicate, then
+/// forwards to the plain SH helper and returns its value. Installed by
+/// getByIndexImpl() into the site's own mutable helper slot.
+SHLegacyValue _jit_get_by_index(
+    SHRuntime *shr,
+    SHLegacyValue *source,
+    uint32_t key,
+    SHJitVersionData *versionData,
+    uint32_t siteId) {
+  JitVersionData *vd = reinterpret_cast<JitVersionData *>(versionData);
+  recordByValObservation(vd, siteId, source, isJitSupportedTypedArrayLoadKind);
+  if (LLVM_UNLIKELY(++vd->declineCount >= vd->declineThreshold)) {
+    getRuntime(shr).getJITContext().considerRecompile(getRuntime(shr), vd);
+  }
+  return _sh_ljs_get_by_index_rjs(shr, source, key);
+}
+
 #ifdef HERMESVM_PROFILER_BB
 void _interpreter_register_bb_execution(SHRuntime *shr, uint16_t pointIndex) {
   Runtime &runtime = getRuntime(shr);

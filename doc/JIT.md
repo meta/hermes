@@ -945,6 +945,99 @@ round-trips per kind, including the NaN-canonicalization pin), `getval-guards.js
 -- all diffed against the interpreter, and exercised on arm64's helper path
 too.
 
+**GetByIndex (the constant-key GetByVal twin).** `GetByIndex Reg8, Reg8, UInt8`
+is the compiler's lowering of a literal uint8 property key (`a[0]`, tuple/vec
+math, unrolled loops); a non-literal or a key outside `[0, 255]` lowers to
+GetByVal instead, so GetByIndex tests always pin the opcode in the bytecode
+dump to guard against accidentally exercising the wrong site. It joins the
+same `byValSites` deque as every other ByVal-family consumer -- siteId is its
+own bytecode offset, and since GetByIndex is a distinct opcode from
+GetByVal/PutByVal, a get/put/index site can never collide even at the same
+logical property access -- and reuses the monotone tier rule,
+poison-keeps-first-kind, the indirect `helper` slot, the shared decline
+counter/budget, and the demotion pass verbatim. The whole feature is GetByVal
+with the key block deleted: K is an emit-time constant, so there is no key FR,
+no double-to-uint32 conversion, no parity exit, and the ByVal edge cases that
+exist only because a key is a runtime value (negative, fractional, >= 2^32,
+0xFFFFFFFF) are structurally impossible.
+
+- **Fourth recording-helper identity.** `_jit_get_by_index(SHRuntime *,
+  SHLegacyValue *source, uint32_t key, SHJitVersionData *, uint32_t siteId)`
+  sits beside `_jit_get_by_val`, with the key passed BY VALUE (in `edx`) to
+  match the plain helper's signature -- records with the load predicate, bumps
+  the shared decline counter, considers recompiling, and returns
+  `_sh_ljs_get_by_index_rjs(shr, source, key)`. `isRecordingHelper` gained this
+  fourth identity and `demoteSite` maps it to `_sh_ljs_get_by_index_rjs`,
+  alongside the three existing mappings. The emitted call goes through the
+  per-site mutable helper slot via `callRuntimeWithSavedIPIndirect` (the
+  fallback can run a prototype getter and throw), always passing the
+  5-argument recording shape; the demoted plain helper reads only
+  `rdi`/`rsi`/`edx` and ignores `rcx`/`r8d`, the same SysV extra-argument
+  compatibility the ByVal slots already rely on. As with every other slot,
+  the site's helper is installed ONLY WHEN NULL, so demotion survives a
+  recompile instead of silently restarting recording
+  (`recompile-getidx-demote-carried.js` pins this end to end).
+- **The shared element-load tail.** The per-kind element-access tail of
+  `emitGetByValTypedArrayTier()` -- the switch building each kind's
+  sized/scaled memory operand, the integer/float converts, the float
+  NaN-canonicalization sandwich, and the number-`HermesValue` encode, for all
+  nine supported kinds -- was extracted into one helper,
+  `emitTypedArrayElementLoad(kind, addressOperand, resultReg, ...)`, used by
+  BOTH the GetByVal and the GetByIndex typed-array tiers. The two callers
+  differ only in how the address operand is formed: GetByVal computes
+  `data_ + offset_ + idx*width` with a register index, GetByIndex folds
+  `K*width` into the displacement and passes no index register at all. This
+  makes the NaN-canonicalization sandwich -- the one place a bug could forge a
+  tagged non-number -- exist in exactly one copy. The refactor that carved out
+  this helper was verified to leave GetByVal's emission BYTE-IDENTICAL (a
+  local, uncommitted post-relocation hook compared the finalized machine-code
+  bytes of a representative workload before and after, modulo the embedded
+  relocatable addresses), and the sharing itself is proven by a
+  prove-can-fail: corrupting the tail's NaN canonicalization fails the named
+  NaN checks in BOTH `getval-conversions.js` and `getidx-conversions.js`.
+- **JSArray tier: begin-relative addressing even with a constant key.** A
+  compile-time-constant `K` does NOT make the storage offset constant, because
+  the stored fields are `beginIndex_` and `elemCount_` (`JSArray.h`) and a
+  nonzero `beginIndex_` is reachable (an indexed write that allocates storage
+  sets `beginIndex_` to the write index). The tier therefore still computes a
+  relative index at run time -- `mov idx32, K` then
+  `sub idx32, dword ptr [beginIndex_]` -- and a single unsigned `cmp`/`jae`
+  against `elemCount_` covers both `K < beginIndex_` (via the uint32 wrap) and
+  `K >= endIndex` in one check; failure declines to the helper (the prototype
+  chain may still answer). This tier is unconditional in every version and
+  build config, exactly like GetByVal's, since a load takes no write barrier.
+- **Typed-array tier: matched bounds compare, constant displacement.** After
+  the exact-kind guard, the bounds check is `cmp dword ptr [length], Imm(K)`
+  paired with `jbe -> undefined` -- the reversed operand order and condition
+  from GetByVal's register-keyed `cmp idx, [length]` / `jae`, because here the
+  index is the immediate rather than the length; both forms accept strictly
+  `K < length`. A bounds failure or a null (detached) `data_` branches to an
+  inline `mov undefined`, exactly as GetByVal's tier does -- no helper call
+  and nothing recorded, since the source's shape already IS the specialized
+  kind and only the index or attachment differs. On success, the element
+  access goes through the shared tail with a `K*width` constant displacement
+  and no index register at all.
+
+Full design: `doc/superpowers/specs/2026-09-12-jit-getbyindex-design.md`
+(the binding companion to the GetByVal design above).
+
+Tests: the arch-neutral `test/jit/getidx-conversions.js` (per-kind bit-pattern
+and NaN round-trips through the ByIndex address path) and
+`test/jit/getidx-guards.js` (hole/prototype/accessor semantics, the
+storage-state cases a constant key does not eliminate -- a nonzero
+`beginIndex_` array hit, a `beginIndex_ > K` decline, an empty array -- and
+the typed-array equality-boundary matrix: `K == length`, `K > length`,
+`K == length - 1`, `K == 0` on a zero-length view, and `K == 255` on views of
+length 255 and 256); the slim x86-64-only policy set
+`test/jit/x86-64/recompile-getidx-{trigger,duo,demote,demote-carried,
+budget0}.js` (the demotion machinery itself is shared and already proven by
+the six GetByVal policy files, so these pin only the per-opcode wiring and the
+fourth helper identity); and `test/jit/x86-64/getbyindex-inline-emitted.js`
+(the JSArray begin-relative compare, the indirect recording call, the
+bounds-fail undefined path, and version-2 emission pins for all nine
+typed-array kinds through the ByIndex address form). Benchmark:
+`benchmarks/jit-benches/typed-array-index.js`.
+
 ### Arithmetic, comparisons and NaN handling
 
 The binary/unary arithmetic and comparison emitters share a template

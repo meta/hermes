@@ -290,21 +290,25 @@ static bool byValShapeProgress(const JitVersionData *vd) {
 /// crossing is a "changed" crossing, so demotion lands at the fourth.
 static constexpr uint8_t kDemotionStableCrossings = 3;
 
-/// \return true if \p h is one of the recording ByVal helpers (put or
-/// get), i.e. the site has not been demoted yet.
+/// \return true if \p h is one of the recording ByVal helpers (put,
+/// get, or get-by-index), i.e. the site has not been demoted yet.
 static bool isRecordingHelper(void *h) {
   return h == (void *)_jit_put_by_val_loose ||
-      h == (void *)_jit_put_by_val_strict || h == (void *)_jit_get_by_val;
+      h == (void *)_jit_put_by_val_strict || h == (void *)_jit_get_by_val ||
+      h == (void *)_jit_get_by_index;
 }
 
 /// Flip \p s to the plain helper matching its recording helper: get
-/// maps to the plain get helper, and put maps to the plain helper
-/// matching its strictness, derived from the slot's current value
-/// rather than stored separately. Terminal: nothing ever flips a slot
-/// back (spec: "Terminal is terminal").
+/// maps to the plain get helper, get-by-index maps to the plain
+/// get-by-index helper, and put maps to the plain helper matching its
+/// strictness, derived from the slot's current value rather than
+/// stored separately. Terminal: nothing ever flips a slot back (spec:
+/// "Terminal is terminal").
 static void demoteSite(JitByValSiteRecord &s) {
   if (s.helper == (void *)_jit_get_by_val) {
     s.helper = (void *)_sh_ljs_get_by_val_rjs;
+  } else if (s.helper == (void *)_jit_get_by_index) {
+    s.helper = (void *)_sh_ljs_get_by_index_rjs;
   } else {
     s.helper = s.helper == (void *)_jit_put_by_val_strict
         ? (void *)_sh_ljs_put_by_val_strict_rjs
