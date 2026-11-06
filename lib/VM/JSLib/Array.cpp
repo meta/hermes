@@ -149,6 +149,13 @@ Handle<JSObject> createArrayConstructor(Runtime &runtime) {
       nullptr,
       arrayPrototypeWith,
       2);
+  defineMethod(
+      runtime,
+      arrayPrototype,
+      Predefined::getSymbolID(Predefined::toSorted),
+      nullptr,
+      arrayPrototypeToSorted,
+      1);
 
   auto propValue = runtime.ignoreAllocationFailure(
       JSObject::getNamed_RJS(
@@ -1346,114 +1353,112 @@ class StandardSortModel : public SortModel {
 /// Perform a sort of a sparse object by querying its properties first.
 /// It cannot be a proxy or a host object because they are not guaranteed to
 /// be able to list their properties.
-CallResult<HermesValue> sortSparse(
+CallResult<HermesValue> sortIndexedProperties(
     Runtime &runtime,
     Handle<JSObject> O,
+    uint64_t len,
     Handle<Callable> compareFn,
-    uint64_t len) {
+    bool skipHoles) {
   GCScope gcScope{runtime};
 
-  assert(
-      !O->isHostObject() && !O->isProxyObject() &&
-      "only non-exotic objects can be sparsely sorted");
-
-  // This is a "non-fast" object, meaning we need to create a symbol for every
-  // property name. On the assumption that it is sparse, get all properties
-  // first, so that we only have to read the existing properties.
-
-  auto crNames = JSObject::getOwnPropertyNames(O, runtime, false);
-  if (crNames == ExecutionStatus::EXCEPTION)
+  // 1. Let items be a new empty List.
+  auto itemsArrayRes = JSArray::create(runtime, len, len);
+  if (itemsArrayRes == ExecutionStatus::EXCEPTION)
     return ExecutionStatus::EXCEPTION;
-  // Get the underlying storage containing the names.
-  auto names = runtime.makeHandle((*crNames)->getIndexedStorage(runtime));
-  if (!names) {
-    // Indexed storage can be null if there's nothing to store.
-    return O.getHermesValue();
-  }
 
-  // Find out how many sortable numeric properties we have.
-  JSArray::StorageType::size_type numProps = 0;
-  for (JSArray::StorageType::size_type e = names->size(runtime); numProps != e;
-       ++numProps) {
-    SmallHermesValue hv = names->at(runtime, numProps);
-    // Stop at the first non-number.
-    if (!hv.isNumber())
-      break;
-    // Stop if the property name is beyond "len".
-    if (hv.getNumber(runtime) >= len)
-      break;
-  }
+  auto items = *itemsArrayRes;
 
-  // If we didn't find any numeric properties, there is nothing to do.
-  if (numProps == 0)
-    return O.getHermesValue();
-
-  // Create a new array which we will actually sort.
-  auto crArray = JSArray::create(runtime, numProps, numProps);
-  if (crArray == ExecutionStatus::EXCEPTION)
-    return ExecutionStatus::EXCEPTION;
-  auto array = *crArray;
-  if (JSArray::setStorageEndIndex(array, runtime, numProps) ==
-      ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
-  }
-
-  MutableHandle<> propName{runtime};
-  MutableHandle<> propVal{runtime};
+  MutableHandle<> kHandle{runtime};
+  MutableHandle<> kValueHandle{runtime};
+  MutableHandle<SymbolID> fromNameTmpStorage{runtime};
+  MutableHandle<JSObject> fromObj{runtime};
   GCScopeMarkerRAII gcMarker{gcScope};
 
-  // Copy all sortable properties into the array and delete them from the
-  // source. Deleting all sortable properties makes it easy to just copy the
-  // sorted result back in the end.
-  for (decltype(numProps) i = 0; i != numProps; ++i) {
-    gcMarker.flush();
+  // 2. Let k be 0.
+  uint64_t k = 0;
 
-    propName = names->at(runtime, i).unboxToHV(runtime);
-    auto res = JSObject::getComputed_RJS(O, runtime, propName);
-    if (res == ExecutionStatus::EXCEPTION)
-      return ExecutionStatus::EXCEPTION;
-    // Skip empty values.
-    if (res->getHermesValue().isEmpty())
-      continue;
+  // Here, we diverge a bit from original algorithm by moving checking of
+  // `skipHoles` outside the loop, so that we have one branch instruction rather
+  // than two.
+  if (skipHoles) {
+    // 3. Repeat, while k < len,
+    while (k < len) {
+      gcMarker.flush();
 
-    const auto shv = SmallHermesValue::encodeHermesValue(res->get(), runtime);
-    JSArray::unsafeSetExistingElementAt(*array, runtime, i, shv);
+      // 3a. Let Pk be ! ToString(𝔽(k)).
+      kHandle = HermesValue::encodeTrustedNumberValue(k);
+      ComputedPropertyDescriptor desc;
 
-    if (JSObject::deleteComputed(
-            O, runtime, propName, PropOpFlags().plusThrowOnError()) ==
-        ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
+      // 3b.i. Let kRead be ? HasProperty(obj, Pk).
+      if (LLVM_UNLIKELY(
+              JSObject::getComputedDescriptor(
+                  O, runtime, kHandle, fromObj, fromNameTmpStorage, desc) ==
+              ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+
+      CallResult<PseudoHandle<>> kValueRes =
+          JSObject::getComputedPropertyValue_RJS(
+              O, runtime, fromObj, fromNameTmpStorage, desc, kHandle);
+
+      if (LLVM_UNLIKELY(kValueRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+
+      // 3d. If kRead is true, then
+      if (LLVM_LIKELY(!(*kValueRes)->isEmpty())) {
+        // 3d.ii Append kValue to items
+        kValueHandle = std::move(*kValueRes);
+        JSArray::setElementAt(items, runtime, k, kValueHandle);
+      }
+
+      k += 1;
     }
   }
-  gcMarker.flush();
+  // if read-through-holes
+  else {
+    // 3. Repeat, while k < len,
+    while (k < len) {
+      gcMarker.flush();
+
+      // 3a. Let Pk be ! ToString(𝔽(k)).
+      kHandle = HermesValue::encodeTrustedNumberValue(k);
+      ComputedPropertyDescriptor desc;
+
+      // 3b.i. Let kRead be ? HasProperty(obj, Pk).
+      if (LLVM_UNLIKELY(
+              JSObject::getComputedDescriptor(
+                  O, runtime, kHandle, fromObj, fromNameTmpStorage, desc) ==
+              ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+
+      CallResult<PseudoHandle<>> kValueRes =
+          JSObject::getComputedPropertyValue_RJS(
+              O, runtime, fromObj, fromNameTmpStorage, desc, kHandle);
+
+      if (LLVM_UNLIKELY(kValueRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+
+      // 3d. If kRead is true, then
+      // 3d.i Let kValue be ? Get(obj, Pk).
+      kValueHandle = std::move(*kValueRes);
+      // 3d.ii Append kValue to items
+      JSArray::setElementAt(items, runtime, k, kValueHandle);
+
+      // 3.e Set k to k + 1
+      k += 1;
+    }
+  }
 
   {
-    StandardSortModel sm(runtime, array, compareFn);
-    if (LLVM_UNLIKELY(
-            quickSort(&sm, 0u, numProps) == ExecutionStatus::EXCEPTION))
+    StandardSortModel sm(runtime, items, compareFn);
+    if (LLVM_UNLIKELY(quickSort(&sm, 0u, len) == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
   }
 
-  // Time to copy back the values.
-  for (decltype(numProps) i = 0; i != numProps; ++i) {
-    gcMarker.flush();
-
-    auto hv = array->at(runtime, i).unboxToHV(runtime);
-    assert(
-        !hv.isEmpty() &&
-        "empty values cannot appear in the array out of nowhere");
-    propVal = hv;
-
-    propName = HermesValue::encodeTrustedNumberValue(i);
-
-    if (JSObject::putComputed_RJS(
-            O, runtime, propName, propVal, PropOpFlags().plusThrowOnError()) ==
-        ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
-    }
-  }
-
-  return O.getHermesValue();
+  return items.getHermesValue();
 }
 } // anonymous namespace
 
@@ -1483,20 +1488,60 @@ arrayPrototypeSort(void *, Runtime &runtime, NativeArgs args) {
   }
   uint64_t len = *intRes;
 
-  // If we are not sorting a regular dense array, use a special routine which
-  // first copies all properties into an array.
-  // Proxies  and host objects however are excluded because they are weird.
-  if (!O->isProxyObject() && !O->isHostObject() && !O->hasFastIndexProperties())
-    return sortSparse(runtime, O, compareFn, len);
-
-  // This is the "fast" path. We are sorting an array with indexed storage.
-  StandardSortModel sm(runtime, O, compareFn);
-
-  // Use our custom sort routine. We can't use std::sort because it performs
-  // optimizations that allow it to bypass calls to std::swap, but our swap
-  // function is special, since it needs to use the internal Object functions.
-  if (LLVM_UNLIKELY(quickSort(&sm, 0u, len) == ExecutionStatus::EXCEPTION))
+  // 5. Let sortedList be ? SortIndexedProperties(obj, len, SortCompare,
+  // skip-holes).
+  auto sortedListRes = sortIndexedProperties(runtime, O, len, compareFn, true);
+  if (LLVM_UNLIKELY(sortedListRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
+  }
+
+  Handle<> sortedList = runtime.makeHandle(*sortedListRes);
+  auto sortedListArr = Handle<JSArray>::dyn_vmcast(sortedList);
+
+  // 6. Let itemCount be the number of elements in sortedList.
+  auto itemCount = JSArray::getLength(sortedListArr.get(), runtime);
+
+  // 7. Let j be 0.
+  uint64_t j = 0;
+  MutableHandle<> jHandle{runtime};
+  MutableHandle<> valueHandle{runtime};
+
+  // 8. Repeat, while j < itemCount,
+  while (j < itemCount) {
+    jHandle = HermesValue::encodeTrustedNumberValue(j);
+
+    valueHandle = sortedListArr.get()->at(runtime, j).unboxToHV(runtime);
+
+    if (LLVM_UNLIKELY(
+            JSObject::putComputed_RJS(
+                O,
+                runtime,
+                jHandle,
+                valueHandle,
+                PropOpFlags().plusThrowOnError()) ==
+            ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+
+    // 8b. Set j to j + 1.
+    j += 1;
+  }
+
+  // 10. Repeat, while j < len,
+  while (j < len) {
+    jHandle = HermesValue::encodeTrustedNumberValue(j);
+
+    // 10a. Perform ? DeletePropertyOrThrow(obj, ! ToString(𝔽(j))).
+    if (LLVM_UNLIKELY(
+            JSObject::deleteComputed(
+                O, runtime, jHandle, PropOpFlags().plusThrowOnError()) ==
+            ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+
+    // 10b. Set j to j + 1.
+    j += 1;
+  }
 
   return O.getHermesValue();
 }
@@ -3956,6 +4001,83 @@ arrayPrototypeWith(void *, Runtime &runtime, NativeArgs args) {
 
     // 9e. Set k to k + 1.
     ++k;
+  }
+
+  return A.getHermesValue();
+}
+
+/// ES14.0 23.1.3.34
+CallResult<HermesValue>
+arrayPrototypeToSorted(void *, Runtime &runtime, NativeArgs args) {
+  GCScope gcScope{runtime};
+
+  // 1. If comparefn is not undefined and IsCallable(comparefn) is false, throw
+  // a TypeError exception.
+  auto compareFn = Handle<Callable>::dyn_vmcast(args.getArgHandle(0));
+  if (!args.getArg(0).isUndefined() && !compareFn) {
+    return runtime.raiseTypeError("Array toSorted argument must be callable");
+  }
+
+  // 2. Let O be ? ToObject(this value).
+  auto oRes = toObject(runtime, args.getThisHandle());
+  if (LLVM_UNLIKELY(oRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  auto O = runtime.makeHandle<JSObject>(*oRes);
+
+  // 3. Let len be ? LengthOfArrayLike(O).
+  Handle<JSArray> jsArr = Handle<JSArray>::dyn_vmcast(O);
+  auto lenRes = lengthOfArrayLike(runtime, O, jsArr);
+  if (LLVM_UNLIKELY(lenRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  uint64_t len = lenRes.getValue();
+
+  // 4. Let A be ArrayCreate(len).
+  auto ARes = JSArray::create(runtime, len, len);
+  if (LLVM_UNLIKELY(ARes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  auto A = ARes.getValue();
+
+  // 6. Let sortedList be ? SortIndexedProperties(obj, len, SortCompare,
+  // skip-holes).
+  auto sortedListRes = sortIndexedProperties(runtime, O, len, compareFn, false);
+  if (LLVM_UNLIKELY(sortedListRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+
+  Handle<> sortedList = runtime.makeHandle(*sortedListRes);
+  auto sortedListArr = Handle<JSArray>::dyn_vmcast(sortedList);
+
+  // 6. Let itemCount be the number of elements in sortedList.
+  auto itemCount = JSArray::getLength(sortedListArr.get(), runtime);
+
+  // 7. Let j be 0.
+  uint64_t j = 0;
+  MutableHandle<> jHandle{runtime};
+  MutableHandle<> valueHandle{runtime};
+
+  // 8. Repeat, while j < itemCount,
+  while (j < itemCount) {
+    jHandle = HermesValue::encodeTrustedNumberValue(j);
+
+    valueHandle = sortedListArr.get()->at(runtime, j).unboxToHV(runtime);
+
+    if (LLVM_UNLIKELY(
+            JSObject::defineOwnComputed(
+                A,
+                runtime,
+                jHandle,
+                DefinePropertyFlags::getDefaultNewPropertyFlags(),
+                valueHandle,
+                PropOpFlags().plusThrowOnError()) ==
+            ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+
+    // 8b. Set j to j + 1.
+    j += 1;
   }
 
   return A.getHermesValue();

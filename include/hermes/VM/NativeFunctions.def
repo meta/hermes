@@ -60,6 +60,7 @@ NATIVE_FUNCTION(arrayPrototypeSplice)
 NATIVE_FUNCTION(arrayPrototypeToReversed)
 NATIVE_FUNCTION(arrayPrototypeToSpliced)
 NATIVE_FUNCTION(arrayPrototypeWith)
+NATIVE_FUNCTION(arrayPrototypeToSorted)
 NATIVE_FUNCTION(asyncFunctionConstructor)
 NATIVE_FUNCTION(atob)
 
