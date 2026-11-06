@@ -683,3 +683,32 @@ vs 80) for a flat score, and demotes 2088 GetById sites on the way.
 DeltaBlue (12 vs 2, 43 demotions) and RayTrace (9 vs 2, 55 demotions)
 also recompile far more often. On RayTrace the gain pays for it; on
 DeltaBlue, it buys nothing measurable.
+
+## Follow-up measurements (2026-10-14, after delivery)
+
+Release x86-64, pinned, interleaved; details on dz `01a13daf`.
+
+**Combined with the `== null` lowering (4f0c853fd), against the
+pre-Richards base 0a2b045ec:** Richards +25.0%, RayTrace +12.0%,
+DeltaBlue +5.2% (noisy), Box2D +1.8%, Splay +1.5%; TypeScript,
+Earley-Boyer, Navier-Stokes, Crypto flat; pdfjs -1.5%.
+
+**pdfjs.** The slowdown is in the VM, not the compiler change. It is
+not recording overhead (no gap with recompiles disabled; ~9.4k
+recording calls per run), budget starvation, or the chain code. About
+half (~0.9%) is the GetById-triggered recompiles (55 vs 17) in
+lukewarm functions; the chains they emit work (521 residual misses in
+the run), but the recompiles cost more than they gain there. The rest
+(~0.8%) persists with the same recompiled functions and identical
+tiers and is unexplained; crossing frequency contributes.
+
+**A miss-count gate on the progress term is the wrong lever.**
+Requiring N misses per shape before it counts as progress: N=2 changes
+nothing measurable; N=32 / N=128 give pdfjs +0.7% / +0.9% but
+TypeScript -0.9% / -1.7% and Richards -5.4% / -11.4%. TypeScript's
+extra recompiles pay off. The progress rule stays as specified; a fix
+for lukewarm functions would need a function-level hotness signal.
+
+**Deferred:** the two demotion bookkeeping items (dz `01a13df8-9739`,
+`01a13df8-974e`) showed no measurable cost and do not change behavior
+the arm64 port depends on.
