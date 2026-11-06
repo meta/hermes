@@ -662,6 +662,29 @@ void Emitter::callRuntimeWithSavedIPIndirect(
   }
 }
 
+void Emitter::callRuntimeWithSavedIPIndirect(
+    const x86::Mem &slot,
+    const char *name) {
+  assert(
+      !(slot.hasBaseReg() && slot.baseId() == xScratch.id()) &&
+      !(slot.hasIndexReg() && slot.indexId() == xScratch.id()) &&
+      "saving the IP clobbers xScratch");
+  // Save the current IP in the runtime.
+  getBytecodeIP(xScratch);
+  a.mov(x86::qword_ptr(xRuntime, RuntimeOffsets::currentIP), xScratch);
+
+  // Call through the slot. See callRuntime() for the alignment contract.
+  assert(rspDelta_ % 16 == 0 && "rsp not 16-byte aligned at call emission");
+  comment("// call %s", name);
+  a.call(slot);
+
+  if (emitAsserts_) {
+    // Invalidate the current IP to make sure it is set before the next call.
+    a.mov(xScratch, asmjit::Imm(Runtime::kInvalidCurrentIP));
+    a.mov(x86::qword_ptr(xRuntime, RuntimeOffsets::currentIP), xScratch);
+  }
+}
+
 void Emitter::callRuntimeIndirect(uint64_t slotAddr, const char *name) {
   // See callRuntime(): the same rspDelta_/alignment contract applies to
   // every call emission, direct or indirect.

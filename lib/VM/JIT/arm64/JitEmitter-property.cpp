@@ -2067,7 +2067,7 @@ void Emitter::getByIndexImpl(FR frRes, FR frSource, uint32_t key) {
   // The GetByIndex instruction's own bytecode offset, unique within this
   // function and stable across recompiles: identifies this site's entry in
   // versionData_'s consumer records (see JitFunctionData.h). GetByIndex is
-  // a distinct opcode from GetByVal, so sharing the byValSites deque with
+  // a distinct opcode from GetByVal, so sharing byValSites with
   // the ByVal sites can never collide.
   uint32_t siteId =
       (uint32_t)((const char *)emittingIP - (const char *)codeBlock_->begin());

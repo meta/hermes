@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes -fno-inline -Xjit -Xjit-threshold=4 -Xjit-recompile-threshold=64 -Xjit-max-recompiles=1 -Xdump-jitcode=2 %s | %FileCheck %s
+// RUN: %hermes -fno-inline -Xjit -Xjit-threshold=4 -Xjit-recompile-threshold=64 -Xjit-max-recompiles=1 -Xdump-jitcode=2 %s | %FileCheck --check-prefixes=CHECK,%jit_arch_prefix %s
 // REQUIRES: jit
 // UNSUPPORTED: handle_san || gc_malloc
 // ById inline-cache warm/cold timing (JIT cold ById sites count, and
@@ -42,6 +42,10 @@ print(o.q);
 // warms) and the not-yet-taken `o.q` write. `o.p`'s read cache warms on
 // the first call, so it is not counted.
 // CHECK-NEXT: JIT cold ById sites: 2
+// The warm `o.p` read got the single-shape specialization, which the
+// body records as an emitted GetById shape: one recorded site. Only
+// x86-64 records GetById shapes and prints this line, hence X86-NEXT.
+// X86-NEXT: JIT ById sites: 1 recorded, 0 polymorphic, 0 megamorphic
 // The budget must survive all of phase one -- bound the -NOT up to
 // 'late phase' so a premature version-2 body (the pre-fix bug: the
 // unrelated warm `o.p` read cache satisfying the old progress check)
@@ -53,6 +57,14 @@ print(o.q);
 // actually changed, and the budget (of 1) is spent installing version 2.
 // CHECK: JIT compilation of FunctionID {{[0-9]+}}, 'f' (version 2)
 // CHECK: JIT successfully compiled FunctionID {{[0-9]+}}, 'f' (version 2)
-// Version 2 specializes `o.q`; only the setter site remains cold.
+// Version 2 specializes `o.q`; only the setter site remains cold. The
+// recorded ById site is still the `o.p` read (`o.q` is a write). Its
+// shape, emitted by version 1 and carried forward, is a live entry, so
+// version 2 emits it as a one-entry polymorphic chain in place of the
+// single-shape specialization (spec "Tier selection"); the dump line
+// counts that as polymorphic. The progress check is unaffected: that
+// entry is already emitted, so it is not a progress source in phase
+// one.
 // CHECK-NEXT: JIT cold ById sites: 1
+// X86-NEXT: JIT ById sites: 1 recorded, 1 polymorphic, 0 megamorphic
 // CHECK-NEXT: 2

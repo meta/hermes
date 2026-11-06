@@ -13,10 +13,13 @@
 #include "hermes/Support/ErrorHandling.h"
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/CodeBlock.h"
+#include "hermes/VM/HiddenClass.h"
 #include "hermes/VM/Interpreter.h"
 #include "hermes/VM/JIT/JitFunctionData.h"
 #include "hermes/VM/JSError.h"
 #include "hermes/VM/JSObject-inline.h"
+#include "hermes/VM/JSObject.h"
+#include "hermes/VM/PropertyCache.h"
 #include "hermes/VM/RuntimeModule-inline.h"
 #include "hermes/VM/RuntimeModule.h"
 #include "hermes/VM/StackFrame-inline.h"
@@ -534,6 +537,136 @@ SHLegacyValue _jit_get_by_index(
     getRuntime(shr).getJITContext().considerRecompile(getRuntime(shr), vd);
   }
   return _sh_ljs_get_by_index_rjs(shr, source, key);
+}
+
+bool isEligibleByIdShape(HiddenClass *objClass, HiddenClass *protoClass) {
+  if (!protoClass)
+    return !objClass->isDictionaryNoCache();
+  return !objClass->isDictionary() && !protoClass->isDictionaryNoCache();
+}
+
+bool addByIdShape(
+    JitByIdSiteRecord &site,
+    CompressedPointer objClass,
+    CompressedPointer protoClass,
+    uint16_t slot,
+    bool isProto,
+    bool emitted) {
+  JitByIdShapeEntry *dead = nullptr;
+  for (auto &e : site.entries) {
+    if (!e.isLive()) {
+      if (!dead)
+        dead = &e;
+      continue;
+    }
+    if (e.isProto == isProto && e.objClass == objClass &&
+        (!isProto || e.protoClass == protoClass) && e.slot == slot) {
+      if (emitted)
+        e.emitted = 1;
+      return false;
+    }
+  }
+  JitByIdShapeEntry ne;
+  ne.objClass = objClass;
+  if (isProto)
+    ne.protoClass = protoClass;
+  ne.slot = slot;
+  ne.isProto = isProto;
+  ne.emitted = emitted;
+  if (dead) {
+    // Overwrites every field, including emitted and unemittable.
+    *dead = ne;
+    return true;
+  }
+  if (site.entries.size() < JitByIdSiteRecord::kMaxEntries) {
+    site.entries.push_back(ne);
+    return true;
+  }
+  if (!site.megamorphic) {
+    site.megamorphic = 1;
+    return true;
+  }
+  return false;
+}
+
+/// Step 3 of the recording helper: record what \p shEntry now describes
+/// for the object in \p source. Allocates nothing on the GC heap.
+static void recordByIdObservation(
+    Runtime &runtime,
+    JitByIdSiteRecord &site,
+    const SHLegacyValue *source,
+    SHReadPropertyCacheEntry *shEntry) {
+  NoAllocScope noAlloc(runtime);
+  if (!site.seen) {
+    site.seen = 1;
+    site.changed = 1;
+  }
+  HermesValue src = *toPHV(source);
+  if (!src.isObject())
+    return;
+  auto *entry = reinterpret_cast<ReadPropertyCacheEntry *>(shEntry);
+  JSObject *obj = vmcast<JSObject>(src);
+  CompressedPointer now = obj->getClassGCPtr();
+  CompressedPointer clazz = entry->clazz.getNoBarrierUnsafe();
+  bool changed;
+  if (clazz && clazz == now) {
+    // Own hit. Takes precedence over negMatchClazz, which the own fill
+    // does not clear (StaticH.cpp, _sh_ljs_get_by_id_rjs).
+    if (!isEligibleByIdShape(obj->getClass(runtime), nullptr))
+      return;
+    changed = addByIdShape(
+        site, now, CompressedPointer(nullptr), entry->getSlot(), false, false);
+  } else if (now && entry->negMatchClazz.getNoBarrierUnsafe() == now) {
+    JSObject *parent = obj->getParent(runtime);
+    if (!clazz || !parent ||
+        CompressedPointer(parent->getClassGCPtr()) != clazz)
+      return;
+    if (!isEligibleByIdShape(obj->getClass(runtime), parent->getClass(runtime)))
+      return;
+    changed = addByIdShape(site, now, clazz, entry->getSlot(), true, false);
+  } else {
+    return;
+  }
+  if (changed)
+    site.changed = 1;
+}
+
+LLVM_ATTRIBUTE_NOINLINE
+SHLegacyValue _jit_get_by_id(
+    SHRuntime *shr,
+    const SHLegacyValue *source,
+    SHSymbolID symID,
+    SHReadPropertyCacheEntry *propCacheEntry,
+    SHJitVersionData *versionData,
+    SHJitByIdSiteRecord *siteRecord) {
+  Runtime &runtime = getRuntime(shr);
+  JitVersionData *vd = reinterpret_cast<JitVersionData *>(versionData);
+  // vd owns the record, and a version record is never freed while its
+  // body can run (retirement keeps it), so the pointer stays valid
+  // across step 1 even if a getter retires this body.
+  auto *site = reinterpret_cast<JitByIdSiteRecord *>(siteRecord);
+  // Step 1: forward. A throw longjmps past this frame, skipping
+  // destructors, so no LocalsRAII may be registered across the call: a
+  // stale one would leave runtime.vmLocals pointing at a dead frame.
+  SHLegacyValue res = _sh_ljs_get_by_id_rjs(shr, source, symID, propCacheEntry);
+  // Root the result at once (nothing allocates between the return and
+  // here); step 4 can compile and collect.
+  struct : public Locals {
+    PinnedValue<> result;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.result = HermesValue::fromRaw(res.raw);
+
+  // Step 2: staleness. A getter run above may have retired this body,
+  // or a demotion pass may have flipped the site.
+  JitFunctionData *jd = vd->codeBlock->getJitData();
+  if (vd == jd->current.get() && site->helper == (void *)_jit_get_by_id)
+    recordByIdObservation(runtime, *site, source, propCacheEntry);
+
+  // Step 4: count; a crossing may recompile (and collect).
+  if (LLVM_UNLIKELY(++vd->declineCount >= vd->declineThreshold))
+    runtime.getJITContext().considerRecompile(runtime, vd);
+  return lv.result.getHermesValue();
 }
 
 #ifdef HERMESVM_PROFILER_BB

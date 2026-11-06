@@ -348,6 +348,37 @@ void CodeBlock::markWeakElementsInCaches(
     acceptor.acceptWeak(prop.clazz);
     acceptor.acceptWeakSym(prop.nameVal);
   }
+#if HERMESVM_JIT
+  // Polymorphic GetById shape records hold weak hidden-class references.
+  // Only the current body's records and a compile candidate's are read
+  // again; retired records are cleared at retirement.
+  if (JitFunctionData *jd = jitData_.get()) {
+    auto markById = [&acceptor](JitVersionData *vd) {
+      if (!vd || !vd->consumerRecords)
+        return;
+      for (auto &site : vd->consumerRecords->byIdSites) {
+        for (auto &e : site->entries) {
+          acceptor.acceptWeak(e.objClass);
+          acceptor.acceptWeak(e.protoClass);
+        }
+      }
+    };
+    markById(jd->current.get());
+    markById(jd->compiling);
+#ifndef NDEBUG
+    // Retired records are not traced, which is sound only because they
+    // hold no entries: retirement clears them and the recording helper's
+    // staleness gate keeps them clear (spec: "GC"). Check it on every
+    // collection, so a violation fails loudly in Debug builds.
+    for (auto &vd : jd->retired) {
+      if (!vd->consumerRecords)
+        continue;
+      for (auto &site : vd->consumerRecords->byIdSites)
+        assert(site->entries.empty() && "retired ById record repopulated");
+    }
+#endif
+  }
+#endif
 }
 
 uint32_t CodeBlock::getVirtualOffset() const {

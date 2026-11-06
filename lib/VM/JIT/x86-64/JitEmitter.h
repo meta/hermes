@@ -544,11 +544,22 @@ class Emitter {
 
   /// \return the candidate version record's ByVal site entry for
   /// \p siteId, creating the records and/or entry if absent. The
-  /// entry's address is stable (deque) and may be embedded in code.
+  /// entry is its own allocation, so its address is stable and may be
+  /// embedded in code.
   JitByValSiteRecord &byValSiteRecord(uint32_t siteId) {
     if (!versionData_->consumerRecords)
       versionData_->consumerRecords = std::make_unique<JitConsumerRecords>();
     return versionData_->consumerRecords->findOrCreateByValSite(siteId);
+  }
+
+  /// \return the candidate version record's ById site entry for
+  /// \p siteId, creating the records and/or entry if absent. The
+  /// entry is its own allocation, so its address is stable and may be
+  /// embedded in code.
+  JitByIdSiteRecord &byIdSiteRecord(uint32_t siteId) {
+    if (!versionData_->consumerRecords)
+      versionData_->consumerRecords = std::make_unique<JitConsumerRecords>();
+    return versionData_->consumerRecords->findOrCreateByIdSite(siteId);
   }
 
   /// Create an Emitter, but do not emit any actual code.
@@ -967,9 +978,10 @@ class Emitter {
       FR frReceiver,
       bool isStrict);
 
-#define DECL_GET_BY_ID(methodName, commentStr, shFn)                           \
+#define DECL_GET_BY_ID(methodName, commentStr, shFn, recording)                \
   void methodName(FR frRes, SHSymbolID symID, FR frSource, uint8_t cacheIdx) { \
-    getByIdImpl(frRes, symID, frSource, cacheIdx, commentStr, shFn, #shFn);    \
+    getByIdImpl(                                                               \
+        frRes, symID, frSource, cacheIdx, commentStr, shFn, #shFn, recording); \
   }
 
   void getByIdWithReceiver(
@@ -980,8 +992,8 @@ class Emitter {
       uint8_t cacheIdx);
   void getByValWithReceiver(FR frRes, FR frSource, FR frKey, FR frReceiver);
 
-  DECL_GET_BY_ID(getById, "getById", _sh_ljs_get_by_id_rjs)
-  DECL_GET_BY_ID(tryGetById, "tryGetById", _sh_ljs_try_get_by_id_rjs)
+  DECL_GET_BY_ID(getById, "getById", _sh_ljs_get_by_id_rjs, true)
+  DECL_GET_BY_ID(tryGetById, "tryGetById", _sh_ljs_try_get_by_id_rjs, false)
 
 #define DECL_PUT_BY_ID(methodName, strictMode, tryProp)                   \
   void methodName(                                                        \
@@ -1552,6 +1564,9 @@ class Emitter {
   void getByValImpl(FR frRes, FR frSource, FR frKey);
 
   class GetByIdImpl;
+  /// Emit a GetById-style read through the read property cache.
+  /// \param recording true for the GetById family: record shapes through
+  ///   the site's helper slot.
   void getByIdImpl(
       FR frRes,
       SHSymbolID symID,
@@ -1563,7 +1578,8 @@ class Emitter {
           const SHLegacyValue *source,
           SHSymbolID symID,
           SHReadPropertyCacheEntry *propCacheEntry),
-      const char *shImplName);
+      const char *shImplName,
+      bool recording);
 
 #if HERMES_JIT_INLINE_SAFE_STORE
   /// Emit an inline store of the already-encoded slot value in \p shv to the
@@ -2065,7 +2081,7 @@ class Emitter {
   ///
   /// Tier selection reads the PRIOR version's record for this site, with
   /// the LOAD predicate, exactly as getByValImpl() does; GetByIndex sites
-  /// join the same JitConsumerRecords::byValSites deque (siteId is the
+  /// join the same JitConsumerRecords::byValSites records (siteId is the
   /// bytecode offset, and GetByIndex is a distinct opcode, so no
   /// collision with a ByVal site is possible).
   void getByIndexImpl(FR frRes, FR frSource, uint32_t key);
@@ -2270,6 +2286,13 @@ class Emitter {
   /// both possible callees follow the ordinary saved-IP call protocol.
   /// \p name is used only for the disassembly comment.
   void callRuntimeWithSavedIPIndirect(uint64_t slotAddr, const char *name);
+
+  /// Variant of callRuntimeWithSavedIPIndirect that calls through the
+  /// function pointer at \p slot, a memory operand whose base register
+  /// the caller has already loaded (e.g. with a pointer that is also an
+  /// argument). The base must not be xScratch, which saving the IP
+  /// clobbers.
+  void callRuntimeWithSavedIPIndirect(const x86::Mem &slot, const char *name);
 
   /// Indirect sibling of callRuntime: emits
   /// `mov xScratch, slotAddr; call qword ptr [xScratch]`, calling

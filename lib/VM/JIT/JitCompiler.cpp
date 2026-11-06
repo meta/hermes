@@ -23,6 +23,8 @@
 #include "hermes/VM/RuntimeModule.h"
 #include "hermes/VM/StringPrimitiveValueDenseMapInfo-inline.h"
 
+#include "llvh/ADT/iterator.h"
+
 #define DEBUG_TYPE "jit"
 
 namespace hermes {
@@ -127,21 +129,44 @@ class JITContext::Compiler {
     // taPoisoned and the helper slot's VALUE also carry forward: a
     // demoted site stays demoted in the candidate, and a
     // still-recording value is fine to copy since the emitter only
-    // initializes null slots. recordingByValSites is NOT copied --
+    // initializes null slots. recordingSites is NOT copied --
     // it is computed at install.
     if (JitFunctionData *jd = codeBlock->getJitData()) {
       if (jd->current && jd->current->consumerRecords) {
         auto copy = std::make_unique<JitConsumerRecords>();
+        // Deep copies: the candidate's code embeds the addresses of its
+        // own records, never of the replaced version's.
         for (const auto &s : jd->current->consumerRecords->byValSites) {
-          JitByValSiteRecord r = s;
-          r.specializedTAKind = JitByValSiteRecord::kTAKindNone;
-          r.changed = 0;
-          r.unchangedCrossings = 0;
-          copy->byValSites.push_back(r);
+          auto r = std::make_unique<JitByValSiteRecord>(*s);
+          r->specializedTAKind = JitByValSiteRecord::kTAKindNone;
+          r->changed = 0;
+          r->unchangedCrossings = 0;
+          copy->byValSites.push_back(std::move(r));
+        }
+        for (const auto &s : jd->current->consumerRecords->byIdSites) {
+          auto r = std::make_unique<JitByIdSiteRecord>(*s);
+          r->changed = 0;
+          r->unchangedCrossings = 0;
+          r->chainEmitted = 0;
+          for (auto &e : r->entries)
+            e.unemittable = 0;
+          copy->byIdSites.push_back(std::move(r));
         }
         candidateVD_->consumerRecords = std::move(copy);
       }
     }
+    // Publish the candidate so a GC during emission traces the weak
+    // shape references it carries (spec: "GC").
+    codeBlock->ensureJitData(jc.getMaxRecompiles())->compiling =
+        candidateVD_.get();
+  }
+
+  /// Withdraw the candidate from GC tracing on every exit path,
+  /// including the longjmp failure path, which destroys this object
+  /// normally.
+  ~Compiler() {
+    if (JitFunctionData *jd = codeBlock_->getJitData())
+      jd->compiling = nullptr;
   }
 
   /// Compile the codeblock that this object was instantiated for. On failure,
@@ -275,12 +300,33 @@ static bool byValShapeProgress(const JitVersionData *vd) {
   const JitConsumerRecords *cr = vd->consumerRecords.get();
   if (!cr)
     return false;
-  for (const auto &s : cr->byValSites) {
+  for (const auto &s : llvh::make_pointee_range(cr->byValSites)) {
     if (s.taKind != JitByValSiteRecord::kTAKindNone &&
         isJitSupportedTypedArrayKindForSomeByValOp((CellKind)s.taKind) &&
         s.taKind != s.specializedTAKind)
       return true;
   }
+  return false;
+}
+
+/// \return true if \p s holds a live shape that the owning body did not
+/// emit and that a compile could still emit.
+static bool byIdSiteCanProgress(const JitByIdSiteRecord &s) {
+  for (const auto &e : s.entries)
+    if (e.isLive() && !e.emitted && !e.unemittable)
+      return true;
+  return false;
+}
+
+/// \return true if some GetById site can progress (spec: "Progress
+/// term").
+static bool byIdShapeProgress(const JitVersionData *vd) {
+  const JitConsumerRecords *cr = vd->consumerRecords.get();
+  if (!cr)
+    return false;
+  for (const auto &s : llvh::make_pointee_range(cr->byIdSites))
+    if (byIdSiteCanProgress(s))
+      return true;
   return false;
 }
 
@@ -290,12 +336,13 @@ static bool byValShapeProgress(const JitVersionData *vd) {
 /// crossing is a "changed" crossing, so demotion lands at the fourth.
 static constexpr uint8_t kDemotionStableCrossings = 3;
 
-/// \return true if \p h is one of the recording ByVal helpers (put,
-/// get, or get-by-index), i.e. the site has not been demoted yet.
+/// \return true if \p h is one of the recording helpers (ByVal put,
+/// get, or get-by-index, or GetById), i.e. the site has not been
+/// demoted yet.
 static bool isRecordingHelper(void *h) {
   return h == (void *)_jit_put_by_val_loose ||
       h == (void *)_jit_put_by_val_strict || h == (void *)_jit_get_by_val ||
-      h == (void *)_jit_get_by_index;
+      h == (void *)_jit_get_by_index || h == (void *)_jit_get_by_id;
 }
 
 /// Flip \p s to the plain helper matching its recording helper: get
@@ -323,16 +370,24 @@ static void demoteSite(JitByValSiteRecord &s) {
 /// sweep a long-running old activation would record forever, since its
 /// own threshold crossings die at the staleness gate before any demotion
 /// pass could run. These flips are bookkeeping rather than policy
-/// decisions, so they deliberately do not increment NumByValDemotions.
+/// decisions, so they deliberately do not increment NumByValDemotions or
+/// NumByIdDemotions.
 static void demoteAllSitesOnRetirement(JitVersionData *vd) {
   JitConsumerRecords *cr = vd->consumerRecords.get();
   if (!cr)
     return;
-  for (auto &s : cr->byValSites) {
+  for (auto &s : llvh::make_pointee_range(cr->byValSites)) {
     if (isRecordingHelper(s.helper))
       demoteSite(s);
   }
-  cr->recordingByValSites = 0;
+  for (auto &s : llvh::make_pointee_range(cr->byIdSites)) {
+    if (s.helper == (void *)_jit_get_by_id)
+      s.helper = (void *)_sh_ljs_get_by_id_rjs;
+    // Never read again; dropping the entries means a retired record's
+    // weak references need no tracing (spec: "GC").
+    s.entries.clear();
+  }
+  cr->recordingSites = 0;
 }
 
 void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
@@ -352,9 +407,9 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
   // it is precisely when no recompile can ever happen again that a still
   // recording site is paying for knowledge nobody can act on.
   if (JitConsumerRecords *cr = vd->consumerRecords.get()) {
-    if (cr->recordingByValSites != 0) {
+    if (cr->recordingSites != 0) {
       bool actionablePossible = enabled_ && data->recompileBudget != 0;
-      for (auto &s : cr->byValSites) {
+      for (auto &s : llvh::make_pointee_range(cr->byValSites)) {
         if (!isRecordingHelper(s.helper))
           continue;
         // An empty record means the site's helper has not been called at
@@ -371,9 +426,23 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
           s.unchangedCrossings = 0;
         } else if (++s.unchangedCrossings >= kDemotionStableCrossings) {
           demoteSite(s);
-          --cr->recordingByValSites;
+          --cr->recordingSites;
           if (counters_.get())
             ++counters_.get()[(unsigned)JitCounter::NumByValDemotions];
+        }
+        s.changed = 0;
+      }
+      for (auto &s : llvh::make_pointee_range(cr->byIdSites)) {
+        if (s.helper != (void *)_jit_get_by_id)
+          continue;
+        bool canProgress = actionablePossible && byIdSiteCanProgress(s);
+        if (!s.seen || canProgress || s.changed) {
+          s.unchangedCrossings = 0;
+        } else if (++s.unchangedCrossings >= kDemotionStableCrossings) {
+          s.helper = (void *)_sh_ljs_get_by_id_rjs;
+          --cr->recordingSites;
+          if (counters_.get())
+            ++counters_.get()[(unsigned)JitCounter::NumByIdDemotions];
         }
         s.changed = 0;
       }
@@ -381,10 +450,11 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
   }
   if (!enabled_ || !data->recompileBudget)
     return;
-  // Progress check, two sources, either qualifies: a specific cold
-  // ById site whose cache has since warmed, or a ByVal site whose
-  // observed shape the current body's tiers do not cover. The
-  // recompile emits everything both sources know.
+  // Progress check, three sources, any qualifies: a specific cold
+  // ById site whose cache has since warmed, a ByVal site whose
+  // observed shape the current body's tiers do not cover, or a GetById
+  // site holding a live shape the current body did not emit. The
+  // recompile emits everything all of them know.
   bool progress = false;
   if (vd->coldByIdSites != 0) {
     // Has one of the SPECIFIC sites the most recent compile recorded as
@@ -413,6 +483,8 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
   }
   if (!progress)
     progress = byValShapeProgress(vd);
+  if (!progress)
+    progress = byIdShapeProgress(vd);
   if (!progress)
     return;
   recompile(runtime, codeBlock);
@@ -480,7 +552,8 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
   // compile, otherwise one past the version installed by the compile
   // that is being superseded (see JITContext::recompile).
   JitFunctionData *priorData = codeBlock_->getJitData();
-  unsigned version = priorData ? priorData->version + 1u : 1u;
+  unsigned version =
+      priorData && priorData->current ? priorData->version + 1u : 1u;
 
   if (jc_.dumpJITCode_ & (DumpJitCode::Code | DumpJitCode::CompileStatus)) {
     funcName_ = codeBlock_->getNameString();
@@ -542,10 +615,12 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
 
   JITCompiledFunctionPtr fn = em_.addToRuntime(jc_.impl_->jr);
 
-  // Install: create-or-get the function metadata (budget set on first
-  // allocation only), fill the candidate record, retire the previous
+  // Install: get the function metadata (the Compiler constructor
+  // already created it, setting the budget, when this function's first
+  // compile started), fill the candidate record, retire the previous
   // current, publish. Shared by first compiles and recompiles.
   JitFunctionData *jitData = codeBlock_->ensureJitData(jc_.getMaxRecompiles());
+  jitData->compiling = nullptr;
   candidateVD_->coldWriteCacheIdxs = std::move(em_.coldWriteCacheIdxs_);
   candidateVD_->coldReadCacheIdxs = std::move(em_.coldReadCacheIdxs_);
   size_t coldTotal = candidateVD_->coldWriteCacheIdxs.size() +
@@ -560,9 +635,11 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
   // the demotion pass constant-time once every site is demoted.
   if (JitConsumerRecords *cr = candidateVD_->consumerRecords.get()) {
     uint32_t recording = 0;
-    for (const auto &s : cr->byValSites)
+    for (const auto &s : llvh::make_pointee_range(cr->byValSites))
       recording += isRecordingHelper(s.helper);
-    cr->recordingByValSites = recording;
+    for (const auto &s : llvh::make_pointee_range(cr->byIdSites))
+      recording += isRecordingHelper(s.helper);
+    cr->recordingSites = recording;
   }
   if (jitData->current) {
     demoteAllSitesOnRetirement(jitData->current.get());
@@ -620,7 +697,7 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
     // the typed-array tier. This is what makes tier selection pinnable.
     if (auto *cr = jitData->current->consumerRecords.get()) {
       size_t observed = 0, specialized = 0;
-      for (const auto &s : cr->byValSites) {
+      for (const auto &s : llvh::make_pointee_range(cr->byValSites)) {
         if (s.jsArraySeen || s.otherSeen ||
             s.taKind != JitByValSiteRecord::kTAKindNone)
           ++observed;
@@ -630,6 +707,22 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
       if (observed) {
         llvh::outs() << "JIT ByVal sites: " << observed << " observed, "
                      << specialized << " specialized\n";
+      }
+      // The ById shape records: sites holding a live shape or marked
+      // megamorphic, and how many of them this body gave a chain.
+      size_t recorded = 0, poly = 0, mega = 0;
+      for (const auto &s : llvh::make_pointee_range(cr->byIdSites)) {
+        bool live = false;
+        for (const auto &e : s.entries)
+          live |= e.isLive();
+        if (live || s.megamorphic)
+          ++recorded;
+        poly += s.chainEmitted;
+        mega += s.megamorphic;
+      }
+      if (recorded) {
+        llvh::outs() << "JIT ById sites: " << recorded << " recorded, " << poly
+                     << " polymorphic, " << mega << " megamorphic\n";
       }
     }
   }

@@ -14,17 +14,19 @@
 
 #include "hermes/VM/CellKind.h"
 #include "hermes/VM/HermesValue.h"
+#include "hermes/VM/WeakRoot.h"
 #include "llvh/ADT/SmallVector.h"
 
 #include <cstdint>
-#include <deque>
 #include <memory>
+#include <vector>
 
 namespace hermes {
 namespace vm {
 
 class Runtime;
 class CodeBlock;
+class HiddenClass;
 typedef HermesValue (*JITCompiledFunctionPtr)(Runtime *runtime);
 
 /// True for the typed-array kinds the inline PutByVal store tier can
@@ -101,27 +103,120 @@ struct JitByValSiteRecord {
   void *helper = nullptr;
 };
 
-/// The version-local consumer feedback records, owned by (and destroyed
-/// with) the JitVersionData. byValSites is a deque, NOT a vector:
-/// emitted code embeds the address of an entry's helper slot, so
-/// entries must never relocate once created. Lookup is a linear scan;
-/// functions have a handful of ByVal sites.
-struct JitConsumerRecords {
-  std::deque<JitByValSiteRecord> byValSites;
+/// One observed GetById shape: a receiver class and, for a prototype
+/// hit, the immediate prototype's class, plus the slot to load. See
+/// the 2026-10-14 polymorphic GetById spec, "Records".
+struct JitByIdShapeEntry {
+  /// The receiver's hidden class.
+  WeakRoot<HiddenClass> objClass{nullptr};
+  /// The immediate prototype's hidden class; meaningful only if isProto.
+  WeakRoot<HiddenClass> protoClass{nullptr};
+  /// Slot in the receiver (own entry) or in the prototype.
+  uint16_t slot = 0;
+  /// Set when recorded, never changed: a prototype entry whose
+  /// protoClass the GC cleared is dead, never an own entry.
+  uint8_t isProto = 0;
+  /// The owning body emitted an inline check for this entry. Carried
+  /// forward: emitted classes are pinned by their lazy JIT IDs and every
+  /// later version emits the entry again.
+  uint8_t emitted = 0;
+  /// A compile could not emit this entry (no lazy JIT ID). Never
+  /// progress; reset on carry-forward.
+  uint8_t unemittable = 0;
 
-  /// Number of sites whose helper slot still holds a recording
-  /// helper. Gates the demotion pass constant-time once zero. 32-bit:
-  /// site counts are bounded by bytecode size, which is 32-bit.
-  uint32_t recordingByValSites = 0;
+  /// Default: an empty, dead entry.
+  JitByIdShapeEntry() = default;
+  /// Copy every field. Spelled out because CompressedPointer deletes its
+  /// copy assignment (CompressedPointer.h), so WeakRoot members make the
+  /// implicit operations ill-formed; copying a weak root needs no
+  /// barrier (it is "just moved around", WeakRoot.h).
+  JitByIdShapeEntry(const JitByIdShapeEntry &other) {
+    *this = other;
+  }
+  /// See the copy constructor.
+  JitByIdShapeEntry &operator=(const JitByIdShapeEntry &other) {
+    objClass = other.objClass.getNoBarrierUnsafe();
+    protoClass = other.protoClass.getNoBarrierUnsafe();
+    slot = other.slot;
+    isProto = other.isProto;
+    emitted = other.emitted;
+    unemittable = other.unemittable;
+    return *this;
+  }
+
+  /// \return true if every class this entry needs is still alive.
+  bool isLive() const {
+    return objClass && (!isProto || protoClass);
+  }
+};
+
+/// One GetById site's observed shapes and what the owning body emitted
+/// for it. _jit_get_by_id records observed shapes and sets seen and
+/// changed. The emitter also adds entries: the read cache's current
+/// shape, and the shapes it emits, marked emitted. Both add through
+/// addByIdShape, so either can set megamorphic.
+struct JitByIdSiteRecord {
+  /// Maximum number of shapes kept per site.
+  static constexpr unsigned kMaxEntries = 4;
+
+  /// Bytecode offset of the GetById instruction.
+  uint32_t siteId;
+  /// Observed shapes, at most kMaxEntries; dead entries are reused.
+  llvh::SmallVector<JitByIdShapeEntry, kMaxEntries> entries;
+  /// The recording helper completed at least one call here. The
+  /// demotion rule's "observed" test.
+  uint8_t seen = 0;
+  /// A distinct live shape arrived while entries was full.
+  uint8_t megamorphic = 0;
+  /// Same meaning as JitByValSiteRecord::changed.
+  uint8_t changed = 0;
+  /// Same meaning as JitByValSiteRecord::unchangedCrossings.
+  uint8_t unchangedCrossings = 0;
+  /// The owning body emitted a polymorphic chain here. Emitted-tier
+  /// field: reset on carry-forward; feeds the dump line only.
+  uint8_t chainEmitted = 0;
+  /// Per-site mutable helper slot: _jit_get_by_id while recording,
+  /// _sh_ljs_get_by_id_rjs after demotion. Never flipped back.
+  void *helper = nullptr;
+};
+
+/// The version-local consumer feedback records, owned by (and destroyed
+/// with) the JitVersionData. Each site record is its own allocation:
+/// emitted code embeds the address of a record (GetById) or of its
+/// helper slot (ByVal), so a record must never move once created, and
+/// a vector of owning pointers keeps that while costing no heap memory
+/// when empty. Lookup is a linear scan, done at emission and by the
+/// ByVal recording helpers; functions have a handful of sites.
+struct JitConsumerRecords {
+  /// ByVal site records.
+  std::vector<std::unique_ptr<JitByValSiteRecord>> byValSites;
+
+  /// GetById site records.
+  std::vector<std::unique_ptr<JitByIdSiteRecord>> byIdSites;
+
+  /// Number of ByVal and ById sites whose helper slot still holds a
+  /// recording helper. Gates the demotion pass constant-time once zero.
+  /// 32-bit: site counts are bounded by bytecode size, which is 32-bit.
+  uint32_t recordingSites = 0;
 
   /// \return the entry for \p siteId, creating it if absent.
   JitByValSiteRecord &findOrCreateByValSite(uint32_t siteId) {
     for (auto &s : byValSites)
-      if (s.siteId == siteId)
-        return s;
-    byValSites.emplace_back();
-    byValSites.back().siteId = siteId;
-    return byValSites.back();
+      if (s->siteId == siteId)
+        return *s;
+    byValSites.push_back(std::make_unique<JitByValSiteRecord>());
+    byValSites.back()->siteId = siteId;
+    return *byValSites.back();
+  }
+
+  /// \return the ById record for \p siteId, creating it if absent.
+  JitByIdSiteRecord &findOrCreateByIdSite(uint32_t siteId) {
+    for (auto &s : byIdSites)
+      if (s->siteId == siteId)
+        return *s;
+    byIdSites.push_back(std::make_unique<JitByIdSiteRecord>());
+    byIdSites.back()->siteId = siteId;
+    return *byIdSites.back();
   }
 };
 
@@ -164,7 +259,7 @@ struct JitVersionData {
   /// because the cache was cold. Same role as coldWriteCacheIdxs, for
   /// GetById sites.
   llvh::SmallVector<uint8_t, 4> coldReadCacheIdxs;
-  /// Version-local consumer feedback (PutByVal per-site shape
+  /// Version-local consumer feedback (ByVal and GetById per-site
   /// records). Null until the first entry is created; destroyed with
   /// this record, which outlives every possible execution of the body.
   std::unique_ptr<JitConsumerRecords> consumerRecords{};
@@ -176,8 +271,10 @@ struct JitVersionData {
 };
 
 /// Per-function JIT metadata supporting recompilation: the control state
-/// that spans versions, plus the per-version records. Allocated lazily
-/// when a function is first JIT-compiled; owned by the CodeBlock; see
+/// that spans versions, plus the per-version records. Owned by the
+/// CodeBlock. The Compiler constructor allocates it when a compile of the
+/// function first starts; if that compile fails, it stays, with no
+/// `current`. See
 /// doc/superpowers/specs/2026-09-04-jit-recompilation-design.md and
 /// doc/superpowers/specs/2026-09-07-jit-version-data-design.md.
 struct JitFunctionData {
@@ -202,6 +299,12 @@ struct JitFunctionData {
   /// itself is owned by JITContext::Impl and is never freed (see the
   /// reclamation dz issue).
   llvh::SmallVector<std::unique_ptr<JitVersionData>, 1> retired{};
+  /// The candidate record of a compile in progress for this function,
+  /// or null. Set by the Compiler constructor, cleared at install and
+  /// by the Compiler destructor. CodeBlock::markWeakElementsInCaches
+  /// traces its ById records, because a compile can collect
+  /// (initHCLazyIDMayAlloc) while the candidate is not yet `current`.
+  JitVersionData *compiling = nullptr;
 
   /// \param budget initial recompile budget (from -Xjit-max-recompiles).
   explicit JitFunctionData(uint8_t budget) : recompileBudget(budget) {}

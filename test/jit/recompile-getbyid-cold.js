@@ -15,8 +15,9 @@
 // pre-existing ById cache warm/cold timing divergence recompile-cold-
 // sites.js is gated for, and unrelated to anything here. No handle_san
 // gate: unlike recompile-byid-warm.js this file pins no PUT-side
-// emission, and all four RUN lines were verified green five times over
-// on a HERMESVM_SANITIZE_HANDLES tree.
+// emission. All four RUN lines were verified green five times over on
+// a HERMESVM_SANITIZE_HANDLES tree before `warmed`'s read became a
+// TryGetById; not re-verified since.
 
 // That a GetById site with a COLD read cache is reported as a cold ById
 // site, and that the report is what a later recompile acts on.
@@ -46,33 +47,45 @@
 // -Xjit=force a function is compiled on entry, before it has ever run,
 // which is what leaves the caches cold at compile time.
 //
-// warmed is the recompile. Its GetById site is cold at first compile
-// like the others', and warms on the very first call; the crossings
-// that make the JIT reconsider it come from an UNRELATED site in the
-// same body -- the PutByVal into a plain object, which can never
-// specialize (the store tiers want a JSArray or a typed array) and so
-// calls its recording helper, and counts a decline, on every single
-// iteration. That separation is the point: the cold-read append is the
-// ONLY thing that can make considerRecompile's progress check return
-// true here. The ByVal site is observed but stuck -- `otherSeen` with
-// no typed-array kind -- so its own progress term is false, and there
-// is no write site in the body at all. With the read append removed
-// the body still crosses the threshold just as often and still must
-// not be recompiled.
+// warmed is the recompile. Its read is of an undeclared global, `gp`,
+// which lowers to TryGetById: on both backends that opcode keeps the
+// plain, non-recording helper and the legacy single-shape tiers, and a
+// cold TryGetById site goes onto coldReadCacheIdxs_ like a cold
+// GetById. (A GetById-family read would not do on x86-64: its first,
+// cold-cache call misses into the recording helper, which records the
+// shape, and that live, not-yet-emitted entry is a progress source of
+// its own -- the polymorphic GetById spec's "Progress term" -- so the
+// recompile would no longer depend on the cold-read check.) The read
+// is cold at first compile like the others' and warms on the very
+// first call; the crossings that make the JIT reconsider it come from
+// an UNRELATED site in the same body -- the PutByVal into a plain
+// object, which can never specialize (the store tiers want a JSArray
+// or a typed array) and so calls its recording helper, and counts a
+// decline, on every single iteration. That separation is the point:
+// the cold-read check is the ONLY thing that can make
+// considerRecompile's progress check return true here. The ByVal site
+// is observed but stuck -- `otherSeen` with no typed-array kind -- so
+// its own progress term is false, there is no write site in the body
+// at all, and a TryGetById site has no ById record. With the cold-read
+// check removed the body still crosses the threshold just as often
+// and still must not be recompiled.
 //
 // The version-2 window is where the upgrade shows up: version 1 emits
-// only the generic read-property-cache sequence for `o.p`, and version
+// only the generic read-property-cache sequence for `gp`, and version
 // 2, compiled from the now-monomorphic cache, emits the object
-// specialization ahead of it. The version-1 -NOT is bounded to
-// warmed's own first-compile window (compile line to un-suffixed
-// success line) for the reason recompile-byid-warm.js spells out: the
-// global body recompiles chronologically in between and regains
-// specializations for its own warmed sites, and an unbounded -NOT
-// would see those.
+// specialization (on the global object's class) ahead of it. The
+// version-1 -NOT is bounded to warmed's own first-compile window
+// (compile line to un-suffixed success line) for the reason
+// recompile-byid-warm.js spells out: the global body recompiles
+// chronologically in between and regains specializations for its own
+// warmed sites, and an unbounded -NOT would see those. `gp` is created
+// before warmed's first call and no global is added after it, so the
+// global object keeps one class and the read cache stays monomorphic.
 //
 // Every read here is literal-keyed, so it lowers to a GetById-family
-// opcode (GetByIdShort) and not GetByVal, which has tiers -- and a
-// recompile progress source -- of its own. The BC RUN line pins that.
+// opcode (GetByIdShort, or TryGetById for `gp`) and not GetByVal,
+// which has tiers -- and a recompile progress source -- of its own.
+// The BC RUN line pins that.
 
 function getOnly(o) {
   return o.p;
@@ -83,14 +96,11 @@ function mixed(o, v) {
   return o.p;
 }
 
-function warmed(o, a, v) {
+function warmed(a, v) {
   a[0] = v;
-  return o.p;
+  return gp;
 }
 
-// One class for every `o` below: a second shape would push the read
-// cache polymorphic, numGoodChanges would leave 1, and the site would
-// no longer be one a recompile could act on.
 var o = {p: 1, q: 0};
 print(getOnly(o));
 print(mixed(o, 2));
@@ -98,8 +108,10 @@ print(mixed(o, 2));
 // A plain object, not an array: the store tiers decline it forever.
 var bag = {};
 var t = 0;
+// Undeclared, so warmed's read of it is a TryGetById.
+globalThis.gp = 1;
 for (var i = 0; i < 100; ++i)
-  t += warmed(o, bag, i);
+  t += warmed(bag, i);
 print(t);
 
 // OUT: 1
@@ -128,4 +140,4 @@ print(t);
 // BC: GetByIdShort {{.*}}"p"
 // BC-LABEL:Function<warmed>({{.*}}
 // BC: PutByValLoose
-// BC: GetByIdShort {{.*}}"p"
+// BC: TryGetById {{.*}}"gp"

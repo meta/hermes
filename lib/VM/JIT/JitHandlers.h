@@ -8,6 +8,7 @@
 #pragma once
 
 #include "hermes/VM/HermesValue.h"
+#include "hermes/VM/JIT/JitFunctionData.h"
 #include "hermes/VM/RuntimeModule.h"
 #include "hermes/VM/sh_legacy_value.h"
 #include "hermes/VM/static_h.h"
@@ -18,12 +19,14 @@ typedef struct SHRuntime SHRuntime;
 typedef struct SHRuntimeModule SHRuntimeModule;
 typedef struct SHCodeBlock SHCodeBlock;
 typedef struct SHJitVersionData SHJitVersionData;
+typedef struct SHJitByIdSiteRecord SHJitByIdSiteRecord;
 
 namespace hermes::vm {
 
 class Runtime;
 class CodeBlock;
 class JSObject;
+class HiddenClass;
 class PinnedHermesValue;
 
 /// Create a JSFunction closure. The properties of the function (name, etc.)
@@ -236,6 +239,40 @@ SHLegacyValue _jit_get_by_index(
     uint32_t key,
     SHJitVersionData *versionData,
     uint32_t siteId);
+
+/// \return true if a GetById shape with receiver class \p objClass and,
+/// for a prototype entry, prototype class \p protoClass (null for an
+/// own entry) satisfies the read cache's own predicates (spec:
+/// "Eligibility").
+bool isEligibleByIdShape(HiddenClass *objClass, HiddenClass *protoClass);
+
+/// Add one shape to \p site per the spec's recording rule: an equal
+/// live entry absorbs it (marking it emitted if \p emitted), else it
+/// overwrites a dead entry, else it is appended, else the site becomes
+/// megamorphic. \return true if the record changed.
+bool addByIdShape(
+    JitByIdSiteRecord &site,
+    CompressedPointer objClass,
+    CompressedPointer protoClass,
+    uint16_t slot,
+    bool isProto,
+    bool emitted);
+
+/// Slow path of GetById and the recording site for its tiers' declines:
+/// forwards to _sh_ljs_get_by_id_rjs, records the shape the read cache
+/// now describes into \p siteRecord, counts the decline (possibly
+/// triggering a recompile), and returns the result. See the 2026-10-14
+/// polymorphic GetById spec, "The recording helper".
+/// \param versionData the version record of the CALLING body.
+/// \param siteRecord the calling site's JitByIdSiteRecord, owned by
+///   \p versionData; its address is embedded in the emitted call.
+SHLegacyValue _jit_get_by_id(
+    SHRuntime *shr,
+    const SHLegacyValue *source,
+    SHSymbolID symID,
+    SHReadPropertyCacheEntry *propCacheEntry,
+    SHJitVersionData *versionData,
+    SHJitByIdSiteRecord *siteRecord);
 
 /// Assumes that table  at index \p tableIndex is an initialized string switch
 /// runtime table. Pass the runtimeModule+index in order to avoid relying on

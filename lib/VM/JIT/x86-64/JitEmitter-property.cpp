@@ -14,6 +14,8 @@
 #include "hermes/VM/JSObject-inline.h"
 #include "llvh/ADT/Statistic.h"
 
+#include <algorithm>
+
 #define DEBUG_TYPE "jit"
 
 STATISTIC(
@@ -722,6 +724,26 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
       SHSymbolID symID,
       SHReadPropertyCacheEntry *propCacheEntry);
   const char *shImplName;
+  /// Whether this instruction belongs to the GetById family, which
+  /// records shapes through its site's helper slot.
+  bool recording_;
+  /// The candidate version's record for this site; null unless
+  /// recording_ and the instruction has a property cache entry.
+  JitByIdSiteRecord *site_ = nullptr;
+
+  /// One chain entry, resolved to lazy JIT IDs.
+  struct PolyEntry {
+    /// Lazy JIT ID of the receiver's class.
+    uint16_t objId;
+    /// Lazy JIT ID of the prototype's class; 0 unless isProto.
+    uint16_t protoId;
+    /// Slot to load, in the receiver or in the prototype.
+    SlotIndex slot;
+    /// Whether the property lives on the immediate prototype.
+    bool isProto;
+  };
+  /// The entries emitPolyChain() emits, own entries first.
+  llvh::SmallVector<PolyEntry, JitByIdSiteRecord::kMaxEntries> poly_;
 
   asmjit::Label contLab;
   asmjit::Label slowPathLab;
@@ -744,7 +766,8 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
           const SHLegacyValue *source,
           SHSymbolID symID,
           SHReadPropertyCacheEntry *propCacheEntry),
-      const char *shImplName)
+      const char *shImplName,
+      bool recording)
       : _(emitter),
         a(emitter.a),
         frRes(frRes),
@@ -753,7 +776,8 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
         cacheIdx(cacheIdx),
         name(name),
         shImpl(shImpl),
-        shImplName(shImplName) {}
+        shImplName(shImplName),
+        recording_(recording) {}
 
   void run() {
     _.comment(
@@ -763,6 +787,16 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
         frSource.index(),
         cacheIdx,
         symID);
+
+    if (recording_ && cacheIdx != hbc::PROPERTY_CACHING_DISABLED) {
+      uint32_t siteId = (uint32_t)((const char *)_.emittingIP -
+                                   (const char *)_.codeBlock_->begin());
+      site_ = &_.byIdSiteRecord(siteId);
+      // Only a never-flipped slot is initialized; a demoted value
+      // carried forward stays demoted.
+      if (!site_->helper)
+        site_->helper = (void *)_jit_get_by_id;
+    }
 
     // All temporaries will potentially be clobbered by the slow path.
     _.syncAllFRTempExcept(frRes != frSource ? frRes : FR{});
@@ -798,7 +832,32 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
         a.add(
             x86::rcx, asmjit::Imm(sizeof(SHReadPropertyCacheEntry) * cacheIdx));
     }
-    _.callRuntimeWithSavedIP((void *)shImpl, shImplName);
+    if (site_) {
+      _.loadBits64InGp(x86::r8, (uint64_t)_.versionData_, "JitVersionData");
+      // r9 is both the helper's record argument and the base of the
+      // helper slot the call goes through, so the helper needs no
+      // lookup and the call no second address materialization.
+      _.loadBits64InGp(x86::r9, (uint64_t)site_, "JitByIdSiteRecord");
+      // Type-check the recording callee against the call sequence; the
+      // demoted _sh_ljs_get_by_id_rjs ignores r8/r9 under SysV.
+      using _FnT = SHLegacyValue (*)(
+          SHRuntime *,
+          const SHLegacyValue *,
+          SHSymbolID,
+          SHReadPropertyCacheEntry *,
+          SHJitVersionData *,
+          SHJitByIdSiteRecord *);
+      _FnT _fn = _jit_get_by_id;
+      (void)_fn;
+      // JitByIdSiteRecord is not standard-layout (its SmallVector), so
+      // the slot's displacement comes from the record, not offsetof.
+      int32_t helperOfs =
+          (int32_t)((const char *)&site_->helper - (const char *)site_);
+      _.callRuntimeWithSavedIPIndirect(
+          x86::qword_ptr(x86::r9, helperOfs), "_jit_get_by_id [indirect]");
+    } else {
+      _.callRuntimeWithSavedIP((void *)shImpl, shImplName);
+    }
 
     _.movHWFromHW<false>(hwRes, HWReg::gpX(0));
     _.frUpdatedWithHW(frRes, hwRes);
@@ -895,11 +954,15 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
 
     Emit_sh_shv_decode shvDecode(a, hwRes.gpq(), contLab);
 
-    // Optionally emit a very fast path specialized for the cache entry, if the
-    // entry had exactly one successful match.
-    if (ReadPropertyCacheEntry *cacheEntry =
-            _.codeBlock_->getReadCacheEntry(cacheIdx);
-        cacheEntry->numGoodChanges == 1) {
+    ReadPropertyCacheEntry *cacheEntry =
+        _.codeBlock_->getReadCacheEntry(cacheIdx);
+    if (site_ && preparePolyChain(cacheEntry)) {
+      // Replaces the single-shape choice; always followed by the
+      // generic tier below. Not a cold site.
+      emitPolyChain(shvDecode);
+    } else if (cacheEntry->numGoodChanges == 1) {
+      // Optionally emit a very fast path specialized for the cache entry,
+      // if the entry had exactly one successful match.
       if (cacheEntry->clazz.getNoBarrierUnsafe() &&
           !cacheEntry->negMatchClazz.getNoBarrierUnsafe()) {
         JITNumGetByIdSpec += emitObjectSpecialization(shvDecode, cacheEntry);
@@ -987,6 +1050,133 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
     a.jmp(contLab);
   }
 
+  /// Fold the shape today's single-shape gate would specialize into the
+  /// record, if eligible and absent (subject to the cap).
+  void addCacheShape(ReadPropertyCacheEntry *cacheEntry) {
+    Runtime &rt = _.runtime_;
+    HiddenClass *clazz = cacheEntry->clazz.get(rt, rt.getHeap());
+    HiddenClass *neg = cacheEntry->negMatchClazz.get(rt, rt.getHeap());
+    if (!clazz)
+      return;
+    if (!neg) {
+      if (isEligibleByIdShape(clazz, nullptr))
+        addByIdShape(
+            *site_,
+            cacheEntry->clazz.getNoBarrierUnsafe(),
+            CompressedPointer(nullptr),
+            cacheEntry->getSlot(),
+            false,
+            false);
+    } else if (isEligibleByIdShape(neg, clazz)) {
+      addByIdShape(
+          *site_,
+          cacheEntry->negMatchClazz.getNoBarrierUnsafe(),
+          cacheEntry->clazz.getNoBarrierUnsafe(),
+          cacheEntry->getSlot(),
+          true,
+          false);
+    }
+  }
+
+  /// Resolve the site's live entries to lazy JIT IDs before any chain
+  /// code is emitted. Every initHCLazyIDMayAlloc() is a GC safepoint,
+  /// so each class is re-read from its weak root right before use.
+  /// \return true if at least one entry will be emitted.
+  bool preparePolyChain(ReadPropertyCacheEntry *cacheEntry) {
+    bool anyLive = false;
+    for (const auto &e : site_->entries)
+      anyLive |= e.isLive();
+    if (!anyLive)
+      return false;
+    if (cacheEntry->numGoodChanges == 1)
+      addCacheShape(cacheEntry);
+    Runtime &rt = _.runtime_;
+    for (auto &e : site_->entries) {
+      if (!e.isLive())
+        continue;
+      uint16_t objId = _.initHCLazyIDMayAlloc(e.objClass.get(rt, rt.getHeap()));
+      uint16_t protoId = 0;
+      if (objId && e.isProto)
+        protoId = _.initHCLazyIDMayAlloc(e.protoClass.get(rt, rt.getHeap()));
+      if (!objId || (e.isProto && !protoId)) {
+        e.unemittable = 1;
+        continue;
+      }
+      e.emitted = 1;
+      poly_.push_back({objId, protoId, e.slot, (bool)e.isProto});
+    }
+    if (poly_.empty())
+      return false;
+    std::stable_partition(poly_.begin(), poly_.end(), [](const PolyEntry &p) {
+      return !p.isProto;
+    });
+    site_->chainEmitted = 1;
+    return true;
+  }
+
+  /// Emit the chain. Entry state: temp1 = object, temp2 = compressed
+  /// receiver class. Fallthrough (the generic tier's join): the same.
+  /// hwRes may alias a temp; it is written only on hit paths, which
+  /// jump to contLab.
+  void emitPolyChain(Emit_sh_shv_decode &shvDecode) {
+    _.comment("// Get polymorphic chain (%u entries)", (unsigned)poly_.size());
+    // temp3 = receiver lazyJITId, decoded without clobbering temp2.
+    // Loaded even if every entry is a prototype entry.
+    const auto &reg =
+        emit_sh_cp_decode_non_null_preserve_input(a, temp3, temp2);
+    a.movzx(
+        temp3.r32(), x86::word_ptr(reg, RuntimeOffsets::hiddenClassLazyJITId));
+    bool anyProto = false;
+    for (const PolyEntry &p : poly_) {
+      if (p.isProto) {
+        anyProto = true;
+        continue;
+      }
+      asmjit::Label next = a.newLabel();
+      a.cmp(temp3.r32(), asmjit::Imm(p.objId));
+      a.jne(next);
+      // May clobber temp1 (indirect slot); this path ends at contLab.
+      emitLoadFromSlot(hwRes.gpq(), temp1, p.slot);
+      shvDecode.emitFirstCase(a);
+      a.jmp(contLab);
+      a.bind(next);
+    }
+    if (!anyProto)
+      return;
+    asmjit::Label join = a.newLabel();
+    // temp4 = parent, read from the receiver's class (temp2 still holds it,
+    // compressed); temp2 = parent's lazyJITId (scratch from here on).
+    const auto &clsReg =
+        emit_sh_cp_decode_non_null_preserve_input(a, temp4, temp2);
+    emit_load_cp(
+        a, temp4, x86::ptr(clsReg, RuntimeOffsets::hiddenClassObjectParent));
+    a.test(temp4, temp4);
+    a.jz(join);
+    emit_sh_cp_decode_non_null(a, temp4);
+    emit_load_cp(a, temp2, x86::ptr(temp4, offsetof(SHJSObject, clazz)));
+    emit_sh_cp_decode_non_null(a, temp2);
+    a.movzx(
+        temp2.r32(),
+        x86::word_ptr(temp2, RuntimeOffsets::hiddenClassLazyJITId));
+    for (const PolyEntry &p : poly_) {
+      if (!p.isProto)
+        continue;
+      asmjit::Label next = a.newLabel();
+      a.cmp(temp3.r32(), asmjit::Imm(p.objId));
+      a.jne(next);
+      a.cmp(temp2.r32(), asmjit::Imm(p.protoId));
+      a.jne(next);
+      // Clobbers temp4 only after both guards succeeded.
+      emitLoadFromSlot(hwRes.gpq(), temp4, p.slot);
+      shvDecode.emitFirstCase(a);
+      a.jmp(contLab);
+      a.bind(next);
+    }
+    a.bind(join);
+    // Restore the generic tier's operand.
+    emit_load_cp(a, temp2, x86::ptr(temp1, offsetof(SHJSObject, clazz)));
+  }
+
   /// Emit a specialization for accessing a property on the object.
   /// \return true if code was emitted. When it returns false nothing has
   ///   been emitted.
@@ -1021,6 +1211,15 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
     shvDecode.emitFirstCase(a);
     a.jmp(contLab);
     a.bind(failSpecLab);
+    if (site_) {
+      addByIdShape(
+          *site_,
+          cacheEntry->clazz.getNoBarrierUnsafe(),
+          CompressedPointer(nullptr),
+          cacheEntry->getSlot(),
+          false,
+          true);
+    }
     return true;
   }
 
@@ -1091,6 +1290,15 @@ class HERMES_ATTRIBUTE_INTERNAL_LINKAGE Emitter::GetByIdImpl {
     shvDecode.emitAll(a);
     a.jmp(contLab);
     a.bind(failSpecLab);
+    if (site_) {
+      addByIdShape(
+          *site_,
+          cacheEntry->negMatchClazz.getNoBarrierUnsafe(),
+          cacheEntry->clazz.getNoBarrierUnsafe(),
+          cacheEntry->getSlot(),
+          true,
+          true);
+    }
     return true;
   }
 };
@@ -1106,8 +1314,18 @@ void Emitter::getByIdImpl(
         const SHLegacyValue *source,
         SHSymbolID symID,
         SHReadPropertyCacheEntry *propCacheEntry),
-    const char *shImplName) {
-  GetByIdImpl(*this, frRes, symID, frSource, cacheIdx, name, shImpl, shImplName)
+    const char *shImplName,
+    bool recording) {
+  GetByIdImpl(
+      *this,
+      frRes,
+      symID,
+      frSource,
+      cacheIdx,
+      name,
+      shImpl,
+      shImplName,
+      recording)
       .run();
 }
 
@@ -1897,7 +2115,7 @@ void Emitter::getByIndexImpl(FR frRes, FR frSource, uint32_t key) {
   // The GetByIndex instruction's own bytecode offset, unique within this
   // function and stable across recompiles: identifies this site's entry in
   // versionData_'s consumer records (see JitFunctionData.h). GetByIndex is
-  // a distinct opcode from GetByVal, so sharing the byValSites deque with
+  // a distinct opcode from GetByVal, so sharing byValSites with
   // the ByVal sites can never collide.
   uint32_t siteId =
       (uint32_t)((const char *)emittingIP - (const char *)codeBlock_->begin());

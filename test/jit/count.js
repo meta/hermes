@@ -5,11 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes -Xjit=on -fno-inline -Xjit -Xjit-crash-on-error -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
+// RUN: %hermes -Xjit=on -fno-inline -Xjit -Xjit-crash-on-error -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefixes=CHECK,%jit_arch_prefix %s
 // REQUIRES: jit
 
 // Demonstrate the various JIT levels.
 // Update if JIT heuristics are updated to illustrate that they still work.
+//
+// loop1 and loop2 compile warm, so each `arr.length` read gets the
+// single-shape specialization, which the body records as an emitted
+// GetById shape: the `JIT ById sites` line counts those reads (loop
+// rotation duplicates each loop condition, hence 2 and 4 sites). Only
+// x86-64 records GetById shapes, so the line is checked under the X86
+// prefix and arm64 must print nothing between the surrounding lines.
 
 function loop0(arr) {
   var sum = 0;
@@ -47,6 +54,7 @@ for (var i = 0; i < 50; ++i) {
 // CHECK:JIT compilation of FunctionID 3, 'loop2'
 
 // CHECK:JIT successfully compiled FunctionID 3, 'loop2'
+// X86-NEXT:JIT ById sites: 4 recorded, 0 polymorphic, 0 megamorphic
 // CHECK-NEXT:3
 // CHECK-NEXT:4
 // CHECK-NEXT:5
@@ -57,6 +65,7 @@ for (var i = 0; i < 50; ++i) {
 // CHECK:JIT compilation of FunctionID 2, 'loop1'
 
 // CHECK:JIT successfully compiled FunctionID 2, 'loop1'
+// X86-NEXT:JIT ById sites: 2 recorded, 0 polymorphic, 0 megamorphic
 // CHECK-NEXT:9
 // CHECK-NEXT:10
 // CHECK-NEXT:11

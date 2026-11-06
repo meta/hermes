@@ -73,9 +73,11 @@ class CodeBlock final : private llvh::TrailingObjects<
   /// hot that loop is.
   uint32_t executionCount_ = 0;
 
-  /// Lazily allocated recompilation metadata; null until first compile.
-  /// See JitFunctionData.h. unique_ptr of an incomplete type: the
-  /// out-of-line ~CodeBlock() in CodeBlock.cpp sees the full type.
+  /// Lazily allocated JIT metadata; null until a compile of this
+  /// function first starts. A failed first compile leaves it allocated
+  /// with no installed body. See JitFunctionData.h. unique_ptr of an
+  /// incomplete type: the out-of-line ~CodeBlock() in CodeBlock.cpp sees
+  /// the full type.
   std::unique_ptr<JitFunctionData> jitData_;
 #endif
 
@@ -291,7 +293,9 @@ class CodeBlock final : private llvh::TrailingObjects<
     executionCount_ = 0;
   }
 
-  /// \return the recompilation metadata, or null if never JIT-compiled.
+  /// \return the JIT metadata, or null if no compile of this function
+  /// has started. Non-null does not imply an installed body: a failed
+  /// first compile leaves JitFunctionData::current null.
   JitFunctionData *getJitData() {
     return jitData_.get();
   }
@@ -329,7 +333,9 @@ class CodeBlock final : private llvh::TrailingObjects<
   /// Reset the function executionCount_ count to 0
   void clearExecutionCount() {}
 
-  /// \return the recompilation metadata, or null if never JIT-compiled.
+  /// \return the JIT metadata, or null if no compile of this function
+  /// has started. Non-null does not imply an installed body: a failed
+  /// first compile leaves JitFunctionData::current null.
   JitFunctionData *getJitData() {
     return nullptr;
   }

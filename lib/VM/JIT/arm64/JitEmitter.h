@@ -493,7 +493,8 @@ class Emitter {
 
   /// \return the candidate version record's ByVal site entry for
   /// \p siteId, creating the records and/or entry if absent. The
-  /// entry's address is stable (deque) and may be embedded in code.
+  /// entry is its own allocation, so its address is stable and may be
+  /// embedded in code.
   JitByValSiteRecord &byValSiteRecord(uint32_t siteId) {
     if (!versionData_->consumerRecords)
       versionData_->consumerRecords = std::make_unique<JitConsumerRecords>();
@@ -2009,7 +2010,7 @@ class Emitter {
   ///
   /// Tier selection reads the PRIOR version's record for this site, with
   /// the LOAD predicate, exactly as getByValImpl() does; GetByIndex sites
-  /// join the same JitConsumerRecords::byValSites deque (siteId is the
+  /// join the same JitConsumerRecords::byValSites records (siteId is the
   /// bytecode offset, and GetByIndex is a distinct opcode, so no
   /// collision with a ByVal site is possible).
   void getByIndexImpl(FR frRes, FR frSource, uint32_t key);

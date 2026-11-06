@@ -347,8 +347,50 @@ cache-hit protocol inline, in up to three tiers:
    (`Emit_sh_shv_decode` shares the multi-case decode tail across load
    sites).
 
+On x86-64, `GetById`, `GetByIdShort` and `GetByIdLong` have a fourth tier,
+the **polymorphic chain**, which replaces tiers 1 and 2 when the site's shape
+record (see "GetById shape records" under "Recompilation") holds at least one
+live entry. In practice that means a recompiled body, since a first compile
+starts from empty records. A tier 1 or tier 2 specialization is itself written
+into the record as an emitted entry, so once a site has a specialization,
+every later version emits at least a one-entry chain for it (emission is
+monotone). `TryGetById*`, `GetByIdWithReceiver*` and sites with
+`cacheIdx == PROPERTY_CACHING_DISABLED` never get a chain.
+
+- **Entries.** Up to `JitByIdSiteRecord::kMaxEntries` (4). An own entry is a
+  receiver class and a slot in the receiver; a prototype entry is a receiver
+  class, the immediate prototype's class, and a slot in the prototype. If the
+  live cache entry currently passes the single-shape gate
+  (`numGoodChanges == 1`), that shape is folded into the record first,
+  subject to the cap. Lazy JIT IDs for every live entry's classes are
+  assigned before any chain code is emitted, re-reading each class from its
+  weak root right before `initHCLazyIDMayAlloc` (a GC safepoint). A dead
+  entry is skipped; one that gets no ID is skipped and marked
+  `unemittable`; the rest are marked `emitted`. If no entry survives, the
+  site falls back to tiers 1-3 exactly as before.
+- **Layout.** The non-object check jumps straight to the slow call. Then
+  `temp1` = object, `temp2` = compressed receiver class, `temp3` = receiver
+  `lazyJITId` (decoded without clobbering `temp2`). Own entries come first,
+  each `cmp temp3, ID; jne next`, slot load, `jmp done`. If any prototype
+  entry was emitted, one parent load and null check follow (null goes to the
+  join), `temp2` becomes the parent's `lazyJITId`, and each prototype entry
+  compares both IDs before loading from the parent. At the join `temp2` is
+  reloaded from `temp1` if the prototype block overwrote it, so the generic
+  tier always starts from the same state: `temp1` = object, `temp2` =
+  compressed receiver class. Unlike tier 2, the chain is never terminal; the
+  generic tier and then the helper always follow it.
+- **One decoder per site.** A single `Emit_sh_shv_decode` serves the chain and
+  the generic tier. Every chain load uses `emitFirstCase` and `jmp done`; the
+  remaining decode cases are emitted once, by the generic tier's indirect-slot
+  `emitAll`, and fall through to `done`. Prototype entries therefore do not
+  use `emitAll`, unlike tier 2.
+- The dump comments it `// Get polymorphic chain (N entries)`.
+
 Miss → out-of-line call to `_sh_ljs_get_by_id_rjs`/`_sh_ljs_try_get_by_id_rjs`
-with the cache-entry address. Writes have an inline tier on both backends
+with the cache-entry address; on x86-64, GetById-family sites that have a
+read cache entry instead call `_jit_get_by_id` (or, once demoted,
+`_sh_ljs_get_by_id_rjs`) indirectly through the site's helper slot. Sites
+without one keep the direct call. Writes have an inline tier on both backends
 (`emitPutByIdInlineTier`, see "Inline write barrier" below): when
 the site's write cache already names a hidden class at compile time, the
 emitter bakes in a class/slot check and an inline store guarded by the
@@ -653,7 +695,9 @@ into another's: a kind that reaches version 1's helper may be handled
 inline by version 2 and never reach its helper at all.
 
 **Trigger.** `_jit_put_by_id` is the only ById write helper that
-carries a version record, so it is the only trigger site in v1: every
+carries a version record, so it was the only trigger site in v1 (the
+ByVal recording helpers and, on x86-64, `_jit_get_by_id` joined later;
+see below): every
 call into it is a decline of the inline PutById tier, and it bumps the
 CALLING body's own `declineCount` -- the helper receives the calling
 body's `JitVersionData` directly, and reaches the `CodeBlock` through
@@ -670,9 +714,12 @@ existing checks on the current version: budget left, `coldByIdSites >
 sites that declined tier emission because their cache was cold), and
 at least one of those specific caches now names a class. If that check
 fails -- a polymorphic function whose tiers are already emitted -- the
-counter resets and the budget is kept; declines from GetById alone do
-not trigger, since the shared SH GetById helper has no version record
-to carry the counter.
+counter resets and the budget is kept. In v1, declines from GetById
+alone did not trigger, since the shared SH GetById helper has no
+version record to carry the counter; on x86-64 the GetById family now
+goes through `_jit_get_by_id`, which does (see "GetById shape
+records" below). arm64 GetById still calls the SH helper directly and
+does not trigger.
 
 **Install.** A passing check recompiles synchronously, right there --
 compilation never runs JS, so there is no reentrancy. The candidate
@@ -724,10 +771,11 @@ yet either -- the same condition, the same append (`coldWriteCacheIdxs_`
 architecture, so `considerRecompile`'s gate fires identically.
 
 **ByVal shape records.** The Records paragraph above named `consumerRecords`
-for future per-site feedback; it now holds a `JitConsumerRecords`, a deque of
-per-site `JitByValSiteRecord`s keyed by the PutByVal instruction's bytecode
-offset -- a deque, not a vector, because emitted code embeds the address of an
-entry's `helper` slot, so entries must never relocate.
+for future per-site feedback; it now holds a `JitConsumerRecords`, a vector of
+owning pointers to per-site `JitByValSiteRecord`s keyed by the PutByVal
+instruction's bytecode offset. Each record is its own allocation because
+emitted code embeds the address of an entry's `helper` slot, so entries must
+never relocate; an empty vector allocates nothing.
 
 Tier selection is monotone: tiers are only ever added, never dropped (spec:
 `doc/superpowers/specs/2026-09-09-jit-putbyval-monotone-demotion-design.md`,
@@ -894,7 +942,7 @@ rather than disabling recompilation), and
 `recompile-threshold-flag.js` (the same program recompiles at
 `-Xjit-recompile-threshold=8` and does not at the default 64).
 
-**GetByVal load tiers.** GetByVal joins the same `byValSites` deque, keyed by
+**GetByVal load tiers.** GetByVal joins the same `byValSites` records, keyed by
 its own bytecode offset (siteId is the offset, so a get site and a put site at
 different offsets can never collide), and reuses every mechanism above
 verbatim: `JitByValSiteRecord`, the monotone tier rule, poison-keeps-first-kind,
@@ -981,7 +1029,7 @@ is the compiler's lowering of a literal uint8 property key (`a[0]`, tuple/vec
 math, unrolled loops); a non-literal or a key outside `[0, 255]` lowers to
 GetByVal instead, so GetByIndex tests always pin the opcode in the bytecode
 dump to guard against accidentally exercising the wrong site. It joins the
-same `byValSites` deque as every other ByVal-family consumer -- siteId is its
+same `byValSites` records as every other ByVal-family consumer -- siteId is its
 own bytecode offset, and since GetByIndex is a distinct opcode from
 GetByVal/PutByVal, a get/put/index site can never collide even at the same
 logical property access -- and reuses the monotone tier rule,
@@ -1072,6 +1120,91 @@ is its arm64 counterpart, with no `handle_san` gate -- GetByIndex has no
 encode step at all, so nothing it emits references
 `HERMESVM_SANITIZE_HANDLES`). Benchmark:
 `benchmarks/jit-benches/typed-array-index.js`.
+
+**GetById shape records (x86-64).** GetById now records and triggers like the
+ByVal family, with its own record type. Full design:
+`doc/superpowers/specs/2026-10-14-jit-getbyid-polymorphic-design.md`. arm64
+GetById still calls `_sh_ljs_get_by_id_rjs` directly and records nothing; its
+`byIdSites` stays empty, and the shared code below is inert there.
+
+- **Records.** `JitConsumerRecords::byIdSites` is a second vector of owning
+  pointers, beside `byValSites`, to `JitByIdSiteRecord`s keyed by the GetById
+  instruction's bytecode offset. A record holds up to four `JitByIdShapeEntry`s (receiver
+  class, prototype class for a prototype entry, slot, and the `isProto`,
+  `emitted` and `unemittable` bytes), plus `seen`, `megamorphic`, `changed`,
+  `unchangedCrossings`, `chainEmitted` and the mutable `helper` slot. Classes
+  are held as `WeakRoot<HiddenClass>`: lazy JIT IDs, which pin a class
+  forever, are assigned only when a compile emits the entry. The emitter
+  creates the record when it emits the site's helper call, so the recording
+  helper never adds one. Cost: each cached GetById site in a compiled body
+  takes one allocation of `sizeof(JitByIdSiteRecord)` (136 B on HV64, 104 B
+  on HV32) plus an 8-byte vector slot; a function with no recorded sites
+  allocates nothing for them.
+- **Trigger.** Every GetById-family site with a read cache entry calls through
+  its record's helper slot, initialized (only if null) to `_jit_get_by_id`,
+  which takes the plain helper's four arguments plus the version record (`r8`)
+  and the site's record (`r9`). The call is `call [r9 + offset of helper]`,
+  so the helper needs no lookup to find its record. A demoted slot holds the
+  four-argument `_sh_ljs_get_by_id_rjs`, which ignores the extra registers. The helper
+  forwards to `_sh_ljs_get_by_id_rjs` and pins the result in a `Locals` only
+  after the call returns (a throwing lookup longjmps past the helper, which
+  must not leave a `LocalsRAII` registered; see `DESIGN-PRINCIPLES.md`).
+  Next comes a staleness gate (the version is still `current` and the slot
+  still holds `_jit_get_by_id`). The observation is recorded under a
+  `NoAllocScope`: an own hit when the cache entry's `clazz` is the receiver's
+  class, a prototype hit when its `negMatchClazz` is and `clazz` is the
+  parent's class, each filtered by the read cache's own eligibility
+  predicates. Last, the decline is counted toward the shared threshold and
+  `considerRecompile`. A throwing lookup is neither recorded nor counted.
+  `TryGetById*`, `GetByIdWithReceiver*` and uncached sites keep the direct
+  call.
+- **Recording rule.** An equal live entry absorbs the shape; otherwise it
+  overwrites a dead entry (one the GC cleared), else is appended, else marks
+  the site `megamorphic` and is dropped. `changed` is set by an overwrite or
+  append, by the first `seen`, and by `megamorphic` only on its 0 → 1
+  transition, so sustained overflow traffic does not hold off demotion.
+- **Progress term.** `considerRecompile` ORs a third source into its progress
+  check, `byIdShapeProgress`: some site holds a live entry with `emitted` and
+  `unemittable` both clear. The budget and threshold are shared with the
+  other two sources.
+- **Demotion.** The same pass and rule as ByVal, with `seen` as the "observed"
+  test and the progress term above as "can still progress". A flip sets the
+  slot to `_sh_ljs_get_by_id_rjs` and counts `NumByIdDemotions` (retirement
+  flips are not counted). `recordingByValSites` became `recordingSites` and
+  counts both kinds of recording site.
+- **Carry-forward and retirement.** The `Compiler` constructor copies
+  `byIdSites` from `current`: entries, `seen`, `megamorphic` and the helper
+  value carry; `changed`, `unchangedCrossings`, `chainEmitted` and every
+  entry's `unemittable` reset. `emitted` must carry, because it is what makes
+  emission monotone. Retirement flips the retired body's still-recording ById
+  slots and clears every ById record's entries.
+- **GC.** `CodeBlock::markWeakElementsInCaches` visits both classes of every
+  entry, with `acceptWeak`, in `current`'s records and in
+  `JitFunctionData::compiling`'s. `compiling` is the candidate of a compile in
+  progress: `initHCLazyIDMayAlloc` can collect during emission, before the
+  candidate is installed. The `Compiler` constructor sets it (calling
+  `ensureJitData`, so a first compile now creates the `JitFunctionData` before
+  install, and the version number is derived from whether a body is
+  installed, not from the data's existence). Install and the `Compiler`
+  destructor, which also runs on the longjmp failure path, clear it.
+  Retired records are not traced; Debug builds assert on every collection
+  that they hold no entries.
+- **Dump.** The `-Xdump-jitcode` per-function summary gains `JIT ById sites:
+  R recorded, P polymorphic, M megamorphic`, printed when R > 0. R counts
+  sites with a live entry or the megamorphic flag; P counts sites where this
+  body emitted a chain, including one-entry chains carried forward from a
+  single-shape specialization.
+
+Tests: `test/jit/x86-64/getbyid-record-{demote,demote-delay,throw}.js` and
+`getbyid-poly-*.js` (own, prototype and mixed shapes, megamorphic, the
+threshold boundary, monotone carry-forward, invalidation of an installed
+chain, the generic-tier join, cacheable dictionaries, ID exhaustion, a dead
+prototype class, retirement during a helper call, and rooted results across a
+collecting recompile). The GC and rooting tests pass `-gc-sanitize-handles=1`.
+A `HERMESVM_SANITIZE_HANDLES` build moves the heap at only 1% of allocations
+by default, and the flag makes it move every live object at every allocation.
+Builds without the sanitizer ignore the flag. Run them on a MallocGC +
+`HERMESVM_SANITIZE_HANDLES` tree to get that coverage.
 
 ### Arithmetic, comparisons and NaN handling
 
