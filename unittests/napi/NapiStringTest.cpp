@@ -402,6 +402,27 @@ TEST_F(NapiTestFixture, CreateStringUtf8_TruncatedThreeByte) {
   closeScope(env_, scope);
 }
 
+TEST_F(NapiTestFixture, CreateStringUtf8_TruncatedAtLengthNotTerminated) {
+  napi_handle_scope scope = openScope(env_);
+
+  // Only the first byte of each sequence is inside the given length. The
+  // bytes after it must not be read, even though they would complete it.
+  const char twoByte[] = "\xC3\xA9";
+  napi_value result = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_string_utf8(env_, twoByte, 1, &result));
+  auto content = getStringContent(result);
+  ASSERT_EQ(1u, content.size());
+  EXPECT_EQ(u'\xFFFD', content[0]);
+
+  const char fourByte[] = "\xF0\x9F\x98\x80";
+  ASSERT_EQ(napi_ok, napi_create_string_utf8(env_, fourByte, 3, &result));
+  content = getStringContent(result);
+  ASSERT_EQ(1u, content.size());
+  EXPECT_EQ(u'\xFFFD', content[0]);
+
+  closeScope(env_, scope);
+}
+
 TEST_F(NapiTestFixture, CreateStringUtf8_StrayHighByte) {
   napi_handle_scope scope = openScope(env_);
 
