@@ -569,10 +569,7 @@ class TypeInferenceImpl {
     return inferBinaryInst(typeCtx_, inst);
   }
   Type inferImulInst(ImulInst *inst) {
-    // Math.imul(left, right) always produces an Int32 number, or throws.
-    // Unlike the bitwise ops, it never produces BigInt: BigInt operands
-    // make ToInt32 throw a TypeError instead of coercing.
-    return Type::createInt32();
+    return *inst->getInherentType();
   }
   Type inferStorePropertyWithReceiverInst(StorePropertyWithReceiverInst *inst) {
     return Type::createNoType();

@@ -3305,11 +3305,19 @@ class ImulInst : public Instruction {
 
   explicit ImulInst(Value *left, Value *right)
       : Instruction(ValueKind::ImulInstKind) {
+    setType(*getInherentTypeImpl());
     pushOperand(left);
     pushOperand(right);
   }
   explicit ImulInst(const ImulInst *src, llvh::ArrayRef<Value *> operands)
       : Instruction(src, operands) {}
+
+  /// Math.imul always produces an Int32 number, or throws. Unlike the bitwise
+  /// ops, it never produces BigInt: BigInt operands make ToInt32 throw a
+  /// TypeError instead of coercing.
+  static llvh::Optional<Type> getInherentTypeImpl() {
+    return Type::createInt32();
+  }
 
   Value *getLeft() const {
     return getOperand(LeftIdx);

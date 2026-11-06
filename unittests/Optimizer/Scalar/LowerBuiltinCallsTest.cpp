@@ -8,6 +8,7 @@
 #include "hermes/FrontEndDefs/Builtins.h"
 #include "hermes/IR/IR.h"
 #include "hermes/IR/IRBuilder.h"
+#include "hermes/IR/IRVerifier.h"
 #include "hermes/Optimizer/PassManager/PassManager.h"
 
 #include "gtest/gtest.h"
@@ -121,6 +122,32 @@ TEST_F(LowerBuiltinCallsTest, ImulBuiltinCallIsErased) {
   for (auto &BB : *F)
     for (auto &inst : BB)
       EXPECT_FALSE(llvh::isa<CallBuiltinInst>(&inst));
+}
+
+/// A producer that types the builtin call before the pass runs may store its
+/// result into a Number-typed stack slot. The ImulInst that replaces the call
+/// must be Int32 on creation, or that store fails the verifier.
+TEST_F(LowerBuiltinCallsTest, ImulReplacingATypedCallIsInt32) {
+  auto *F = builder_.createFunction(
+      "typedCall", Function::DefinitionKind::ES5Function, true);
+  builder_.setInsertionBlock(builder_.createBasicBlock(F));
+  auto *slot = builder_.createAllocStackInst("slot", Type::createNumber());
+  Value *args[] = {
+      builder_.getLiteralNumber(kFirst), builder_.getLiteralNumber(kSecond)};
+  auto *call = builder_.createCallBuiltinInst(BuiltinMethod::Math_imul, args);
+  call->setType(Type::createNumber());
+  builder_.createStoreStackInst(call, slot);
+  builder_.createReturnInst(builder_.createLoadStackInst(slot));
+
+  runLowerBuiltinCalls();
+
+  ImulInst *imul = nullptr;
+  for (auto &inst : F->front())
+    if ((imul = llvh::dyn_cast<ImulInst>(&inst)))
+      break;
+  ASSERT_NE(nullptr, imul);
+  EXPECT_TRUE(imul->getType() == Type::createInt32());
+  EXPECT_TRUE(verifyModule(module_, &llvh::errs()));
 }
 
 /// A builtin call that is not Math.imul is left exactly as it was.

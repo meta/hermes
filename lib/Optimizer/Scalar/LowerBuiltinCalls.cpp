@@ -202,7 +202,9 @@ static CallBuiltinInst *tryLowerStaticBuiltin(
 /// itself, so a Math.imul builtin call from any producer running before this
 /// pass becomes the instruction as well. The pass runs in both backend
 /// lowering pipelines at every optimization level, which today is every
-/// producer there is.
+/// producer there is. A producer may already have typed the call, so the
+/// replacement must be at least as narrow: ImulInst's inherent Int32 type is
+/// what keeps the users of a Number-typed call valid.
 /// \return true if \p callBuiltin was replaced.
 static bool tryLowerImulBuiltin(
     IRBuilder &builder,
