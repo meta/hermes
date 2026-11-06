@@ -44,9 +44,12 @@ class SourceMapParser {
   };
 
   /// Parse "mappings" section from \p sourceMappings. The parsed line mappings
-  /// are returned in \p lines.
+  /// are returned in \p lines. \p sourcesCount is the number of entries in the
+  /// "sources" array; any segment whose sourceIndex falls outside it is
+  /// rejected.
   static bool parseMappings(
       llvh::StringRef sourceMappings,
+      size_t sourcesCount,
       std::vector<SourceMap::SegmentList> &lines);
 
   /// Parse single segment in mapping.
