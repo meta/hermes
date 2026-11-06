@@ -46,6 +46,19 @@ inline bool isJitSupportedTypedArrayStoreKind(CellKind kind) {
   }
 }
 
+/// True for the typed-array kinds the inline GetByVal load tier can
+/// specialize on: the store set plus Uint8Clamped. The two sets differ
+/// because the specialization each direction needs to skip is
+/// different: clamping (round-half-to-even on write) is store-side
+/// only, so a load can read a Uint8Clamped element with the same plain
+/// tier as Uint8Array; Float16 is excluded on both sides for now, and
+/// the BigInt kinds are excluded on both sides because a load would
+/// have to allocate a BigInt result, which the inline tiers don't do.
+inline bool isJitSupportedTypedArrayLoadKind(CellKind kind) {
+  return kind == CellKind::Uint8ClampedArrayKind ||
+      isJitSupportedTypedArrayStoreKind(kind);
+}
+
 /// One PutByVal site's observed shape and what the owning body emitted
 /// for it. Observed fields are written by the recording helper alone --
 /// no emitted tier instruments itself, so a hit is silent; emitted

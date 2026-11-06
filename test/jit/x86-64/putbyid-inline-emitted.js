@@ -9,7 +9,11 @@
 // RUN: %hermes -fno-inline -Xjit -Xjit-threshold=4 -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
 // RUN: %hermes -fno-inline -Xjit -Xjit-threshold=4 -Xdump-jitcode=3 %s | %FileCheck --check-prefixes=SPEC,SPEC-%hv-mode %s
 // REQUIRES: jit
-// UNSUPPORTED: handle_san
+// UNSUPPORTED: handle_san || gc_malloc
+// The PutById inline tier is barrier-gated and Config.h compiles it out
+// entirely under MallocGC, so none of the pinned inline instructions
+// are emitted; pre-existing, unrelated to GetByVal (loads have no write
+// barrier and are never gated).
 
 // That the PutById inline tier is EMITTED, and what it consists of.
 // putbyid-inline.js is the file that runs it against a collecting heap; this

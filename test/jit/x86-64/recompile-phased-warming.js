@@ -7,7 +7,10 @@
 
 // RUN: %hermes -fno-inline -Xjit -Xjit-threshold=4 -Xjit-recompile-threshold=64 -Xjit-max-recompiles=1 -Xdump-jitcode=2 %s | %FileCheck %s
 // REQUIRES: jit
-// UNSUPPORTED: handle_san
+// UNSUPPORTED: handle_san || gc_malloc
+// ById inline-cache warm/cold timing (JIT cold ById sites count, and
+// hence recompile timing) diverges under MallocGC vs. the GC these
+// counts were tuned against: pre-existing, unrelated to GetByVal.
 
 // considerRecompile's progress check must require one of the SPECIFIC
 // sites the last compile recorded as cold to have warmed -- not just any

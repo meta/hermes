@@ -866,6 +866,85 @@ rather than disabling recompilation), and
 `recompile-threshold-flag.js` (the same program recompiles at
 `-Xjit-recompile-threshold=8` and does not at the default 64).
 
+**GetByVal load tiers.** GetByVal joins the same `byValSites` deque, keyed by
+its own bytecode offset (siteId is the offset, so a get site and a put site at
+different offsets can never collide), and reuses every mechanism above
+verbatim: `JitByValSiteRecord`, the monotone tier rule, poison-keeps-first-kind,
+the indirect `helper` slot and its `movabs`/`call [slot]` sequence, the shared
+decline counter/threshold/budget, and the demotion pass (`isRecordingHelper`
+additionally recognizes `_jit_get_by_val`; `demoteSite` maps it to
+`_sh_ljs_get_by_val_rjs`, alongside the put slots' strictness-derived mapping).
+Full design: `doc/superpowers/specs/2026-09-11-jit-getbyval-design.md`.
+
+The one real difference from the store side is unconditional emission and a
+second kind predicate:
+
+- The **JSArray load tier has no `HERMES_JIT_INLINE_SAFE_STORE` gate at all**:
+  a load takes no write barrier, so `emitGetByValFastArrayTier()` is emitted
+  at every site, in every version, under every GC -- MallocGC included. This
+  is the one place the get and put sides genuinely diverge: the put fast-array
+  tier is unavailable under MallocGC, but the get one is not, which is why the
+  jit suite now runs (and must be green) on the MallocGC tree, not just build
+  there. Guards mirror the put tier's (exact `JSArrayKind`, uint32 key,
+  `ArrayImpl::at()`'s range check, an empty slot) with two load-specific
+  outcomes: an out-of-range index still DECLINES to the helper rather than
+  answering `undefined` (the prototype chain may hold an indexed property
+  there), and there is no `fastIndexProperties`/frozen check at all --
+  `tryFastGetComputedNoAlloc()`'s own comment explains why the empty-slot
+  check already subsumes it on the read side. Unboxing the loaded
+  SmallHermesValue is total (HV64: identity; HV32/BOXED: the same
+  small-int/compressed-pointer/boxed-double decode a property read uses) --
+  unlike a store, a load's encode step never has anything left to decline.
+- **Kind support differs from the store side, so there are two predicates.**
+  `isJitSupportedTypedArrayStoreKind` (unchanged) excludes Uint8Clamped
+  because clamping is a store-side conversion; `isJitSupportedTypedArrayLoadKind`
+  (JitFunctionData.h) is that predicate plus Uint8Clamped, since a clamped
+  array's element reads exactly like a plain Uint8 one. Both sides still
+  exclude Float16 (no F16C dependency) and the BigInt kinds (a load would need
+  to allocate a BigIntPrimitive, which no inline tier does). Each recording
+  helper passes ITS OWN predicate into `recordByValObservation` -- put helpers
+  the store predicate, `_jit_get_by_val` the load predicate -- so a site's
+  `taKind` is only ever set after validation against the operation that
+  observed it. The two ByVal-progress predicates in JitCompiler.cpp (the
+  recompile-progress check and the demotion actionable-progress check) test
+  the UNION of both predicates rather than the store one alone: a Uint8Clamped
+  kind can only ever have been recorded by a get site (a put site's own
+  recorder would reject it as "other" before it ever reached `taKind`), and
+  each emitter still independently re-validates its own predicate before
+  specializing, so the union only widens progress/demotion bookkeeping, never
+  which tier gets emitted.
+- **Typed-array loads read out-of-bounds and detached buffers as `undefined`,
+  not a decline.** `emitGetByValTypedArrayTier()` branches a bounds failure or
+  a null `data_` straight to an inline `mov undefined`, with no helper call
+  and nothing recorded -- unlike every other guard in either tier, which
+  declines. There is nothing to learn there: the source's shape already IS
+  the specialized kind, only the index or attachment differs. Element
+  conversion mirrors the interpreter's typed paths (signed/zero extension
+  then `cvtsi2sd` for the integer kinds, `cvtss2sd` for Float32, a direct load
+  for Float64) with one correctness step float kinds alone need: NaN
+  canonicalization. A raw f32/f64 element can hold any bit pattern, including
+  ones that alias this engine's NaN-boxed non-number tag space, so the tier
+  self-compares the loaded double and replaces any NaN with the canonical
+  quiet NaN before encoding (integer kinds always convert to a finite double
+  and skip this). At a site with both tiers, the typed-array tier runs first
+  (kind-checked before anything else) and its kind miss chains into the
+  JSArray tier rather than the helper -- the same duo chaining the store side
+  uses, verified by `recompile-getval-duo.js`.
+
+Tests (the get twins of the put set, plus the semantics files new to this
+feature): `test/jit/x86-64/recompile-getval-{trigger,mono-jsarray,duo,
+poisoned-int32-first,poisoned-float64-first,demote,demote-delay,
+demote-carried,demote-retired,demote-budget0}.js`,
+`getbyval-inline-emitted.js` (pins the indirect recording call, the JSArray
+tier's empty-check decline, and a specialized TA tier's load+convert),
+`getval-conversions-emitted.js` (the dumped instructions for each supported
+kind), and the arch-neutral `test/jit/getval-conversions.js` (bit-pattern
+round-trips per kind, including the NaN-canonicalization pin), `getval-guards.js`
+(hole/prototype/accessor semantics, out-of-bounds and detached-buffer
+`undefined` reads, non-uint32 keys, Arguments decline) and `getbyval-inline.js`
+-- all diffed against the interpreter, and exercised on arm64's helper path
+too.
+
 ### Arithmetic, comparisons and NaN handling
 
 The binary/unary arithmetic and comparison emitters share a template

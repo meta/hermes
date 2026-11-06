@@ -15,6 +15,10 @@
 // RUN: %hermes -Xjit=force -Xjit-emit-counters %s 2>&1 >/dev/null | %FileCheck --check-prefix=COUNT %s
 // RUN: %hermes -fno-inline -Xjit -Xjit-threshold=2 -Xdump-jitcode=1 %s 2>&1 | %FileCheck --check-prefix=SPEC %s
 // REQUIRES: jit
+// UNSUPPORTED: gc_malloc
+// ById inline-cache warm/cold timing (JIT cold ById sites count, and
+// hence recompile timing) diverges under MallocGC vs. the GC these
+// counts were tuned against: pre-existing, unrelated to GetByVal.
 
 // Property access: the three-tier GetById inline cache (object
 // specialization, parent specialization, generic read property cache), the

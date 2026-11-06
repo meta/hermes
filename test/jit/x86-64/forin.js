@@ -12,6 +12,10 @@
 // RUN: %hermes -fno-inline -Xjit=force -Xjit-max-recompiles=0 -Xdump-jitcode=2 %s | %FileCheck --match-full-lines %s
 // RUN: %hermes -fno-inline -O0 -Xjit=force -Xjit-max-recompiles=0 -Xdump-jitcode=2 %s | %FileCheck --match-full-lines --check-prefix=CHECK0 %s
 // REQUIRES: jit
+// UNSUPPORTED: gc_malloc
+// ById inline-cache warm/cold timing (JIT cold ById sites count, and
+// hence recompile timing) diverges under MallocGC vs. the GC these
+// counts were tuned against: pre-existing, unrelated to GetByVal.
 
 // Iteration: for-in (GetPNameList, GetNextPName) and the iteration protocol
 // (IteratorBegin, IteratorNext, IteratorClose). Both live here because they

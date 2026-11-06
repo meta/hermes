@@ -9,10 +9,14 @@
 // RUN: %hermes -fno-inline -Xjit=force -Xjit-crash-on-error %s > %t.jit && diff %t.int %t.jit
 // RUN: %hermes -fno-inline -Xjit=force -Xdump-jitcode=3 %s | %FileCheck --check-prefixes=SPEC,SPEC-%hv-mode %s
 // REQUIRES: jit
-// UNSUPPORTED: handle_san
+// UNSUPPORTED: handle_san || gc_malloc
 // (Under HERMESVM_SANITIZE_HANDLES the runtime boxes every number, so the
 // encoder declines the inline-number case with a bare jump and the encode
 // sequence pinned below is not emitted; see putbyid-inline-emitted.js.)
+// Under MallocGC the PutByVal fast-array store tier is barrier-gated and
+// Config.h compiles it out entirely, so none of the pinned inline
+// instructions are emitted; pre-existing, unrelated to GetByVal (loads
+// have no write barrier and are never gated).
 
 // That the PutByVal inline fast array store is EMITTED, and what it consists
 // of. putbyval-inline.js is the file that runs it against a collecting heap;

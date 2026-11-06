@@ -527,8 +527,10 @@ inline void emit_load_slot16(
 /// tag with movk/bfi, which x86 has no equivalent of). Callers must therefore
 /// not hold a live value in xScratch across emitFirstCase()/emitRestCases().
 /// That is the same rule every other transient user of xScratch follows, and
-/// both call sites in this backend -- the GetById inline cache and
-/// getOwnBySlotIdx -- are straight-line code with no call in sight.
+/// all call sites in this backend -- the GetById inline cache,
+/// getOwnBySlotIdx, and the GetByVal fast-array tier's element unbox
+/// (emitGetByValFastArrayTier) -- are straight-line code with no call in
+/// sight.
 /// In the default HV64 build nothing at all is emitted and the class is empty.
 class Emit_sh_shv_decode {
 #ifdef HERMESVM_BOXED_DOUBLES

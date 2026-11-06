@@ -1544,6 +1544,13 @@ class Emitter {
       const char *name,
       bool strict);
 
+  /// Split out of getByVal(): the full tier-selection sequence, mirroring
+  /// putByValImpl() -- the evidence-driven typed-array tier first (kind
+  /// miss chains into the next tier), then the unconditional JSArray
+  /// tier, then the indirect recording helper call as the shared slow
+  /// path. The result lands in the same register on every path.
+  void getByValImpl(FR frRes, FR frSource, FR frKey);
+
   class GetByIdImpl;
   void getByIdImpl(
       FR frRes,
@@ -1759,6 +1766,143 @@ class Emitter {
       FR frTarget,
       FR frKey,
       FR frValue,
+      CellKind kind,
+      const asmjit::Label &kindMissLab,
+      const asmjit::Label &helperLab);
+
+  /// The register assignment the inline GetByVal tiers run on. It is made
+  /// ONCE, by getByValImpl(), and handed to every tier, for two reasons:
+  /// the tiers must agree on which register the result lands in (they are
+  /// alternatives reached by a chain of kind guards, and the shared slow
+  /// path and the frame update that follow them name one register), and
+  /// the source and the key are loaded once for the whole chain rather
+  /// than reloaded per tier. Contrast the PutByVal tiers, which each own
+  /// their prologue: a store has no result register to agree on.
+  ///
+  /// Every field is a temp the caller has ALREADY released back to the
+  /// allocator (see getByValImpl()), so a tier may clobber any of them
+  /// freely -- except that \c source and \c key must survive a tier that
+  /// declines, because the next tier in the chain reads them, and \c res
+  /// must be written LAST, since it may alias \c loc or \c idx.
+  struct GetByValRegs {
+    /// The source operand, as a raw HermesValue.
+    x86::Gp source;
+    /// The key operand, as the raw 64 bits of the double it has to be.
+    x86::Xmm key;
+    /// Scratch: the object pointer, then the storage or buffer, then the
+    /// element address.
+    x86::Gp loc;
+    /// Scratch: the key converted to a uint32 element index, zero-extended
+    /// so it is directly usable as a scaled 64-bit index.
+    x86::Gp idx;
+    /// General scratch.
+    x86::Gp temp1;
+    /// Scratch for the key conversion's round trip.
+    x86::Xmm keyTmp;
+    /// Scratch holding the typed-array element as a double. Invalid unless
+    /// a typed-array tier is emitted at this site.
+    x86::Xmm valTmp;
+    /// Where the result HermesValue must land, on every path.
+    x86::Gp res;
+  };
+
+  /// Emit the GetByVal inline fast array load: a chain of guards that the
+  /// source is a fast JSArray and the key an existing, non-hole element of
+  /// it, followed by an inline unbox of that element's SmallHermesValue
+  /// into \c regs.res. Falling through means the load is done and
+  /// \c regs.res holds it; every guard that fails jumps to \p helperLab,
+  /// whose helper call resolves the read exactly (the prototype chain may
+  /// carry the answer).
+  ///
+  /// Unconditional: this tier is emitted at every GetByVal site, in every
+  /// version, on every build configuration and every GC/heap-value mode --
+  /// unlike emitPutByValFastArrayTier() it needs no
+  /// HERMES_JIT_INLINE_SAFE_STORE gate, because a load takes no write
+  /// barrier. Nothing observes its hits, so it is a static prior rather
+  /// than an evidence-driven decision, exactly as the spec's "JSArray load
+  /// tier is emitted unconditionally" policy requires.
+  ///
+  /// The guards mirror ArrayImpl::at() (JSArray.h) and
+  /// tryFastGetComputedNoAlloc()'s JSArray branch (JSObject-inline.h),
+  /// reusing emitPutByValFastArrayTier()'s object/kind/key-conversion
+  /// sequence VERBATIM but dropping everything that exists only for the
+  /// store side:
+  ///   - the source is an object (unless \p sourceKnownObject);
+  ///   - of CellKind JSArray exactly -- the same narrower-than-ArrayImpl
+  ///     guard the put tier uses, which is why an Arguments object (a
+  ///     different CellKind that shares ArrayImpl's storage layout)
+  ///     declines here instead of being read inline;
+  ///   - NO flags_.fastIndexProperties/frozen check: unlike the store side,
+  ///     the read side needs none. tryFastGetComputedNoAlloc()'s own
+  ///     comment explains why -- "We don't need to check for fast index
+  ///     properties here, because if there are non-fast ones, the
+  ///     corresponding slot will be empty" -- so the empty check below
+  ///     already subsumes it;
+  ///   - the key is a double that converts to a uint32 and back unchanged
+  ///     and is not 0xFFFFFFFF -- exactly toArrayIndexFastPath(), the put
+  ///     tier's own key-conversion sequence, unchanged;
+  ///   - `index - beginIndex_ < elemCount_` unsigned, ArrayImpl::at()'s
+  ///     range test. Out of range is a DECLINE to \p helperLab, not an
+  ///     inline `undefined`: the prototype chain may carry indexed
+  ///     properties at that index, so only the full path can answer;
+  ///   - the loaded SmallHermesValue element is not `empty` (a hole):
+  ///     ArrayImpl::at() returns `empty` for one, and a hole read must
+  ///     resolve through the prototype chain (a data property or an
+  ///     accessor may live there), so it is also a decline, not
+  ///     `undefined`.
+  ///
+  /// The one guard emitPutByValFastArrayTier() has that this omits besides
+  /// the flags check: the "not a jumbo cell" size gate. That guard exists
+  /// solely to satisfy emitSafeStoreOrSlow()'s precondition on the write
+  /// barrier's card math; a load touches no card and needs no such bound.
+  ///
+  /// \param sourceKnownObject true when an earlier tier at this site has
+  ///   already proved the source an object, in which case the object check
+  ///   is skipped. Everything else is still emitted: this tier derives its
+  ///   own object pointer and re-reads the cell kind.
+  ///
+  /// On entry the source and the key must already be synced to the frame,
+  /// because \p helperLab reads them from there, and they must be live in
+  /// \c regs.source and \c regs.key. This emits no register-allocator
+  /// bookkeeping at all -- getByValImpl() has already left the allocator
+  /// in the state the shared helper call needs.
+  void emitGetByValFastArrayTier(
+      const GetByValRegs &regs,
+      const asmjit::Label &helperLab,
+      bool sourceKnownObject);
+
+  /// Emit the inline typed-array load tier specialized for exactly \p kind,
+  /// the load-side sibling of emitPutByValTypedArrayTier(). A kind mismatch
+  /// on an object source branches to \p kindMissLab (the JSArray tier,
+  /// which is always emitted after this one); a non-object source or a key
+  /// that is not an exact uint32 declines to \p helperLab.
+  ///
+  /// Semantics authority: tryFastGetComputedNoAlloc()'s typed-array branch
+  /// (JSObject-inline.h). Two differences from the store tier follow from
+  /// it, and both are load-side ONLY:
+  ///   - NO object-flags check. The read path tests neither
+  ///     fastIndexProperties nor frozen for a typed array: an element read
+  ///     is answered by length and attachedness alone, so a tier that
+  ///     checked the flags would decline where the interpreter does not.
+  ///   - An out-of-bounds index, and a detached buffer, are NOT declines.
+  ///     Both read as `undefined`, so both branch to a two-instruction
+  ///     inline `undefined`, never to the helper -- which also means they
+  ///     record nothing, and rightly so: the site's shape at that point IS
+  ///     the specialized kind, and there is nothing left to learn.
+  ///
+  /// The element is loaded, widened to a double per \p kind, and encoded as
+  /// a number HermesValue. For the two float kinds the widened value is
+  /// NaN-canonicalized first: a raw f32/f64 element may hold ANY NaN bit
+  /// pattern, including one that aliases the NaN-box tag space, and
+  /// encoding that verbatim would forge a non-number HermesValue. The
+  /// integer kinds always produce a finite double and skip it.
+  ///
+  /// On entry the source and the key must already be synced to the frame,
+  /// because \p helperLab reads them from there, and they must be live in
+  /// \c regs.source and \c regs.key. \c regs.valTmp must be valid. Like the
+  /// fast array tier, this emits no register-allocator bookkeeping.
+  void emitGetByValTypedArrayTier(
+      const GetByValRegs &regs,
       CellKind kind,
       const asmjit::Label &kindMissLab,
       const asmjit::Label &helperLab);

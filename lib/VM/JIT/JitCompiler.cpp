@@ -249,6 +249,21 @@ bool JITContext::recompile(Runtime &runtime, CodeBlock *codeBlock) {
   return true;
 }
 
+/// \return true if \p kind is a kind SOME ByVal operation (put or get)
+/// can specialize on. taKind is only ever set by a recorder that
+/// validated the kind against its own operation's predicate --
+/// isJitSupportedTypedArrayStoreKind for a put site,
+/// isJitSupportedTypedArrayLoadKind for a get site -- so a stored
+/// taKind always satisfies at least one of the two, and it is safe to
+/// test the union here without knowing which operation recorded it.
+/// Each emitter still independently re-checks its OWN predicate before
+/// specializing, so this union only ever gates progress/demotion
+/// bookkeeping, never which tier gets emitted.
+static bool isJitSupportedTypedArrayKindForSomeByValOp(CellKind kind) {
+  return isJitSupportedTypedArrayStoreKind(kind) ||
+      isJitSupportedTypedArrayLoadKind(kind);
+}
+
 /// \return true if some ByVal site's observed typed-array kind is not
 /// covered by the current body's emitted tier and a recompile could
 /// cover it. Under monotone emission this is the ONLY ByVal progress
@@ -262,7 +277,7 @@ static bool byValShapeProgress(const JitVersionData *vd) {
     return false;
   for (const auto &s : cr->byValSites) {
     if (s.taKind != JitByValSiteRecord::kTAKindNone &&
-        isJitSupportedTypedArrayStoreKind((CellKind)s.taKind) &&
+        isJitSupportedTypedArrayKindForSomeByValOp((CellKind)s.taKind) &&
         s.taKind != s.specializedTAKind)
       return true;
   }
@@ -275,21 +290,26 @@ static bool byValShapeProgress(const JitVersionData *vd) {
 /// crossing is a "changed" crossing, so demotion lands at the fourth.
 static constexpr uint8_t kDemotionStableCrossings = 3;
 
-/// \return true if \p h is one of the recording PutByVal helpers, i.e.
-/// the site has not been demoted yet.
+/// \return true if \p h is one of the recording ByVal helpers (put or
+/// get), i.e. the site has not been demoted yet.
 static bool isRecordingHelper(void *h) {
   return h == (void *)_jit_put_by_val_loose ||
-      h == (void *)_jit_put_by_val_strict;
+      h == (void *)_jit_put_by_val_strict || h == (void *)_jit_get_by_val;
 }
 
-/// Flip \p s to the plain helper matching its strictness, which is
-/// derived from the slot's current value rather than stored separately.
-/// Terminal: nothing ever flips a slot back (spec: "Terminal is
-/// terminal").
+/// Flip \p s to the plain helper matching its recording helper: get
+/// maps to the plain get helper, and put maps to the plain helper
+/// matching its strictness, derived from the slot's current value
+/// rather than stored separately. Terminal: nothing ever flips a slot
+/// back (spec: "Terminal is terminal").
 static void demoteSite(JitByValSiteRecord &s) {
-  s.helper = s.helper == (void *)_jit_put_by_val_strict
-      ? (void *)_sh_ljs_put_by_val_strict_rjs
-      : (void *)_sh_ljs_put_by_val_loose_rjs;
+  if (s.helper == (void *)_jit_get_by_val) {
+    s.helper = (void *)_sh_ljs_get_by_val_rjs;
+  } else {
+    s.helper = s.helper == (void *)_jit_put_by_val_strict
+        ? (void *)_sh_ljs_put_by_val_strict_rjs
+        : (void *)_sh_ljs_put_by_val_loose_rjs;
+  }
 }
 
 /// Flip every still-recording site of \p vd to the plain helper, without
@@ -341,7 +361,7 @@ void JITContext::considerRecompile(Runtime &runtime, JitVersionData *vd) {
         // kind, and only while a recompile could still act on it.
         bool canProgress = actionablePossible &&
             s.taKind != JitByValSiteRecord::kTAKindNone &&
-            isJitSupportedTypedArrayStoreKind((CellKind)s.taKind) &&
+            isJitSupportedTypedArrayKindForSomeByValOp((CellKind)s.taKind) &&
             s.taKind != s.specializedTAKind;
         if (!observed || canProgress || s.changed) {
           s.unchangedCrossings = 0;

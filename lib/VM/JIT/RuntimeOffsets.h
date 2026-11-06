@@ -283,11 +283,17 @@ struct RuntimeOffsets {
   /// size when this is 32.
   static constexpr uint32_t kindAndSizeNumSizeBits = KindAndSize::kNumSizeBits;
   /// @}
+#endif
 
-  /// \name Fast array element store.
+  /// \name Fast array element access.
   ///
-  /// The layout the inline PutByVal fast path reads out of a JSArray. See
-  /// Emitter::emitPutByValFastArrayTier().
+  /// The ArrayImpl layout both the inline PutByVal fast array STORE tier
+  /// (Emitter::emitPutByValFastArrayTier(), Hades-only: see the barrier
+  /// geometry above) and the inline GetByVal fast array LOAD tier
+  /// (Emitter::emitGetByValFastArrayTier()) read. Deliberately outside the
+  /// Hades-only block above, unlike the store tier's other geometry: a load
+  /// takes no write barrier, so its tier is emitted under every GC,
+  /// MallocGC included, and needs these three fields regardless.
   /// @{
   static constexpr uint32_t arrayImplBeginIndex =
       offsetof(ArrayImpl, beginIndex_);
@@ -296,7 +302,6 @@ struct RuntimeOffsets {
   static constexpr uint32_t arrayImplIndexedStorage =
       offsetof(ArrayImpl, indexedStorage_);
   /// @}
-#endif
 
   /// \name Indexed store class flags.
   ///
