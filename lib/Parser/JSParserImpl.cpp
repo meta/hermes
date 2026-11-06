@@ -5761,11 +5761,16 @@ bool JSParserImpl::reparseArrowParameters(
     if (auto *spread = dyn_cast<ESTree::SpreadElementNode>(expr)) {
       // async arrow heads are initially parsed as CallExpression,
       // which means that Rest elements are parsed as SpreadElement.
-      if (it != e)
+      if (it != e) {
         error(expr->getSourceRange(), "rest parameter must be last");
-      else
-        paramList.push_back(*new (context_)
-                                ESTree::RestElementNode(spread->_argument));
+        continue;
+      }
+      // The argument may be a pattern, e.g. `async (...[a, b]) => {}`.
+      auto optRest = reparseAssignmentPattern(spread->_argument, true);
+      if (optRest) {
+        paramList.push_back(*setLocation(
+            spread, spread, new (context_) ESTree::RestElementNode(*optRest)));
+      }
       continue;
     }
 
