@@ -96,6 +96,50 @@ MatchRuntimeResult searchResult(
       constants::matchDefault);
 }
 
+#ifdef HERMES_ENABLE_UNICODE_REGEXP_PROPERTY_ESCAPES
+TEST(Regex, PackedUnicodePropertyRanges) {
+  // Exercise inline and overflow ranges through parsing, bytecode generation,
+  // and execution. Explicit lengths preserve the NUL character.
+  const std::u16string inputs[] = {
+      std::u16string(1, 0),
+      u"\x7f",
+      u"\x80",
+      u"\ue000",
+      u"\uf8ff",
+      u"\U000f0000",
+      u"\U000ffffd",
+      u"\U00100000",
+      u"\U0010fffd",
+      u"\U0010ffff"};
+  const bool isAscii[] = {
+      true, true, false, false, false, false, false, false, false, false};
+  const bool isPrivateUse[] = {
+      false, false, false, true, true, true, true, true, true, false};
+  for (size_t i = 0; i < std::size(inputs); ++i) {
+    SCOPED_TRACE(i);
+    cmatch matches;
+    const auto *start = inputs[i].data();
+    const auto *end = start + inputs[i].size();
+    EXPECT_TRUE(search(start, end, matches, cregex(u"^\\p{Any}$", u"u")));
+    EXPECT_EQ(
+        isAscii[i], search(start, end, matches, cregex(u"^\\p{ASCII}$", u"u")));
+    EXPECT_EQ(
+        isPrivateUse[i],
+        search(start, end, matches, cregex(u"^\\p{Co}$", u"u")));
+    EXPECT_EQ(
+        !isPrivateUse[i],
+        search(start, end, matches, cregex(u"^\\P{Co}$", u"u")));
+  }
+
+  cmatch matches;
+  EXPECT_TRUE(search(
+      u"Az\ue000\U00100000\u03a9",
+      matches,
+      cregex(u"^(\\p{ASCII}{2})(\\p{Co}{2})(\\P{ASCII})$", u"u")));
+  EXPECT_EQ("(0-6) (0-2) (2-5) (5-6)", flatten(matches));
+}
+#endif
+
 TEST(Regex, ExecFail) {
   EXPECT_EQ(
       searchResult(u"", u"(){999999999}"), MatchRuntimeResult::StackOverflow);
