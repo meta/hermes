@@ -129,6 +129,41 @@ void Emitter::toInt32(FR frRes, FR frInput, bool isSigned) {
       frRes.index(),
       frInput.index());
 
+  // A statically known bool needs no conversion: its payload bit is already
+  // 0 or 1. The double round-trip below can never succeed for one -- a bool's
+  // tagged pattern reads as a NaN, so the jp always fires -- so without this
+  // every such site pays the out-of-line helper. Wasm leans on it hardest:
+  // i32 comparisons lower to FCompare (a bool) + AsInt32, but plain JS
+  // `(a === b) | 0` has the same shape.
+  if (isFRKnownBool(frInput)) {
+    // Unlike the generic path below there is no slow path here, so no temps
+    // need to be synced and freed for a call: the scratch stays allocated
+    // across the conversion and is released after it.
+    //
+    // The scratch survives until it is consumed because it is freshly
+    // allocated, hence most-recently-used, and only one further GP
+    // allocation (the input) happens before the read; the result allocation
+    // is vector-only and cannot touch it. Note this is a recency argument,
+    // not an exclusion rule: _allocTemp picks the LRU register without
+    // regard to whether it is anonymous, and _spillTempForFR asserts on one
+    // that holds no FR, so a longer GP allocation chain here would need the
+    // scratch pinned rather than merely recent.
+    HWReg hwBoolTmp = allocTempGpX();
+    HWReg hwBoolIn = getOrAllocFRInGpX(frInput, true);
+    a.mov(hwBoolTmp.gpq(), hwBoolIn.gpq());
+    a.shr(hwBoolTmp.gpq(), kHV_BoolBitIdx);
+    a.and_(hwBoolTmp.gpq().r32(), asmjit::Imm(1));
+    // The result is a vector reg, so allocating it cannot disturb the GP
+    // scratch still holding the extracted value.
+    HWReg hwBoolRes = getOrAllocFRInVecD(frRes, false);
+    frUpdatedWithHW(frRes, hwBoolRes, FRType::Number);
+    // The value is 0 or 1, so the signed and unsigned conversions agree.
+    emit_int32_to_double(
+        a, hwBoolRes.xmm(), hwBoolTmp.gpq(), /* isUnsigned */ false);
+    freeReg(hwBoolTmp);
+    return;
+  }
+
   HWReg hwTempGpX = allocTempGpX();
   HWReg hwTempVecD = allocTempVecD();
 
