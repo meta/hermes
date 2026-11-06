@@ -16,6 +16,9 @@
 #include "hermes/VM/sh_legacy_value.h"
 #include "hermes/VM/static_h.h"
 
+#include "llvh/ADT/STLExtras.h"
+#include "llvh/ADT/SmallVector.h"
+
 #include <vector>
 
 typedef struct SHRuntime SHRuntime;
@@ -31,6 +34,7 @@ class CodeBlock;
 class JSObject;
 class HiddenClass;
 class PinnedHermesValue;
+struct ReadPropertyCacheEntry;
 
 /// Create a JSFunction closure. The properties of the function (name, etc.)
 /// will be populated lazily.
@@ -254,6 +258,45 @@ bool isEligibleByIdShape(HiddenClass *objClass, HiddenClass *protoClass);
 /// overwrites a dead entry that was never emitted, else it is appended,
 /// else the site becomes megamorphic. \return true if the record changed.
 bool addByIdShape(JitByIdSiteRecord &site, const JitByIdShapeEntry &ne);
+
+/// One GetById poly-chain entry, resolved to lazy JIT IDs for the
+/// emitter. A POD.
+struct JitByIdPolyEntry {
+  /// Lazy JIT ID of the receiver's class.
+  uint16_t objId;
+  /// Proto only: lazy JIT ID of the prototype's class.
+  uint16_t protoId;
+  /// Slot to load, in the receiver, the prototype, or the object
+  /// `depth` levels up.
+  SlotIndex slot;
+  /// Which record entry kind this is.
+  JitByIdEntryKind kind;
+  /// Chain only: prototypes from the receiver to the holder.
+  uint8_t depth;
+  /// Chain only: the address of the record entry's epoch, which the
+  /// emitted code reads. Stable: entries live in the record's inline
+  /// storage and are never moved, erased or, once emitted, overwritten.
+  const uint64_t *epochAddr;
+};
+
+/// Resolve \p site's live entries to lazy JIT IDs before any chain code
+/// is emitted. If the site has a live entry and \p cacheEntry had
+/// exactly one good change, first fold the shape the single-shape tier
+/// would specialize into the record (subject to the cap). Mark each live
+/// entry emitted or unemittable, append the emitted ones to the empty
+/// \p out in emission order (own entries, then chain entries, then
+/// prototype entries). If any entry will be emitted, set the site's
+/// chainEmitted and chainEntryEmitted; otherwise leave them unchanged.
+/// \param lazyId returns a class's lazy JIT ID, or 0 if none can be
+///   assigned. It is a GC safepoint, so each class is re-read from its
+///   weak root right before the call.
+/// \return true if at least one entry will be emitted.
+bool prepareByIdPolyChain(
+    Runtime &runtime,
+    JitByIdSiteRecord &site,
+    ReadPropertyCacheEntry *cacheEntry,
+    llvh::function_ref<uint16_t(HiddenClass *)> lazyId,
+    llvh::SmallVectorImpl<JitByIdPolyEntry> &out);
 
 /// The result of jitWalkChain(): whether a GetById of a name on an object
 /// can be answered by a chain entry, and with what. A POD.

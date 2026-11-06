@@ -29,6 +29,8 @@
 
 #include "llvh/Support/raw_ostream.h"
 
+#include <algorithm>
+
 #define DEBUG_TYPE "jit"
 
 namespace hermes::vm {
@@ -578,6 +580,97 @@ bool addByIdShape(JitByIdSiteRecord &site, const JitByIdShapeEntry &ne) {
     return true;
   }
   return false;
+}
+
+/// Fold the shape the single-shape tier would specialize for
+/// \p cacheEntry into \p site, if eligible and absent (subject to the
+/// cap).
+static void addCacheShape(
+    Runtime &runtime,
+    JitByIdSiteRecord &site,
+    ReadPropertyCacheEntry *cacheEntry) {
+  HiddenClass *clazz = cacheEntry->clazz.get(runtime, runtime.getHeap());
+  HiddenClass *neg = cacheEntry->negMatchClazz.get(runtime, runtime.getHeap());
+  if (!clazz)
+    return;
+  if (!neg) {
+    if (isEligibleByIdShape(clazz, nullptr))
+      addByIdShape(
+          site,
+          JitByIdShapeEntry::makeOwn(
+              cacheEntry->clazz.getNoBarrierUnsafe(),
+              cacheEntry->getSlot(),
+              false));
+  } else if (isEligibleByIdShape(neg, clazz)) {
+    addByIdShape(
+        site,
+        JitByIdShapeEntry::makeProto(
+            cacheEntry->negMatchClazz.getNoBarrierUnsafe(),
+            cacheEntry->clazz.getNoBarrierUnsafe(),
+            cacheEntry->getSlot(),
+            false));
+  }
+}
+
+/// \return the position of \p kind in the poly chain's layout.
+static unsigned polyEmitRank(JitByIdEntryKind kind) {
+  return kind == JitByIdEntryKind::Own  ? 0
+      : kind == JitByIdEntryKind::Chain ? 1
+                                        : 2;
+}
+
+bool prepareByIdPolyChain(
+    Runtime &runtime,
+    JitByIdSiteRecord &site,
+    ReadPropertyCacheEntry *cacheEntry,
+    llvh::function_ref<uint16_t(HiddenClass *)> lazyId,
+    llvh::SmallVectorImpl<JitByIdPolyEntry> &out) {
+  assert(out.empty() && "prepareByIdPolyChain() appends to an empty list");
+  bool anyLive = false;
+  for (const auto &e : site.entries)
+    anyLive |= e.isLive();
+  if (!anyLive)
+    return false;
+  if (cacheEntry->numGoodChanges == 1)
+    addCacheShape(runtime, site, cacheEntry);
+  bool anyChain = false;
+  for (auto &e : site.entries) {
+    if (!e.isLive())
+      continue;
+    bool isProto = e.kind == JitByIdEntryKind::Proto;
+    bool isChain = e.kind == JitByIdEntryKind::Chain;
+    // A chain entry needs a lazy ID for its receiver class only.
+    uint16_t objId = lazyId(e.objClass.get(runtime, runtime.getHeap()));
+    uint16_t protoId = 0;
+    if (objId && isProto)
+      protoId = lazyId(e.protoClass.get(runtime, runtime.getHeap()));
+    if (!objId || (isProto && !protoId)) {
+      e.unemittable = 1;
+      continue;
+    }
+    e.emitted = 1;
+    anyChain |= isChain;
+    out.push_back(
+        {objId,
+         protoId,
+         e.slot,
+         e.kind,
+         e.depth,
+         isChain ? &e.epoch : nullptr});
+  }
+  if (out.empty())
+    return false;
+  // Own entries, then chain entries, then the prototype block: chain
+  // entries leave the prototype block's state untouched.
+  std::stable_sort(
+      out.begin(),
+      out.end(),
+      [](const JitByIdPolyEntry &a, const JitByIdPolyEntry &b) {
+        return polyEmitRank(a.kind) < polyEmitRank(b.kind);
+      });
+  site.chainEmitted = 1;
+  site.chainEntryEmitted = anyChain ? 1 : 0;
+  return true;
 }
 
 /// \return true if lookups through an object of class \p clazz are not
