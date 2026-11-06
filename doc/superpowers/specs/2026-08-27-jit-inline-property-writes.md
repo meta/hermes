@@ -391,6 +391,11 @@ declines can stop running the tier; that is a follow-up.
 
 ## Stage 5 — arm64 port (added 2026-09-02)
 
+DELIVERED 2026-09-02 in three commits, the last of which
+(`JIT: arm64: inline writes under compressed pointers and boxed doubles`)
+also created the two arm64 heap-mode trees and dropped the gate's arch
+restriction; the text below is the design as written, kept for the record.
+
 Port the final x86-64 state to arm64: `emitSafeStoreOrSlow`, the PutById
 and PutByVal tiers, and the SmallHermesValue encoder, in three commits
 mirroring the x86-64 series (reference the x86-64 commits by subject and
@@ -425,7 +430,8 @@ arch-specific is instruction selection only:
 Tests: the three behavioral tests (`putbyid-inline.js`,
 `putbyval-inline.js`, `inline-store-shv-shapes.js`) are architecture-
 independent — MOVE them from `test/jit/x86-64/` to `test/jit/` so both
-backends run them (adjust doc references). The `-emitted` pin tests stay
+backends run them (adjust doc references). All three now live in
+`test/jit/`. The `-emitted` pin tests stay
 x86-64; each arm64 stage adds its own pin test under `test/jit/` with
 `REQUIRES: jit-arch-arm64`, following the same SPEC / SPEC-%hv-mode
 prefix scheme.

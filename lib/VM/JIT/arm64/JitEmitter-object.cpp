@@ -224,7 +224,7 @@ void Emitter::newObjectWithBuffer(
 
   // If the object and the property storage can't be guaranteed to be in the
   // young gen, bail.
-  // TODO: Fix this once we can inline write barriers.
+  // TODO: apply the inline write barrier (emitSafeStoreOrSlow) here.
   if (shapeInfo.numProps > JSObject::maxYoungGenAllocationPropCount()) {
     newObjectWithBufferSlow(frRes, shapeTableIndex, valBufferOffset);
     return;

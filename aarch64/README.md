@@ -100,10 +100,12 @@ shows up as a diff.
 LIT_FILTER="jit/" cmake --build cmake-build-arm64 --target check-hermes -j "$(nproc)"
 ```
 
-Expected: all 46 tests in `test/jit` run, 45 pass and one is reported
-unsupported — `large_literal_obj.js` requires `!slow_debug`, so it is skipped
-in this (slow-debug) build exactly as it would be on real hardware. Runtime
-is about 25s wall-clock with 16 threads.
+Expected: 54 pass and 27 are reported unsupported. Twenty-six of those are
+the `test/jit/x86-64/` bring-up tests, which the directory's own
+`lit.local.cfg` gates to that backend; the twenty-seventh is
+`large_literal_obj.js`, which requires `!slow_debug` and so is skipped in
+this (slow-debug) build exactly as it would be on real hardware. Runtime is
+about 40s wall-clock with 16 threads.
 
 Drop `LIT_FILTER` to run everything (much slower under emulation). Note that
 lit runs `FileCheck` under qemu too, since it is built as a target binary,
@@ -112,6 +114,33 @@ under emulation as well (41 of 64, the rest skipped by their own skip list).
 
 Running `hermes-lit` directly needs `python` on `PATH`; Ubuntu only provides
 `python3`, so prefer the `check-hermes` target.
+
+## 5. The other two heap-value modes
+
+Anything that touches heap value widths or the inline write barrier has to
+be built and run in all three heap-value modes, exactly as on x86-64 (see
+doc/JIT.md, "The heap-value-mode build matrix"). The two extra trees are
+`cmake-build-arm64` with one flag added:
+
+```bash
+cmake -B cmake-build-arm64-hv32 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/aarch64/aarch64-linux-gnu.toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_FLAGS="-O1" -DCMAKE_C_FLAGS="-O1" \
+  -DHERMESVM_ALLOW_JIT=2 \
+  -DHERMES_UNICODE_LITE=ON \
+  -DHERMESVM_HEAP_HV_MODE=HEAP_HV_PREFER32 \
+  -DIMPORT_HOST_COMPILERS="$PWD/cmake-build-host/ImportHostCompilers.cmake" \
+  -DQEMU_RUN_PREFIX="qemu-aarch64-static -L /usr/aarch64-linux-gnu"
+```
+
+and the same again as `cmake-build-arm64-boxed` with
+`-DHERMESVM_HEAP_HV_MODE=HEAP_HV_BOXED`. `HEAP_HV_PREFER32` turns on
+compressed pointers and boxed doubles together, so a heap slot is four
+bytes there; `HEAP_HV_BOXED` turns on boxed doubles alone, so a slot stays
+eight bytes but holds a `HermesValue32` rather than a `HermesValue`. Both
+`qemu-sanity.sh` and the `LIT_FILTER="jit/"` run above take a build
+directory, so run each of them against all three trees.
 
 ## Limitations
 

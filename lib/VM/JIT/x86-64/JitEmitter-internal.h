@@ -646,7 +646,7 @@ void emit_shv_encode_or_slow(
 /// Call it BEFORE the tier's guards. Nothing has been stored at that point,
 /// so the decline costs nothing -- and a value that cannot be encoded is by
 /// far the cheapest thing to reject, because rejecting it there skips the
-/// whole guard chain. See doc/JIT.md's "Inline write barrier (x86-64)".
+/// whole guard chain. See doc/JIT.md's "Inline write barrier".
 ///
 /// \param out receives the SmallHermesValue under boxed doubles; unused
 ///   otherwise. Must differ from \p value and \p temp.

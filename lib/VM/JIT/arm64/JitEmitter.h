@@ -1458,24 +1458,41 @@ class Emitter {
       bool tryProp);
 
 #if HERMES_JIT_INLINE_SAFE_STORE
-  /// Emit an inline store of the value in \p value to the heap slot whose
-  /// address is in \p loc, performed only when the Hades write barrier for
-  /// that store is provably either a no-op or a single card-dirty. In every
-  /// other case -- concurrent marking active, a compaction in progress, or a
-  /// segment whose card array is not the inline one -- nothing is stored and
-  /// control jumps to \p slowLab, whose code is expected to perform the store
-  /// through the runtime, barrier included.
+  /// Emit an inline store of the already-encoded slot value in \p shv to the
+  /// heap slot whose address is in \p loc, performed only when the Hades
+  /// write barrier for that store is provably either a no-op or a single
+  /// card-dirty. In every other case -- concurrent marking active, a
+  /// compaction in progress, or a segment whose card array is not the inline
+  /// one -- nothing is stored and control jumps to \p slowLab, whose code is
+  /// expected to perform the store through the runtime, barrier included.
+  ///
+  /// A heap slot holds a SmallHermesValue, not a HermesValue, and under
+  /// HERMESVM_BOXED_DOUBLES the two differ. Callers produce \p shv with
+  /// emit_shv_encode_for_slot_or_slow(), which is where the one value this
+  /// path cannot store is declined -- a double whose bits do not fit inline
+  /// needs a heap-allocated BoxedDouble. That happens BEFORE the caller's
+  /// guards, not here, because a value that cannot be encoded is the cheapest
+  /// thing to reject and rejecting it early skips the whole guard chain; on
+  /// Box2D two thirds of the stores reaching these tiers are exactly that.
+  /// In the default heap-value mode the encode emits nothing and \p shv is
+  /// \p value.
+  ///
+  /// Everything here, the card decision included, is phrased in terms of the
+  /// ORIGINAL 64-bit \p value rather than \p shv: the two agree on which
+  /// values are pointers (the BoxedDouble that would not is already gone),
+  /// and a HermesValue carries its pointer uncompressed, which is what the
+  /// segment compare needs.
   ///
   /// The emitted predicate mirrors HadesGC::writeBarrier() and
   /// HadesGC::relocationWriteBarrier() exactly:
   ///
   ///     segLoc = loc & ~(kSegmentUnitSize-1)
   ///     if (segLoc == runtime.heap_.youngGen_.lowLim_)  // young target
-  ///       *loc = value; done                            //   no barrier
+  ///       *loc = shv; done                              //   no barrier
   ///     if (runtime.heap_.ogMarkingBarriers_)  goto slow  // snapshot barrier
   ///     if (compactee active)                  goto slow  // relocation into
   ///     if (segLoc's size != 1 unit)           goto slow  //   the compactee
-  ///     *loc = value
+  ///     *loc = shv
   ///     if (value is a pointer &&
   ///         (value.ptr & ~(kSegmentUnitSize-1)) == youngGen lowLim)
   ///       segLoc[(loc - segLoc) >> kLogCardSize] = CardStatus::Dirty
@@ -1513,20 +1530,26 @@ class Emitter {
   /// segment holds that array out of line, so its stores go to the helper.
   ///
   /// \param loc address of the slot; preserved.
-  /// \param value the 64-bit HermesValue to store, also used for the card
+  /// \param shv the encoded slot value to store; read only up to the store.
+  ///   It MAY be \p t2 -- and under boxed doubles it is, because the caller
+  ///   encoded into t2 before its guards -- which is sound precisely because
+  ///   t2 is not touched here until after the store.
+  /// \param value the original 64-bit HermesValue, used for the card
   ///   decision; preserved.
   /// \param t1 scratch, clobbered. Must differ from \p loc and \p value.
-  /// \param t2 scratch, clobbered. Must differ from \p loc and \p value.
+  /// \param t2 scratch, clobbered after the store. Must differ from \p loc
+  ///   and \p value.
   /// \param slowLab where to jump when the store was NOT performed.
   ///
-  /// NZCV is clobbered, and so is xScratch: unlike x86-64, which
-  /// compares against memory directly, arm64 has to load each of the three
-  /// runtime words it tests into a register, and at the card-dirty store both
-  /// \p t1 and \p t2 are already spoken for. Nothing else is touched: in
-  /// particular this emits no call, so no register needs to be synced or
-  /// freed around it.
+  /// NZCV is clobbered, and so is xScratch: unlike x86-64, which compares
+  /// against memory directly, arm64 has to load each of the runtime words it
+  /// tests into a register, and neither temporary is free to be it -- \p t1
+  /// holds the segment start the card store indexes off, and \p t2 may be
+  /// carrying the encoded value. Nothing else is touched: in particular this
+  /// emits no call, so no register needs to be synced or freed around it.
   void emitSafeStoreOrSlow(
       const a64::GpX &loc,
+      const a64::GpX &shv,
       const a64::GpX &value,
       const a64::GpX &t1,
       const a64::GpX &t2,

@@ -76,9 +76,10 @@ the per-config table below can just list which ones apply.
 
 - **G1 — `test/jit` + `test/jit/x86-64`** (`LIT_FILTER="jit/"` under
   `check-hermes`): the behavioral/compile-status suite. On x86-64,
-  73 tests: 72 pass, 1 unsupported (`large_literal_obj.js`,
-  `!slow_debug`), and no `XFAIL` anywhere. On arm64 the same directory
-  yields 49 pass / 24 unsupported (the 23 `x86-64/`-only files plus the
+  81 tests: 78 pass, 3 unsupported (`large_literal_obj.js` under
+  `!slow_debug`, plus the two arm64-only pin tests), and no `XFAIL`
+  anywhere. On arm64 the same directory
+  yields 54 pass / 27 unsupported (the 26 `x86-64/`-only files plus the
   same `!slow_debug` skip). Two changes account for the +2 passes on
   both architectures relative to the milestone-6 counts:
   `test/jit/reify-arguments-type.js` joined the suite (the shared
@@ -87,16 +88,16 @@ the per-config table below can just list which ones apply.
   try-region destination-sync bug it recorded is fixed, so it is now a
   plain passing regression test (findings item 1).
 
-  That 72/1 is for configs 2-4 (ASan+Debug, where `slow_debug` and
+  That 78/3 is for configs 2-4 (ASan+Debug, where `slow_debug` and
   `debug_options` are both `ON`). Config 5 (Release) also lands on
-  72/1, but it is a numerical coincidence over a *different*
-  membership: `slow_debug` and `debug_options` both flip with build
-  type (the `slow_debug`/`debug_options` lit params in `CMakeLists.txt`,
-  `IF:$<CONFIG:Debug>`), so under
-  Release `large_literal_obj.js` (`!slow_debug`) runs instead of being
-  skipped, and `getbyid-fast.js` (`REQUIRES: debug_options`) becomes
-  the one unsupported test instead — see "Release-build validation"
-  below.
+  78/3, but not over the same membership: `slow_debug` and
+  `debug_options` both flip with build type (the `slow_debug`/`debug_options` lit params in `CMakeLists.txt`,
+  `IF:$<CONFIG:Debug>`), so under Release `large_literal_obj.js`
+  (`!slow_debug`) runs instead of being skipped, and `getbyid-fast.js`
+  (`REQUIRES: debug_options`) is unsupported in its place — see
+  "Release-build validation" below. The other two unsupported files are
+  the same in every x86-64 config: the arm64 `-emitted` pin tests,
+  which carry `REQUIRES: jit-arch-arm64`.
 - **G2 — full `check-hermes`**: the whole lit suite plus unit tests plus
   NAPI, with the JIT compiled in but not forced on (`test/jit` is still
   the only directory that forces it). Confirms the JIT-enabled build
@@ -147,17 +148,20 @@ diff int.out jit.out && diff int.out jit-ta.out && diff int0.out jit0.out
 ```
 
 arm64 additionally has `./aarch64/qemu-sanity.sh`, a nine-check smoke
-test folding most of G1/G4 into one script (see `aarch64/README.md`).
+test folding most of G1/G4 into one script (see `aarch64/README.md`). It
+takes a build directory, so it runs against each of the three arm64 trees.
 
 ### Per-config gate matrix
 
 | Config | G1 | G2 | G3 | G4 | G5 | G6 |
 |---|---|---|---|---|---|---|
-| 1. arm64-qemu | yes (49/24) | yes (see README) | yes (own baseline) | yes (`qemu-sanity.sh`) | no | n/a (qemu timings are meaningless — see README "Limitations") |
-| 2. x86-64 HV64 ASan | yes (72/1) | yes (4333 tests: 4176 pass / 6 xfail / 151 unsupported) | yes (own baseline) | yes | yes (480/497) | n/a (ASan skews timings) |
-| 3. x86-64 HV32 ASan | yes (72/1) | not run separately (G1 + G4 + G5 are the gate for this config; G2 is HV64's job) | n/a (only HV64 has a stored baseline — the emitted code differs by design across modes, see `doc/JIT.md`) | yes | yes (479/497 — one file crosses the sweep's 10s timeout under this mode's extra decode) | n/a |
-| 4. x86-64 BOXED ASan | yes (72/1) | not run separately | n/a | yes | yes (480/497) | n/a |
-| 5. x86-64 Release | yes (72/1, `getbyid-fast.js` unsupported instead of `large_literal_obj.js` — see G1 above) | not run (not requested; G1 is the release-specific gate — see below) | not run this task (no release baseline captured; G3's byte-identical-refactor workflow is a dev-loop tool for the ASan tree, not a release CI gate) | yes | not run (no emitter change to re-verify; G4 already covers behavior) | **yes — new this milestone, see below** |
+| 1. arm64-qemu HV64 | yes (54/27) | yes (see README) | yes (own baseline) | yes (`qemu-sanity.sh`) | no | n/a (qemu timings are meaningless — see README "Limitations") |
+| 1a. arm64-qemu HV32 | yes (54/27) | not run separately (as for x86-64 HV32) | n/a (only HV64 has a stored baseline) | yes (`qemu-sanity.sh <dir>`) | no | n/a |
+| 1b. arm64-qemu BOXED | yes (54/27) | not run separately | n/a | yes (`qemu-sanity.sh <dir>`) | no | n/a |
+| 2. x86-64 HV64 ASan | yes (78/3) | yes (4333 tests: 4176 pass / 6 xfail / 151 unsupported) | yes (own baseline) | yes | yes (480/497) | n/a (ASan skews timings) |
+| 3. x86-64 HV32 ASan | yes (78/3) | not run separately (G1 + G4 + G5 are the gate for this config; G2 is HV64's job) | n/a (only HV64 has a stored baseline — the emitted code differs by design across modes, see `doc/JIT.md`) | yes | yes (479/497 — one file crosses the sweep's 10s timeout under this mode's extra decode) | n/a |
+| 4. x86-64 BOXED ASan | yes (78/3) | not run separately | n/a | yes | yes (480/497) | n/a |
+| 5. x86-64 Release | yes (78/3, `getbyid-fast.js` unsupported instead of `large_literal_obj.js`, plus the two arm64 pin tests — see G1 above) | not run (not requested; G1 is the release-specific gate — see below) | not run this task (no release baseline captured; G3's byte-identical-refactor workflow is a dev-loop tool for the ASan tree, not a release CI gate) | yes | not run (no emitter change to re-verify; G4 already covers behavior) | **yes — new this milestone, see below** |
 
 The config-2 G2 figures above are from a fresh full `check-hermes` run
 on 2026-08-26 at commit e9059de85 (the head of this fix series), after
@@ -249,10 +253,20 @@ LIT_FILTER="jit/" check-hermes, cmake-build-x86jit-rel:
   Unsupported Tests  : 1
 ```
 
-Current numbers are 72/1 over 73 files — four more passes than the
-2026-08-25 transcript, no expected failures left, and the same
-non-ASan-tree membership (`large_literal_obj.js` runs, `getbyid-fast.js`
-unsupported) described above.
+Re-run 2026-09-02, after the inline-write-barrier series added seven
+files:
+
+```
+LIT_FILTER="jit/" check-hermes, cmake-build-x86jit-rel:
+-- Testing: 79 of 4308 tests, 16 threads --
+  Expected Passes    : 76
+  Unsupported Tests  : 3
+```
+
+Current numbers are 78/3 over 81 files, no expected failures left, and
+the same non-ASan-tree membership (`large_literal_obj.js` runs,
+`getbyid-fast.js` unsupported) described above, plus the two arm64 pin
+tests that are unsupported in every x86-64 config.
 
 G4, all three differential variants against `aarch64/jit-stress.js`,
 byte-identical in every case (interpreter vs. `-Xjit=force

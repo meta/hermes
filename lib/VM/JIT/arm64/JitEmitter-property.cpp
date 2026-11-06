@@ -76,13 +76,20 @@ void Emitter::emitPutByValFastArrayTier(
   freeFRTemp(frValue);
   assert(dKeyTmp != dKey && "emit_double_is_uint32() needs a distinct temp");
 
-  // Unlike x86-64 there is no SmallHermesValue encode ahead of the guards:
-  // HERMES_JIT_INLINE_SAFE_STORE excludes compressed pointers and boxed
-  // doubles on arm64 until that encoder is ported (spec stage 5c), so a slot
-  // holds the HermesValue in xValue verbatim. The static_assert at the hole
-  // test below is what fails the build when that gate opens.
-
   // Code generation starts here.
+
+  // The value has to be encoded into the SmallHermesValue an element slot
+  // actually holds, and one value cannot be: a double that would need a
+  // heap-allocated BoxedDouble is declined here. Doing that FIRST, before any
+  // guard, is what makes the decline cheap -- it skips the whole chain below
+  // rather than running it and then giving up. xTemp2 holds the result from
+  // here to the store; no guard touches it, which on arm64 is a property the
+  // guards below had to be written for rather than one they had for free (see
+  // the xScratch uses). In the default heap-value mode this emits nothing at
+  // all -- not even the comment, which the encoder itself writes -- and
+  // `xShv` is `xValue`.
+  const a64::GpX &xShv =
+      emit_shv_encode_for_slot_or_slow(a, xTemp2, xValue, xTemp1, helperLab);
 
   // Is the target an object?
   emit_sh_ljs_is_object(a, xTemp1, xTarget);
@@ -108,8 +115,10 @@ void Emitter::emitPutByValFastArrayTier(
   //
   // arm64: the mask is three non-adjacent bits, which is not a run of ones
   // and therefore not an AArch64 logical immediate, so it has to be
-  // materialized in a register first. The value it is compared against is a
-  // single bit and encodes directly.
+  // materialized in a register first. It goes in xScratch, not in a
+  // temporary: xTemp2 is carrying the encoded value across every guard in
+  // this tier. The value it is compared against is a single bit and encodes
+  // directly.
   static_assert(
       RuntimeOffsets::hiddenClassFlags % 2 == 0 &&
           RuntimeOffsets::hiddenClassFlags < maxNaturalBaseOffset(2),
@@ -125,8 +134,8 @@ void Emitter::emitPutByValFastArrayTier(
   emit_load_cp(a, xTemp1, a64::Mem(xLoc, offsetof(SHJSObject, clazz)));
   emit_sh_cp_decode_non_null(a, xTemp1);
   a.ldrh(xTemp1.w(), a64::Mem(xTemp1, RuntimeOffsets::hiddenClassFlags));
-  a.mov(xTemp2.w(), flagsMask);
-  a.and_(xTemp1.w(), xTemp1.w(), xTemp2.w());
+  a.mov(xScratch.w(), flagsMask);
+  a.and_(xTemp1.w(), xTemp1.w(), xScratch.w());
   a.cmp(xTemp1.w(), flagsValue);
   a.b_ne(helperLab);
 
@@ -205,7 +214,7 @@ void Emitter::emitPutByValFastArrayTier(
   }
   a.sub(xTemp1.w(), xTemp1.w(), 1);
   emit_cmp_imm32(
-      a, xTemp1.w(), RuntimeOffsets::kMaxInlineStorage - 1, xTemp2.w());
+      a, xTemp1.w(), RuntimeOffsets::kMaxInlineStorage - 1, xScratch.w());
   a.b_hi(helperLab);
 
   // The address of the element. The scale is the width of a heap value slot,
@@ -222,23 +231,15 @@ void Emitter::emitPutByValFastArrayTier(
   // property normally, and may find an accessor on the prototype chain.
   // Decline, and let the helper do that.
   //
-  // In this build state a slot holds the HermesValue's bits unshifted, so
-  // the test is HermesValue's own ETag test. The static_assert is what fails
-  // the build when the arm64 gate opens to either of the two modes stage 5c
-  // adds: under HERMESVM_COMPRESSED_POINTERS a slot is a 4-byte
-  // HermesValue32, and under HERMESVM_BOXED_DOUBLES alone it is an 8-byte
-  // one -- same width as here, but with the tag in the LOW bits, so a size
-  // comparison would not have caught it. Both need the whole encoded empty
-  // value compared instead, as emit_shv_load_is_empty() does on x86-64.
-  static_assert(
-      std::is_same_v<SmallHermesValue, SmallHermesValueAdaptor>,
-      "an element slot holds a HermesValue verbatim in this build state");
-  a.ldr(xTemp1, a64::Mem(xLoc));
-  emit_sh_ljs_is_empty(a, xTemp1, xTemp1);
+  // Where a slot is eight bytes it holds the HermesValue's bits unshifted, so
+  // the test is HermesValue's own ETag test; where it is four the bits have
+  // been shifted down out of ETag position and the whole encoded empty value
+  // is compared instead. emit_shv_load_is_empty() picks between the two.
+  emit_shv_load_is_empty(a, xTemp1, a64::Mem(xLoc));
   a.b_eq(helperLab);
 
   // Store, if the write barrier for it is a no-op or a card-dirty.
-  emitSafeStoreOrSlow(xLoc, xValue, xTemp1, xTemp2, helperLab);
+  emitSafeStoreOrSlow(xLoc, xShv, xValue, xTemp1, xTemp2, helperLab);
 }
 #endif // HERMES_JIT_INLINE_SAFE_STORE
 
@@ -1022,6 +1023,17 @@ void Emitter::emitPutByIdInlineTier(
 
   // Code generation starts here.
 
+  // The value has to be encoded into the SmallHermesValue a property slot
+  // actually holds, and one value cannot be: a double that would need a
+  // heap-allocated BoxedDouble is declined here. Doing that FIRST, before any
+  // guard, is what makes the decline cheap -- it skips the whole chain below
+  // rather than running it and then giving up. xTemp2 holds the result from
+  // here to the store; no guard touches it. In the default heap-value mode
+  // this emits nothing at all -- not even the comment, which the encoder
+  // itself writes -- and `xShv` is `xValue`.
+  const a64::GpX &xShv =
+      emit_shv_encode_for_slot_or_slow(a, xTemp2, xValue, xTemp1, helperLab);
+
   // Is the target an object?
   emit_sh_ljs_is_object(a, xTemp1, xTarget);
   a.b_ne(helperLab);
@@ -1033,7 +1045,8 @@ void Emitter::emitPutByIdInlineTier(
   emit_sh_cp_decode_non_null(a, xTemp1);
   // xTemp1 = hc->lazyJITId, a zero-extending 16-bit load.
   a.ldrh(xTemp1.w(), a64::Mem(xTemp1, RuntimeOffsets::hiddenClassLazyJITId));
-  emit_cmp_imm32(a, xTemp1.w(), clazzID, xTemp2.w());
+  // xScratch, not xTemp2: xTemp2 is carrying the encoded value to the store.
+  emit_cmp_imm32(a, xTemp1.w(), clazzID, xScratch.w());
   a.b_ne(helperLab);
 
   // The class matches, so the object has the cached slot as a plain own data
@@ -1057,7 +1070,7 @@ void Emitter::emitPutByIdInlineTier(
   emit_add_imm_u24(a, xLoc, (uint32_t)ofs);
 
   // Store, if the write barrier for it is a no-op or a card-dirty.
-  emitSafeStoreOrSlow(xLoc, xValue, xTemp1, xTemp2, helperLab);
+  emitSafeStoreOrSlow(xLoc, xShv, xValue, xTemp1, xTemp2, helperLab);
 }
 #endif // HERMES_JIT_INLINE_SAFE_STORE
 

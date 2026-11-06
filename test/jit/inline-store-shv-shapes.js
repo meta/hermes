@@ -12,6 +12,13 @@
 // RUN: %hermes -fno-inline -Xjit -Xjit-threshold=4 -Xjit-crash-on-error -Xjit-emit-asserts -Xjit-emit-type-asserts %s > %t.warma && diff %t.int %t.warma
 // RUN: %hermes -fno-inline %s | %FileCheck --match-full-lines %s
 // REQUIRES: jit
+// UNSUPPORTED: handle_san
+
+// UNSUPPORTED under HERMESVM_SANITIZE_HANDLES (the `handle_san` lit feature):
+// there the runtime boxes every number, so the emitter declines the
+// inline-value encodings this file is about with a bare branch, and the build
+// moves the heap on every allocation, which makes the churn below cost over 13
+// minutes per RUN line on a MallocGC tree.
 
 // Every SmallHermesValue shape, stored through both inline write tiers into
 // an OLD object and an OLD array, with young-generation collections in

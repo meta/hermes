@@ -115,6 +115,164 @@ void Emit_sh_shv_decode::emitRestCases(a64::Assembler &a) {
 #endif
 }
 
+#ifdef HERMESVM_BOXED_DOUBLES
+void emit_shv_encode_or_slow(
+    a64::Assembler &a,
+    const a64::GpX &xOut,
+    const a64::GpX &xIn,
+    const a64::GpX &xTemp,
+    const asmjit::Label &slowLab) {
+  assert(xOut != xIn && "the output must not alias the input");
+  assert(xTemp != xIn && xTemp != xOut && "the scratch must differ from both");
+  static_assert(HERMESVALUE_VERSION == 2, "Reading a HermesValue's ETag");
+  static_assert(HermesValue32::kVersion == 1, "Encoding HV32 bits");
+
+  // The comment is emitted here rather than by the callers so that the
+  // default heap-value mode, where this function does not exist, emits
+  // nothing whatsoever -- not even a comment line. Emitter::commentV() ends
+  // in exactly this call.
+  a.comment("// Encode the value as a SmallHermesValue");
+
+  asmjit::Label ptrLab = a.newLabel();
+  asmjit::Label symLab = a.newLabel();
+  asmjit::Label doneLab = a.newLabel();
+
+  // HermesValue32::encodeHermesValue(), case for case:
+  //
+  //   number or compressible -> a right shift, or a BoxedDouble allocation
+  //                             this cannot do: decline;
+  //   String/BigInt/Object   -> a compressed pointer with a remapped tag;
+  //   Symbol                 -> the id shifted up over the tag.
+  //
+  // The dispatch is on the ETag rather than the tag, because the first case
+  // is an ETag range test -- HermesValue::isNumberOrCompressible() -- and the
+  // other two fall out of the same value with no second shift.
+  a.asr(xOut, xIn, kHV_NumDataBits - 1);
+  // isNumberOrCompressible(): etag <= LastNumberOrCompressible read as
+  // unsigned, which is exactly the comparison the runtime makes. Every
+  // double's ETag is either a small non-negative number or below
+  // HVETag_Empty; the tags this excludes -- Symbol, RawHV32 and the three
+  // pointer tags -- are precisely the ones that sort ABOVE it once the
+  // negative ETags are read as unsigned.
+  //
+  // arm64: the ETags are negative, and negating one makes it a small positive
+  // that encodes as an ADD/SUB immediate, so this is `cmn` against its
+  // negation rather than x86-64's `cmp` against a sign-extended imm32. The
+  // flags are the same ones `cmp` would set -- adding N is subtracting -N --
+  // so b.hi is `ja`. It is the idiom every emit_sh_ljs_is_*() next door uses.
+  static_assert(
+      (int16_t)HVETag_LastNumberOrCompressible == (int16_t)(-10),
+      "HVETag_LastNumberOrCompressible must be -10");
+  a.cmn(xOut, -HVETag_LastNumberOrCompressible);
+  a.b_hi(ptrLab);
+
+#if HERMESVM_SANITIZE_HANDLES != 0
+  // Handle sanitization has encodeHermesValue() allocate on EVERY non-pointer
+  // encode -- canInlineCompressibleOrNumberHV64() refuses to inline any
+  // number, so that callers cannot get away with treating a
+  // SmallHermesValue holding one as anything but a pointer, and
+  // encodeHermesValue() additionally forces a throwaway encodeNumberValue()
+  // for its side effect of moving the heap. Emitted code cannot allocate, so
+  // this whole case is declined to the helper, which does both.
+  //
+  // Be honest about what that does NOT cover: only this arm declines. The
+  // symbol arm below still encodes inline, so a JIT symbol store skips the
+  // heap move that the runtime's encodeSymbolValue() path would have
+  // triggered, and a stale handle that only that store would have exposed
+  // stays hidden. That is a loss of sanitizer coverage, not of correctness --
+  // the encoding written is the one the runtime writes -- and closing it
+  // would mean declining every store under Handle-San, which is a bigger
+  // behavior change than the sanitizer is worth here.
+  a.b(slowLab);
+#else
+  // canInlineCompressibleOrNumberHV64(): the value is inline-representable
+  // exactly when its low 64 - kShvValueBits bits are zero.
+  //
+  // arm64: those bits are a run of low ones, which is the shape of an AArch64
+  // logical immediate, so this is a single `tst` against the mask and needs
+  // neither the scratch nor the copy x86-64's shift-them-off-the-top spends.
+  static_assert(
+      RuntimeOffsets::kShvValueBits != 0 && RuntimeOffsets::kShvValueBits < 64,
+      "the mask must be a non-empty, non-full run of ones to encode as a "
+      "logical immediate");
+  constexpr uint64_t kInlineMask =
+      ((uint64_t)1 << (64 - RuntimeOffsets::kShvValueBits)) - 1;
+  assert(
+      a64::Utils::isLogicalImm(kInlineMask, 64) &&
+      "the inline-representability mask must encode as a logical immediate");
+  a.tst(xIn, kInlineMask);
+  // A double that does not fit has to become a heap-allocated BoxedDouble.
+  // Nothing has been stored at this point, so declining is free and the
+  // helper does the allocation.
+  a.b_ne(slowLab);
+  // bitsToCompressedHV64(): the CompressedHV64 tag is zero, so the encode is
+  // the shift alone, and it is not even that when a SmallHermesValue is as
+  // wide as a HermesValue (the boxed build without compressed pointers).
+  if constexpr (RuntimeOffsets::kShvRawTypeBits < 64)
+    a.lsr(xOut, xIn, 64 - RuntimeOffsets::kShvRawTypeBits);
+  else
+    a.mov(xOut, xIn);
+  a.b(doneLab);
+#endif
+
+  a.bind(ptrLab);
+  // Symbol and RawHV32 are the only ETags left below the pointers, so one
+  // more unsigned compare separates the pointer cases from them. Same `cmn`
+  // form as above; b.lo is `jb`.
+  static_assert(
+      (int16_t)HVETag_FirstPointer == (int16_t)(-6),
+      "HVETag_FirstPointer must be -6");
+  a.cmn(xOut, -HVETag_FirstPointer);
+  a.b_lo(symLab);
+  // encodePointerImpl(): a compressed pointer with the tag or-ed into its low
+  // bits, which are zero by heap alignment. The tag is the HermesValue's own,
+  // biased by a constant (toHV32Tag()); recovering it from the ETag is a
+  // second arithmetic shift, and the addition leaves a value in 1..3 with a
+  // clear upper half, so the or below cannot disturb the pointer.
+  static_assert(
+      RuntimeOffsets::kShvPointerTagBias > 0,
+      "a negative bias would need a SUB here, not an ADD");
+  assert(
+      a64::Utils::isAddSubImm(RuntimeOffsets::kShvPointerTagBias) &&
+      "the pointer tag bias must encode as an ADD immediate");
+  a.asr(xOut, xOut, 1);
+  a.add(xOut, xOut, RuntimeOffsets::kShvPointerTagBias);
+  emit_sh_ljs_get_pointer(a, xTemp, xIn);
+  emit_sh_cp_encode_non_null(a, xTemp);
+  a.orr(xOut, xOut, xTemp);
+  a.b(doneLab);
+
+  a.bind(symLab);
+  // encodeHermesValue() asserts at this point that what is left is a symbol.
+  // An assert is not available here, and RawHV32 -- the one other ETag that
+  // reaches this branch -- has no SmallHermesValue encoding at all, so
+  // anything that is not a symbol is declined instead.
+  static_assert(
+      (int16_t)HVETag_Symbol == (int16_t)(-9), "HVETag_Symbol must be -9");
+  a.cmn(xOut, -HVETag_Symbol);
+  a.b_ne(slowLab);
+  // fromTagAndValue(Tag::Symbol, id): a SymbolID is a uint32 held in the low
+  // half of the HermesValue, so the 32-bit move both extracts it and clears
+  // the upper half.
+  //
+  // arm64: the tag goes in with an ADD rather than an ORR. The shift has just
+  // cleared the low kShvTagBits bits, so over a tag that fits in them the two
+  // are the same operation -- and the tag is 0b101, which is not a run of
+  // ones at any element size and therefore not an AArch64 logical immediate,
+  // while every value that small is an ADD immediate.
+  static_assert(
+      (uint32_t)HermesValue32::Tag::Symbol <
+          ((uint32_t)1 << RuntimeOffsets::kShvTagBits),
+      "the symbol tag must fit the bits the shift cleared, or the ADD below "
+      "is not an OR");
+  a.mov(xOut.w(), xIn.w());
+  a.lsl(xOut, xOut, RuntimeOffsets::kShvTagBits);
+  a.add(xOut, xOut, (uint32_t)HermesValue32::Tag::Symbol);
+
+  a.bind(doneLab);
+}
+#endif // HERMESVM_BOXED_DOUBLES
+
 void emit_stringprim_get_length_and_flags(
     a64::Assembler &a,
     const a64::GpX &xOut,
@@ -329,6 +487,7 @@ asmjit::Error OurLogger::_log(const char *data, size_t size) noexcept {
 #if HERMES_JIT_INLINE_SAFE_STORE
 void Emitter::emitSafeStoreOrSlow(
     const a64::GpX &loc,
+    const a64::GpX &shv,
     const a64::GpX &value,
     const a64::GpX &t1,
     const a64::GpX &t2,
@@ -336,23 +495,13 @@ void Emitter::emitSafeStoreOrSlow(
   assert(t1 != loc && t1 != value && "t1 must not alias loc or value");
   assert(t2 != loc && t2 != value && "t2 must not alias loc or value");
   assert(t1 != t2 && "the two temporaries must differ");
-  // The single store below writes the whole slot. In this build state a
-  // SmallHermesValue IS a HermesValue -- SmallHermesValueAdaptor -- which is
-  // what lets a value the emitters carry in a GP register be stored without
-  // any re-encoding; that is exactly what HERMES_JIT_INLINE_SAFE_STORE
-  // selects for on arm64.
-  //
-  // The type, not its size, is what has to be asserted. Both of the modes
-  // stage 5c of the inline-write spec has to teach this code about need an
-  // encode, and only one of them is narrower: under
-  // HERMESVM_COMPRESSED_POINTERS a slot is a 4-byte HermesValue32, but under
-  // HERMESVM_BOXED_DOUBLES alone it is an 8-byte HermesValue32 whose tag
-  // lives in the LOW bits. A size comparison would pass there and let
-  // wrongly-encoded bits reach the heap.
-  static_assert(
-      std::is_same_v<SmallHermesValue, SmallHermesValueAdaptor>,
-      "the inline store writes a HermesValue verbatim; compressed pointers "
-      "and boxed doubles both need an encode first");
+  assert(
+      shv != loc && shv != t1 && "the encoded value must survive to the store");
+  // \p shv MAY be \p t2, and under boxed doubles it is: the caller encoded
+  // into t2 before its guards. Keeping that sound is why every runtime word
+  // tested below is loaded into xScratch rather than into t2 -- x86-64 can
+  // compare against memory and so needs no register at all for those, while
+  // arm64 must load first, and t2 is not free to be that register.
 
   // The two 64-bit runtime words below are loaded with LDR's unsigned-offset
   // form, whose immediate is a 12-bit multiple of the access width. Both
@@ -389,8 +538,8 @@ void Emitter::emitSafeStoreOrSlow(
   // HadesGC::writeBarrier() step (1): a slot in the young generation never
   // needs a barrier of any kind. RuntimeOffsets::runtimeHadesYGStart is
   // loaded rather than baked in because setYoungGen() can swap the segment.
-  a.ldr(t2, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
-  a.cmp(t1, t2);
+  a.ldr(xScratch, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
+  a.cmp(t1, xScratch);
   a.b_eq(youngTargetLab);
 
   // Step (2): if the OG marking barriers are on, the snapshot barrier must
@@ -398,8 +547,8 @@ void Emitter::emitSafeStoreOrSlow(
   // before storing anything is what makes that ordering hold by
   // construction. RuntimeOffsets::runtimeHadesOGMarkingBarriers.
   emit_load_from_base_offset<1, true>(
-      a, t2, xRuntime, {}, RuntimeOffsets::runtimeHadesOGMarkingBarriers);
-  a.cbnz(t2.w(), slowLab);
+      a, xScratch, xRuntime, {}, RuntimeOffsets::runtimeHadesOGMarkingBarriers);
+  a.cbnz(xScratch.w(), slowLab);
 
   // Step (3), first half: relocationWriteBarrier() also dirties a card for a
   // newly created pointer into the segment being compacted. Rather than
@@ -408,8 +557,9 @@ void Emitter::emitSafeStoreOrSlow(
   assert(
       a64::Utils::isAddSubImm(RuntimeOffsets::kHadesNoCompactee) &&
       "the no-compactee sentinel must encode as a compare immediate");
-  a.ldr(t2, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesCompacteeStart));
-  a.cmp(t2, RuntimeOffsets::kHadesNoCompactee);
+  a.ldr(
+      xScratch, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesCompacteeStart));
+  a.cmp(xScratch, RuntimeOffsets::kHadesNoCompactee);
   a.b_ne(slowLab);
 
   // The card-dirty store at the bottom writes the segment's INLINE card
@@ -426,27 +576,31 @@ void Emitter::emitSafeStoreOrSlow(
   // is object payload. Callers bound `loc`: PutById through
   // WritePropertyCacheEntry::kMaxSlot, array stores through a storage-size
   // gate. RuntimeOffsets::segmentShiftedSize.
-  a.ldrh(t2.w(), a64::Mem(t1, RuntimeOffsets::segmentShiftedSize));
-  a.cmp(t2.w(), 1);
+  a.ldrh(xScratch.w(), a64::Mem(t1, RuntimeOffsets::segmentShiftedSize));
+  a.cmp(xScratch.w(), 1);
   a.b_ne(slowLab);
 
-  // The barrier is now known to be at most a card-dirty. Store.
-  a.str(value, a64::Mem(loc));
+  // The barrier is now known to be at most a card-dirty. Store. The slot is
+  // one SmallHermesValue wide -- four bytes under compressed pointers, eight
+  // otherwise -- which is why this goes through emit_store_shv() rather than
+  // a bare str.
+  emit_store_shv(a, shv, a64::Mem(loc));
 
-  // relocationWriteBarrier() is only reached for a pointer value.
+  // relocationWriteBarrier() is only reached for a pointer value. The test is
+  // made on the ORIGINAL HermesValue rather than on what was just stored,
+  // which is both cheaper and more accurate: a HermesValue carries its
+  // pointer uncompressed, which is what the segment compare below needs, and
+  // the one pointer a SmallHermesValue has that a HermesValue does not -- a
+  // BoxedDouble -- can never be here, because the encode declined it. \p t2
+  // is dead once the store above has consumed it.
   emit_sh_ljs_get_tag(a, t2, value);
   emit_sh_ljs_tag_is_pointer(a, t2);
   a.b_lo(doneLab);
 
   // t2 = the start of the segment containing the pointed-to cell. Only an
   // old-to-young pointer needs a card; old-to-old does not, and the compactee
-  // cases were declined above.
-  //
-  // arm64: the young-gen start has to come back into a register to be
-  // compared, and both temporaries are live here -- t1 is the segment start
-  // the card store indexes off, t2 the segment being tested -- so this uses
-  // the backend's non-allocated scratch. Nothing holds a value in xScratch
-  // across an emitter call, and this sequence emits none.
+  // cases were declined above. The young-gen start comes back into xScratch,
+  // the same non-allocated scratch the tests above used.
   emit_sh_ljs_get_pointer(a, t2, value);
   a.and_(t2, t2, kSegmentMask);
   a.ldr(xScratch, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
@@ -470,7 +624,7 @@ void Emitter::emitSafeStoreOrSlow(
   a.b(doneLab);
 
   a.bind(youngTargetLab);
-  a.str(value, a64::Mem(loc));
+  emit_store_shv(a, shv, a64::Mem(loc));
 
   a.bind(doneLab);
 }
