@@ -45,9 +45,10 @@
 // and why the SPEC line uses threshold mode. DO NOT convert them to
 // -Xjit=force: that would leave the inline tier with no coverage at all
 // while this file still passed. That the tier is emitted at all is pinned
-// separately, by putbyid-inline-emitted.js -- which this file cannot do,
-// because it runs in every heap-value mode and the tier exists only in the
-// default one.
+// separately, per backend: x86-64/putbyid-inline-emitted.js and
+// putbyid-inline-emitted-arm64.js. This file is architecture-independent --
+// it checks values, never instructions -- so it lives here and runs on every
+// backend, including one whose store still goes through the helper.
 //
 // WHAT IS NOT COVERED HERE. The predicate's marking-active and
 // compaction-active exits need a concurrent old-gen phase to coincide with a

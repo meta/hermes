@@ -1457,6 +1457,102 @@ class Emitter {
       bool strictMode,
       bool tryProp);
 
+#if HERMES_JIT_INLINE_SAFE_STORE
+  /// Emit an inline store of the value in \p value to the heap slot whose
+  /// address is in \p loc, performed only when the Hades write barrier for
+  /// that store is provably either a no-op or a single card-dirty. In every
+  /// other case -- concurrent marking active, a compaction in progress, or a
+  /// segment whose card array is not the inline one -- nothing is stored and
+  /// control jumps to \p slowLab, whose code is expected to perform the store
+  /// through the runtime, barrier included.
+  ///
+  /// The emitted predicate mirrors HadesGC::writeBarrier() and
+  /// HadesGC::relocationWriteBarrier() exactly:
+  ///
+  ///     segLoc = loc & ~(kSegmentUnitSize-1)
+  ///     if (segLoc == runtime.heap_.youngGen_.lowLim_)  // young target
+  ///       *loc = value; done                            //   no barrier
+  ///     if (runtime.heap_.ogMarkingBarriers_)  goto slow  // snapshot barrier
+  ///     if (compactee active)                  goto slow  // relocation into
+  ///     if (segLoc's size != 1 unit)           goto slow  //   the compactee
+  ///     *loc = value
+  ///     if (value is a pointer &&
+  ///         (value.ptr & ~(kSegmentUnitSize-1)) == youngGen lowLim)
+  ///       segLoc[(loc - segLoc) >> kLogCardSize] = CardStatus::Dirty
+  ///
+  /// The order matters: the snapshot barrier reads the OLD contents of the
+  /// slot, so the marking test has to precede the store. It does, and the
+  /// path that stores is precisely the path on which marking is off, so the
+  /// requirement holds by construction rather than by convention.
+  ///
+  /// PRECONDITION on \p loc: it must lie within the first kSegmentUnitSize
+  /// bytes of its segment. Everything here derives the segment start as
+  /// `loc & ~(kSegmentUnitSize-1)`, which is the true start only under that
+  /// bound: a JumboHeapSegment is aligned to kSegmentUnitSize but is N units
+  /// long, so for a \p loc further in, that mask yields the start of a later
+  /// unit, and the segment-size test below then reads object payload instead
+  /// of SHSegmentInfo. Should those bytes happen to hold a 1, the guard
+  /// passes and the card-dirty store writes a byte into the cell's own data
+  /// while the real, out-of-line card stays clean -- a missed old-to-young
+  /// root. Callers are responsible for the bound:
+  ///  - PutById: WritePropertyCacheEntry::kMaxSlot is 0xff, which puts \p loc
+  ///    at most ~2KB past a cell head, and every cell head lives in the first
+  ///    unit of its segment (see the AlignedHeapSegment class comment).
+  ///  - Array element stores must gate on the storage cell's size; a large
+  ///    array's indexed storage genuinely is a jumbo cell.
+  ///
+  /// Note the asymmetry that makes this bound load-bearing: the runtime's
+  /// large-object barrier derives the segment start from the OWNING CELL
+  /// (AlignedHeapSegment::dirtyCardForAddressInLargeObj takes owningObj),
+  /// whereas this code derives it from \p loc. The two coincide only while
+  /// \p loc is in the same unit as the cell head.
+  ///
+  /// Given the bound, the segment-size test is what makes the card math
+  /// valid: only a segment exactly one unit long keeps its card status array
+  /// inline at offset 0, which is what the card-dirty store assumes. A jumbo
+  /// segment holds that array out of line, so its stores go to the helper.
+  ///
+  /// \param loc address of the slot; preserved.
+  /// \param value the 64-bit HermesValue to store, also used for the card
+  ///   decision; preserved.
+  /// \param t1 scratch, clobbered. Must differ from \p loc and \p value.
+  /// \param t2 scratch, clobbered. Must differ from \p loc and \p value.
+  /// \param slowLab where to jump when the store was NOT performed.
+  ///
+  /// NZCV is clobbered, and so is xScratch: unlike x86-64, which
+  /// compares against memory directly, arm64 has to load each of the three
+  /// runtime words it tests into a register, and at the card-dirty store both
+  /// \p t1 and \p t2 are already spoken for. Nothing else is touched: in
+  /// particular this emits no call, so no register needs to be synced or
+  /// freed around it.
+  void emitSafeStoreOrSlow(
+      const a64::GpX &loc,
+      const a64::GpX &value,
+      const a64::GpX &t1,
+      const a64::GpX &t2,
+      const asmjit::Label &slowLab);
+
+  /// Emit the PutById inline tier: a guard that the target is an object of
+  /// the hidden class the write cache recorded at compile time, followed by
+  /// an inline store into the cached slot through emitSafeStoreOrSlow().
+  /// Falling through means the store is done; every guard that fails jumps
+  /// to \p helperLab.
+  ///
+  /// On entry \p frTarget and \p frValue must already be synced to the frame,
+  /// because \p helperLab reads them from there. On return every temp this
+  /// used is free again and no FR is registered in one, so the helper call
+  /// that follows is safe (see the free-after-call invariant in doc/JIT.md).
+  ///
+  /// \param clazzID the lazy JIT id of the cached hidden class, non-zero.
+  /// \param slot the cached slot index.
+  void emitPutByIdInlineTier(
+      FR frTarget,
+      FR frValue,
+      uint16_t clazzID,
+      SlotIndex slot,
+      const asmjit::Label &helperLab);
+#endif // HERMES_JIT_INLINE_SAFE_STORE
+
   void getArgumentsPropByValImpl(
       FR frRes,
       FR frIndex,

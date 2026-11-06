@@ -33,25 +33,6 @@
 #include <utility>
 #include <vector>
 
-/// Non-zero when this backend emits inline heap stores guarded by the inline
-/// write-barrier predicate (Emitter::emitSafeStoreOrSlow()). One build state
-/// switches it off: MallocGC, which has neither a young generation nor a card
-/// table for the predicate to reason about, and where every store site emits
-/// exactly the runtime helper call it emitted before the predicate existed.
-///
-/// Every heap-value mode is covered. The two that do not store a HermesValue
-/// verbatim -- HERMESVM_COMPRESSED_POINTERS, where a slot is a 32-bit
-/// compressed value, and HERMESVM_BOXED_DOUBLES, where a slot is a
-/// SmallHermesValue whose encoding of some doubles requires a heap
-/// allocation -- are handled inside the predicate: it encodes the value and
-/// declines to the helper for the one case emitted code cannot perform.
-/// See doc/JIT.md's heap-value-mode build matrix.
-#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
-#define HERMES_JIT_INLINE_SAFE_STORE 1
-#else
-#define HERMES_JIT_INLINE_SAFE_STORE 0
-#endif
-
 namespace hermes::vm::x86_64 {
 
 namespace x86 = asmjit::x86;

@@ -62,6 +62,35 @@
 #define HERMESVM_JIT_X86_64 0
 #endif
 
+// Non-zero when the selected JIT backend emits inline heap stores guarded by
+// its inline write-barrier predicate (Emitter::emitSafeStoreOrSlow()). Every
+// store site in a build where this is 0 emits exactly the runtime helper call
+// it emitted before the predicate existed.
+//
+// MallocGC always switches it off: it has neither a young generation nor a
+// card table for the predicate to reason about. Beyond that the two backends
+// differ, which is why this is one definition with an explicit per-arch
+// conditional rather than a copy in each backend header -- the two must never
+// disagree for a translation unit that sees both.
+//  - x86-64 covers every heap-value mode: the two that do not store a
+//    HermesValue verbatim -- HERMESVM_COMPRESSED_POINTERS, where a slot is a
+//    32-bit compressed value, and HERMESVM_BOXED_DOUBLES, where encoding some
+//    doubles requires a heap allocation -- are handled by encoding the value
+//    in the tier and declining the one case emitted code cannot perform.
+//  - arm64 has not ported that SmallHermesValue encoder yet, so it excludes
+//    both of those modes and keeps the helper call there. Stage 5c of
+//    doc/superpowers/specs/2026-08-27-jit-inline-property-writes.md collapses
+//    this conditional when the arm64 encoder lands.
+// See doc/JIT.md's heap-value-mode build matrix.
+#if !HERMESVM_JIT || HERMESVM_GCKIND != _HERMESVM_GCVALUE_HADES
+#define HERMES_JIT_INLINE_SAFE_STORE 0
+#elif HERMESVM_JIT_ARM64 && \
+    (defined(HERMESVM_COMPRESSED_POINTERS) || defined(HERMESVM_BOXED_DOUBLES))
+#define HERMES_JIT_INLINE_SAFE_STORE 0
+#else
+#define HERMES_JIT_INLINE_SAFE_STORE 1
+#endif
+
 // Only enable perf profiling support on Linux/Android when JIT is enabled and
 // HERMES_IS_MOBILE_BUILD is false.
 #if HERMESVM_JIT && !defined(HERMES_IS_MOBILE_BUILD) && \

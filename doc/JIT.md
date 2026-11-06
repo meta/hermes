@@ -556,8 +556,10 @@ not, a `BoxedDouble`, was already declined -- and a HermesValue carries its
 pointer uncompressed, which is what the young-segment compare needs.
 
 **Build-state gate.** The predicate and its two consumers compile in when
-`HERMES_JIT_INLINE_SAFE_STORE` is set (`JitEmitter.h`), which is every
-heap-value mode under Hades. Only MallocGC switches it off, having neither
+`HERMES_JIT_INLINE_SAFE_STORE` is set (`include/hermes/VM/JIT/Config.h`).
+On x86-64 that is every heap-value mode under Hades; on arm64 it is HV64
+only, until the SmallHermesValue encoder is ported. Only MallocGC switches
+it off on both backends, having neither
 a young generation nor a card table to reason about; there every store site
 emits the unconditional helper call, exactly as before this series. No
 lit feature gates emitted-code tests to a mode: `test/lit.cfg`'s `%hv-mode`
@@ -565,13 +567,17 @@ substitution names the current mode, so a test pins what is common under
 one FileCheck prefix and what differs under `<PREFIX>-HV64` / `-HV32` /
 `-BOXED`.
 
-**Tests.** `test/jit/x86-64/putbyid-inline.js`, `putbyval-inline.js` and
-`inline-store-shv-shapes.js` each run the inline tiers against a real,
-collecting heap and would fail -- loudly, under ASan -- if the card-dirty
-store were removed; the last of those drives every SmallHermesValue shape
-through both tiers, including the non-compressible doubles that must take
-the helper. `putbyid-inline-emitted.js` and `putbyval-inline-emitted.js`
-check the emitted instructions directly, in all three modes. A caveat on
+**Tests.** `test/jit/putbyid-inline.js`, plus
+`test/jit/x86-64/putbyval-inline.js` and `inline-store-shv-shapes.js`, each
+run the inline tiers against a real, collecting heap and would fail --
+loudly, under ASan -- if the card-dirty store were removed; the last of those
+drives every SmallHermesValue shape through both tiers, including the
+non-compressible doubles that must take the helper. The behavioral tests are
+architecture-independent and move up to `test/jit/` as each backend gains the
+tier they exercise. `putbyid-inline-emitted.js` and `putbyval-inline-emitted.js`
+check the emitted instructions directly, in all three modes;
+`test/jit/putbyid-inline-emitted-arm64.js` is the arm64 counterpart of the
+first. A caveat on
 the behavioral tests: a missing card dirty only fails loudly under
 `HERMES_SLOW_DEBUG`, where `HadesGC::verifyCardTable()` catches it: in a
 Release build the same defect surfaces as a wrong printed value, or as
@@ -810,10 +816,14 @@ bring-up milestones are done:
 
   The counts above predate the 2026-08-27 inline-write-barrier series
   (`doc/superpowers/specs/2026-08-27-jit-inline-property-writes.md`),
-  which added four more `test/jit/x86-64/` files:
-  - `putbyid-inline.js` -- the PutById inline tier against a real,
-    collecting heap; proves a missing card dirty is a live bug, not a
-    theoretical one.
+  which added five more files: three under `test/jit/x86-64/` and, once
+  arm64 gained the PutById tier too, one behavioral test moved up to
+  `test/jit/` where both backends run it plus an arm64 pin test alongside
+  it. The arm64 pin test is why the x86-64 run of `test/jit` now reports
+  two unsupported files rather than one:
+  - `test/jit/putbyid-inline.js` -- the PutById inline tier against a
+    real, collecting heap; proves a missing card dirty is a live bug, not
+    a theoretical one. Run on every backend that has the tier.
   - `putbyid-inline-emitted.js` -- pins the instructions the PutById
     tier emits, per mode via `SPEC-%hv-mode` prefixes. Both `-emitted`
     tests are `UNSUPPORTED: handle_san`: under `HERMESVM_SANITIZE_HANDLES`
@@ -824,6 +834,10 @@ bring-up milestones are done:
     a real, collecting heap, same card-dirty hazard as above.
   - `putbyval-inline-emitted.js` -- pins the instructions the PutByVal
     tier emits, per mode via `SPEC-%hv-mode` prefixes.
+  - `test/jit/putbyid-inline-emitted-arm64.js` -- the arm64 counterpart
+    of `putbyid-inline-emitted.js`, `REQUIRES: jit-arch-arm64` and so
+    unsupported on the x86-64 trees (and `UNSUPPORTED: handle_san` for
+    the same reason as the other two).
 - The `aarch64/jit-stress.js` differential matrix -- interpreter vs.
   `-Xjit=force`, with and without `-Xjit-emit-type-asserts`, at both
   `-O` and `-O0` -- is byte-identical on every config exercised,

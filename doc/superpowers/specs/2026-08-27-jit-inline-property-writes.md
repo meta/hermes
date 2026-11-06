@@ -388,3 +388,64 @@ Box2D still loses. What is left is the encode itself on every store plus
 the tier prologue on stores that fail a guard rather than the encode.
 Removing that needs a per-site decline record, so a site that always
 declines can stop running the tier; that is a follow-up.
+
+## Stage 5 — arm64 port (added 2026-09-02)
+
+Port the final x86-64 state to arm64: `emitSafeStoreOrSlow`, the PutById
+and PutByVal tiers, and the SmallHermesValue encoder, in three commits
+mirroring the x86-64 series (reference the x86-64 commits by subject and
+short hash in each message; include an arm64 assembly example dumped via
+`-Xdump-jitcode=3` under qemu; keep the rest of the message brief).
+Performance cannot be measured (qemu-user only); correctness can and
+must be.
+
+Design carries over unchanged — the predicate's decision sequence, the
+first-unit precondition, kMaxSlot / kMaxInlineStorage, the encode's
+per-tag rules and its decline case are all architecture-independent, and
+`RuntimeOffsets` already pins the geometry for both backends. What is
+arch-specific is instruction selection only:
+
+- Use the arm64 emitter's existing idioms and helpers (the x86-64 tiers
+  were ported FROM arm64 originally, so most primitives exist there
+  under the same names: `emit_sh_ljs_is_object`, tag helpers,
+  `emit_sh_cp_encode/decode`, `emit_load_shv`/`emit_store_shv`, and the
+  register-file API). Tag tests are `asr #47/#48` + `cmn`/`cmp`;
+  wide masks come from `movk` chains or `loadBits64InGp`; the card
+  dirty is a `strb` of wzr+1-style immediate via a temp; the young-gen
+  and flag loads use the same RuntimeOffsets entries the arm64
+  young-gen bump allocator already reads. x16/x17 remain non-allocated
+  scratch, as elsewhere in the backend.
+- The double→uint32 index test mirrors the runtime the same way x86
+  does: `fcvtzu` / `ucvtf` / `fcmp`, rejecting NaN via the unordered
+  result, then the `0xFFFFFFFF` sentinel check.
+- Comment-for-comment parallels with the x86-64 files, matching the
+  backends' established mirroring, with arm64-specific sentences where
+  codegen genuinely differs (as the x86-64 files do in reverse).
+
+Tests: the three behavioral tests (`putbyid-inline.js`,
+`putbyval-inline.js`, `inline-store-shv-shapes.js`) are architecture-
+independent — MOVE them from `test/jit/x86-64/` to `test/jit/` so both
+backends run them (adjust doc references). The `-emitted` pin tests stay
+x86-64; each arm64 stage adds its own pin test under `test/jit/` with
+`REQUIRES: jit-arch-arm64`, following the same SPEC / SPEC-%hv-mode
+prefix scheme.
+
+Gates per stage: the arm64 jit suite under qemu; the
+`aarch64/jit-stress.js` differential on the arm64 tree (threshold-mode
+variants included where the tier needs a warm cache); prove-can-fail on
+arm64 (delete the card-dirty store, the behavioral tests must fail on
+verifyCardTable under the Debug tree); AND the x86-64 side must be
+untouched — jit suite green on the four x86 trees and `jit-diff.sh`
+byte-identical on the x86-64 HV64 dump corpus after every stage (shared
+headers change; x86 emission must not).
+
+Stage 5c (the encoder) additionally requires new arm64 cross trees for
+the other heap modes — `cmake-build-arm64-hv32` and
+`cmake-build-arm64-boxed`, configured like `cmake-build-arm64` (same
+toolchain file, `HERMES_UNICODE_LITE`, `IMPORT_HOST_COMPILERS`,
+`QEMU_RUN_PREFIX`) plus the `HERMESVM_HEAP_HV_MODE` setting — and green
+jit suites there. It closes dz 01a04e00-07fc in the same commit, updates
+doc/JIT.md where it says the inline write path is x86-64-only (including
+the arm64 "TODO: Fix this once we can inline write barriers" comment),
+and drops the gate's arch restriction (`HERMES_JIT_INLINE_SAFE_STORE`
+becomes arch-independent under Hades).

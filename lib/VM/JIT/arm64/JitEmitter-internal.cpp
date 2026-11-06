@@ -326,6 +326,146 @@ asmjit::Error OurLogger::_log(const char *data, size_t size) noexcept {
 }
 #endif
 
+#if HERMES_JIT_INLINE_SAFE_STORE
+void Emitter::emitSafeStoreOrSlow(
+    const a64::GpX &loc,
+    const a64::GpX &value,
+    const a64::GpX &t1,
+    const a64::GpX &t2,
+    const asmjit::Label &slowLab) {
+  assert(t1 != loc && t1 != value && "t1 must not alias loc or value");
+  assert(t2 != loc && t2 != value && "t2 must not alias loc or value");
+  assert(t1 != t2 && "the two temporaries must differ");
+  // The single store below writes the whole slot. In this build state a
+  // SmallHermesValue is a HermesValue, which is what lets a value the
+  // emitters carry in a GP register be stored without any re-encoding; that
+  // is exactly what HERMES_JIT_INLINE_SAFE_STORE selects for.
+  static_assert(
+      sizeof(SmallHermesValue) == sizeof(HermesValue),
+      "the inline store writes a 64-bit HermesValue");
+
+  // The two 64-bit runtime words below are loaded with LDR's unsigned-offset
+  // form, whose immediate is a 12-bit multiple of the access width. Both
+  // offsets are well inside that today (2136 and 5416), but they are
+  // offsetof()s into Runtime, which grows: pin them so that outgrowing the
+  // encoding breaks the build rather than making every JIT compilation fail
+  // at emission time.
+  static_assert(
+      RuntimeOffsets::runtimeHadesYGStart % 8 == 0 &&
+          RuntimeOffsets::runtimeHadesYGStart < kMaxInlineBaseOffset,
+      "the young-gen start must be reachable by an unsigned-offset LDR");
+  static_assert(
+      RuntimeOffsets::runtimeHadesCompacteeStart % 8 == 0 &&
+          RuntimeOffsets::runtimeHadesCompacteeStart < kMaxInlineBaseOffset,
+      "the compactee start must be reachable by an unsigned-offset LDR");
+
+  comment("// Inline store with barrier predicate");
+
+  asmjit::Label youngTargetLab = a.newLabel();
+  asmjit::Label doneLab = a.newLabel();
+
+  // The mask that turns a pointer into the start of its segment. A power of
+  // two minus one inverted is a run of ones, which is exactly the shape of an
+  // AArch64 logical immediate, so the AND below needs no scratch register.
+  constexpr uint64_t kSegmentMask =
+      ~(uint64_t)(RuntimeOffsets::kSegmentUnitSize - 1);
+  assert(
+      a64::Utils::isLogicalImm(kSegmentMask, 64) &&
+      "the segment mask must encode as a logical immediate");
+
+  // t1 = the start of the segment containing the slot.
+  a.and_(t1, loc, kSegmentMask);
+
+  // HadesGC::writeBarrier() step (1): a slot in the young generation never
+  // needs a barrier of any kind. RuntimeOffsets::runtimeHadesYGStart is
+  // loaded rather than baked in because setYoungGen() can swap the segment.
+  a.ldr(t2, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
+  a.cmp(t1, t2);
+  a.b_eq(youngTargetLab);
+
+  // Step (2): if the OG marking barriers are on, the snapshot barrier must
+  // read the slot's OLD value, so the store cannot happen here. Testing this
+  // before storing anything is what makes that ordering hold by
+  // construction. RuntimeOffsets::runtimeHadesOGMarkingBarriers.
+  emit_load_from_base_offset<1, true>(
+      a, t2, xRuntime, {}, RuntimeOffsets::runtimeHadesOGMarkingBarriers);
+  a.cbnz(t2.w(), slowLab);
+
+  // Step (3), first half: relocationWriteBarrier() also dirties a card for a
+  // newly created pointer into the segment being compacted. Rather than
+  // replicate that, decline whenever a compaction is in progress at all.
+  // RuntimeOffsets::runtimeHadesCompacteeStart / kHadesNoCompactee.
+  assert(
+      a64::Utils::isAddSubImm(RuntimeOffsets::kHadesNoCompactee) &&
+      "the no-compactee sentinel must encode as a compare immediate");
+  a.ldr(t2, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesCompacteeStart));
+  a.cmp(t2, RuntimeOffsets::kHadesNoCompactee);
+  a.b_ne(slowLab);
+
+  // The card-dirty store at the bottom writes the segment's INLINE card
+  // status array, which only exists in a segment exactly one unit long; a
+  // jumbo segment keeps its card array out of line and is barriered through
+  // AlignedHeapSegment::dirtyCardForAddressInLargeObj(). Declining here is
+  // what makes the card math valid.
+  //
+  // It is NOT, on its own, what makes this safe for an arbitrary address:
+  // this load only reads SHSegmentInfo when `loc` is inside the first unit
+  // of its segment, which is the precondition documented on the declaration.
+  // A jumbo segment is unit-ALIGNED but several units long, so for a `loc`
+  // further in, `loc & ~(unit-1)` names a later unit and the halfword below
+  // is object payload. Callers bound `loc`: PutById through
+  // WritePropertyCacheEntry::kMaxSlot, array stores through a storage-size
+  // gate. RuntimeOffsets::segmentShiftedSize.
+  a.ldrh(t2.w(), a64::Mem(t1, RuntimeOffsets::segmentShiftedSize));
+  a.cmp(t2.w(), 1);
+  a.b_ne(slowLab);
+
+  // The barrier is now known to be at most a card-dirty. Store.
+  a.str(value, a64::Mem(loc));
+
+  // relocationWriteBarrier() is only reached for a pointer value.
+  emit_sh_ljs_get_tag(a, t2, value);
+  emit_sh_ljs_tag_is_pointer(a, t2);
+  a.b_lo(doneLab);
+
+  // t2 = the start of the segment containing the pointed-to cell. Only an
+  // old-to-young pointer needs a card; old-to-old does not, and the compactee
+  // cases were declined above.
+  //
+  // arm64: the young-gen start has to come back into a register to be
+  // compared, and both temporaries are live here -- t1 is the segment start
+  // the card store indexes off, t2 the segment being tested -- so this uses
+  // the backend's non-allocated scratch. Nothing holds a value in xScratch
+  // across an emitter call, and this sequence emits none.
+  emit_sh_ljs_get_pointer(a, t2, value);
+  a.and_(t2, t2, kSegmentMask);
+  a.ldr(xScratch, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
+  a.cmp(t2, xScratch);
+  a.b_ne(doneLab);
+
+  // FixedSizeHeapSegment::dirtyCardForAddress(loc), inline:
+  //   segLoc[(loc - segLoc) >> kLogCardSize] = CardStatus::Dirty
+  // The card array base is the segment start itself, since
+  // RuntimeOffsets::segmentInlineCards is 0, so the store needs no
+  // displacement on top of the base+index addressing. The runtime writes this
+  // byte with a relaxed atomic store, which on arm64 is this same
+  // instruction.
+  static_assert(
+      RuntimeOffsets::segmentInlineCards == 0,
+      "the card store indexes off the segment start with no displacement");
+  a.sub(t2, loc, t1);
+  a.lsr(t2, t2, RuntimeOffsets::kLogCardSize);
+  a.mov(xScratch.w(), RuntimeOffsets::kCardDirty);
+  a.strb(xScratch.w(), a64::Mem(t1, t2));
+  a.b(doneLab);
+
+  a.bind(youngTargetLab);
+  a.str(value, a64::Mem(loc));
+
+  a.bind(doneLab);
+}
+#endif // HERMES_JIT_INLINE_SAFE_STORE
+
 } // namespace hermes::vm::arm64
 
 #endif // HERMESVM_JIT_ARM64
