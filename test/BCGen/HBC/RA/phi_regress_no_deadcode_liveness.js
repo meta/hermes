@@ -177,7 +177,7 @@ function b(d=([[[[{z:[{}]}]]]]=arguments)) {}
 // CHKRA-NEXT:                 BranchInst %BB31
 // CHKRA-NEXT:%BB33:
 // CHKRA-NEXT:  {r1}     %120 = LoadStackInst (:any) {r1} %107: any
-// CHKRA-NEXT:  {r7}     %121 = IteratorNextInst (:any) {r6} %106: any, {r1} %120: any
+// CHKRA-NEXT:  {r1}     %121 = IteratorNextInst (:any) {r6} %106: any, {r1} %120: any
 // CHKRA-NEXT:                 TryStartInst %BB35, %BB37
 // CHKRA-NEXT:%BB34:
 // CHKRA-NEXT:                 TryEndInst %BB32, %BB33
@@ -190,11 +190,10 @@ function b(d=([[[[{z:[{}]}]]]]=arguments)) {}
 // CHKRA-NEXT:  {r1}     %128 = IteratorCloseInst (:any) {r1} %127: any, false: boolean
 // CHKRA-NEXT:                 TryEndInst %BB28, %BB29
 // CHKRA-NEXT:%BB37:
-// CHKRA-NEXT:  {r1}     %130 = LIRLoadConstInst (:null) null: null
-// CHKRA-NEXT:                 CmpBrEqualInst {r7} %121: any, {r1} %130: null, %BB38, %BB39
+// CHKRA-NEXT:                 HBCCmpBrTypeOfIsInst {r1} %121: any, typeOfIs(Undefined,Null), %BB38, %BB39
 // CHKRA-NEXT:%BB38:
-// CHKRA-NEXT:  {r1}     %132 = LIRLoadConstInst (:string) "Cannot destructure 'undefined' or 'null'.": string
-// CHKRA-NEXT:  {r1}     %133 = CallBuiltinInst (:any) [HermesBuiltin.throwTypeError]: number, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, {r1} %132: string
+// CHKRA-NEXT:  {r1}     %131 = LIRLoadConstInst (:string) "Cannot destructure 'undefined' or 'null'.": string
+// CHKRA-NEXT:  {r1}     %132 = CallBuiltinInst (:any) [HermesBuiltin.throwTypeError]: number, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, {r1} %131: string
 // CHKRA-NEXT:                 UnreachableInst
 // CHKRA-NEXT:%BB39:
 // CHKRA-NEXT:                 TryEndInst %BB35, %BB36

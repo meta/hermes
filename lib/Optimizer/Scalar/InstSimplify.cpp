@@ -359,6 +359,51 @@ class InstSimplifyImpl {
         typeofInst->getArgument(), builder_.getLiteralTypeOfIsTypes(types));
   }
 
+  /// Fold a TypeOfIs check for exactly null|undefined, or its inverse, when
+  /// the argument's type is known to be entirely inside or entirely outside
+  /// null|undefined. Other type sets are not folded.
+  Value *simplifyTypeOfIs(TypeOfIsInst *typeOfIs) {
+    TypeOfIsTypes nullOrUndef =
+        TypeOfIsTypes{}.withNull(true).withUndefined(true);
+    TypeOfIsTypes types = typeOfIs->getTypes()->getData();
+    bool invert;
+    if (types.getRaw() == nullOrUndef.getRaw())
+      invert = false;
+    else if (types.getRaw() == nullOrUndef.invert().getRaw())
+      invert = true;
+    else
+      return nullptr;
+
+    Type argTy = typeOfIs->getArgument()->getType();
+    if (typeCtx_.isSubsetOf(argTy, kNullOrUndef))
+      return builder_.getLiteralBool(!invert);
+    if (typeCtx_.intersectTy(argTy, kNullOrUndef).isNoType())
+      return builder_.getLiteralBool(invert);
+    return nullptr;
+  }
+
+  /// Simplify a loose equality/inequality comparison where one of the operands
+  /// is known to be null or undefined. Such a comparison only checks whether
+  /// the other operand is null or undefined (Hermes has no [[IsHTMLDDA]]
+  /// objects), which is a TypeOfIs check.
+  /// \param invert whether the comparison is != instead of ==.
+  /// \return a TypeOfIsInst that replaces the comparison, or nullptr.
+  Value *simplifyLooseNullCheck(Value *lhs, Value *rhs, bool invert) {
+    Value *other;
+    if (typeCtx_.isSubsetOf(rhs->getType(), kNullOrUndef))
+      other = lhs;
+    else if (typeCtx_.isSubsetOf(lhs->getType(), kNullOrUndef))
+      other = rhs;
+    else
+      return nullptr;
+
+    TypeOfIsTypes types = TypeOfIsTypes{}.withNull(true).withUndefined(true);
+    if (invert)
+      types = types.invert();
+    return builder_.createTypeOfIsInst(
+        other, builder_.getLiteralTypeOfIsTypes(types));
+  }
+
   Value *simplifyBinOp(BinaryOperatorInst *binary) {
     const Keywords &kw = builder_.getModule()->getContext().keywords();
     Value *lhs = binary->getLeftHandSide();
@@ -424,6 +469,10 @@ class InstSimplifyImpl {
              typeCtx_.isSubsetOf(leftTy, kNullOrUndef))) {
           return builder_.getLiteralBool(false);
         }
+
+        // x == null|undefined only checks whether x is null or undefined.
+        if (Value *res = simplifyLooseNullCheck(lhs, rhs, false))
+          return res;
         break;
 
       case ValueKind::BinaryNotEqualInstKind: // !=
@@ -446,6 +495,10 @@ class InstSimplifyImpl {
              typeCtx_.isSubsetOf(leftTy, kNullOrUndef))) {
           return builder_.getLiteralBool(true);
         }
+
+        // x != null|undefined only checks whether x is not null or undefined.
+        if (Value *res = simplifyLooseNullCheck(lhs, rhs, true))
+          return res;
         break;
 
       case ValueKind::BinaryStrictlyEqualInstKind: // ===
@@ -1141,6 +1194,8 @@ class InstSimplifyImpl {
         return simplifyResolveScopeInst(cast<ResolveScopeInst>(I));
       case ValueKind::TypeOfInstKind:
         return simplifyTypeOf(cast<TypeOfInst>(I));
+      case ValueKind::TypeOfIsInstKind:
+        return simplifyTypeOfIs(cast<TypeOfIsInst>(I));
       case ValueKind::CreateThisInstKind:
         return simplifyCreateThisInst(cast<CreateThisInst>(I));
 
