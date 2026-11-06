@@ -257,6 +257,7 @@ RuntimeBase::RuntimeBase() {
   stackPointer = nullptr;
   currentFrame = nullptr;
   shLocals = nullptr;
+  sh_overflow_guard_clear(&overflowGuard);
 }
 
 void RuntimeBase::registerHeapSegment(unsigned idx, void *lowLim) {
@@ -310,11 +311,10 @@ Runtime::Runtime(
       jsLibStorage_(createJSLibStorage()),
       crashMgr_(runtimeConfig.getCrashMgr()),
 #ifdef HERMES_CHECK_NATIVE_STACK
-      overflowGuard_(
-          StackOverflowGuard::nativeStackGuard(
-              std::max(
-                  runtimeConfig.getNativeStackGap(),
-                  kMinSupportedNativeStackGap))),
+      nativeStackGap_(
+          std::max(
+              runtimeConfig.getNativeStackGap(),
+              kMinSupportedNativeStackGap)),
 #else
       overflowGuard_(
           StackOverflowGuard::depthCounterGuard(

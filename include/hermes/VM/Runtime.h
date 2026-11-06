@@ -1419,9 +1419,15 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   /// Manages data to be used in the case of a crash.
   std::shared_ptr<CrashManager> crashMgr_;
 
-  /// Used to guard against stack overflow. Either uses real stack checking or
-  /// call depth counter checking.
+#ifdef HERMES_CHECK_NATIVE_STACK
+  /// Native stack remaining before assuming overflow. The bounds computed
+  /// with it are in SHRuntime::overflowGuard, where native code checks them
+  /// inline.
+  unsigned nativeStackGap_;
+#else
+  /// Used to guard against stack overflow by counting call depth.
   StackOverflowGuard overflowGuard_;
+#endif
 
   /// Caches for property lookups in non-JS code.
   WritePropertyCacheEntry fixedWritePropCache_[(size_t)PropCacheID::_COUNT];
@@ -1895,21 +1901,20 @@ class ScopedNativeDepthReducer {
  public:
 #ifdef HERMES_CHECK_NATIVE_STACK
   explicit ScopedNativeDepthReducer(Runtime &runtime)
-      : runtime_(runtime),
-        nativeStackGapOld(runtime.overflowGuard_.nativeStackGap) {
+      : runtime_(runtime), nativeStackGapOld(runtime.nativeStackGap_) {
     // Temporarily reduce the gap to use that headroom for gathering the error.
     // If overflow is detected, the recomputation of the stack bounds will
     // result in no gap for the duration of the ScopedNativeDepthReducer's
     // lifetime.
-    runtime_.overflowGuard_.nativeStackGap = kReducedNativeStackGap;
+    runtime_.nativeStackGap_ = kReducedNativeStackGap;
   }
   ~ScopedNativeDepthReducer() {
     assert(
-        runtime_.overflowGuard_.nativeStackGap == kReducedNativeStackGap &&
+        runtime_.nativeStackGap_ == kReducedNativeStackGap &&
         "ScopedNativeDepthReducer gap was overridden");
-    runtime_.overflowGuard_.nativeStackGap = nativeStackGapOld;
+    runtime_.nativeStackGap_ = nativeStackGapOld;
     // Force the bounds to be recomputed the next time.
-    runtime_.overflowGuard_.clearStackBounds();
+    StackOverflowGuard::clearStackBounds(&runtime_.overflowGuard);
   }
 #else
   explicit ScopedNativeDepthReducer(Runtime &runtime) : runtime_(runtime) {
@@ -2494,8 +2499,10 @@ inline llvh::iterator_range<ConstStackFrameIterator> Runtime::getStackFrames()
 };
 
 inline StackOverflowGuard Runtime::getOverflowGuardForRegex() {
+#ifdef HERMES_CHECK_NATIVE_STACK
+  return StackOverflowGuard::nativeStackGuard(nativeStackGap_, overflowGuard);
+#else
   StackOverflowGuard copy = overflowGuard_;
-#ifndef HERMES_CHECK_NATIVE_STACK
   // We should take into account the approximate difference in sizes between the
   // stack size of the interpreter vs the regex executor. The max call depth in
   // use here was calculated using call stack sizes of the interpreter. Since
@@ -2504,12 +2511,16 @@ inline StackOverflowGuard Runtime::getOverflowGuardForRegex() {
   // some number larger than 1.
   constexpr uint32_t kRegexMaxDepthMult = 5;
   copy.maxCallDepth *= kRegexMaxDepthMult;
-#endif
   return copy;
+#endif
 }
 
 inline bool Runtime::isStackOverflowing() {
+#ifdef HERMES_CHECK_NATIVE_STACK
+  return StackOverflowGuard::isOverflowing(&overflowGuard, nativeStackGap_);
+#else
   return overflowGuard_.isOverflowing();
+#endif
 }
 
 inline ExecutionStatus Runtime::setThrownValue(HermesValue value) {

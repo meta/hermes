@@ -233,8 +233,20 @@ SHERMES_EXPORT void _sh_done(SHRuntime *shr);
 
 /// Check on the native stack and throw a stack overflow error if it overflows.
 /// When compiled without HERMES_CHECK_NATIVE_STACK, does nothing.
-/// TODO: Inline the fast path to allow for faster execution.
 SHERMES_EXPORT void _sh_check_native_stack_overflow(SHRuntime *shr);
+
+/// Same as _sh_check_native_stack_overflow(), with the in-bounds check inline.
+/// \p frameLow is an address near the bottom of the caller's frame, such as
+/// its locals. Using it instead of the frame address avoids forcing a frame
+/// pointer and accounts for the caller's locals.
+static inline void _sh_check_native_stack_overflow_inline(
+    SHRuntime *shr,
+    void *frameLow) {
+  if (SH_LIKELY(
+          !sh_overflow_guard_out_of_bounds(&shr->overflowGuard, frameLow)))
+    return;
+  _sh_check_native_stack_overflow(shr);
+}
 
 /// Register, initialize and execute a main function of the unit returned by the
 /// given creator function. The unit is freed when the runtime is destroyed.

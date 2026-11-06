@@ -50,11 +50,11 @@ struct RuntimeOffsets {
   static constexpr uint32_t builtins = offsetof(Runtime, builtins_);
 
   static constexpr uint32_t nativeStackHigh =
-      offsetof(Runtime, overflowGuard_) +
-      offsetof(StackOverflowGuard, nativeStackHigh);
+      offsetof(SHRuntime, overflowGuard) +
+      offsetof(SHOverflowGuard, nativeStackHigh);
   static constexpr uint32_t nativeStackSize =
-      offsetof(Runtime, overflowGuard_) +
-      offsetof(StackOverflowGuard, nativeStackSize);
+      offsetof(SHRuntime, overflowGuard) +
+      offsetof(SHOverflowGuard, nativeStackSize);
 
   static constexpr uint32_t codeBlockJitPtr = offsetof(CodeBlock, JITCompiled_);
   static constexpr uint32_t jsFunctionCodeBlock =

@@ -31,6 +31,8 @@
 #include <intrin.h>
 #endif
 
+#include "hermes/Support/sh_overflow_guard.h"
+
 #include "llvh/Support/Compiler.h"
 
 #include <cstddef>
@@ -41,42 +43,39 @@ namespace hermes {
 #ifdef HERMES_CHECK_NATIVE_STACK
 
 class StackOverflowGuard {
-  explicit StackOverflowGuard(unsigned stackGap) : nativeStackGap(stackGap) {}
+  StackOverflowGuard(unsigned stackGap, SHOverflowGuard bounds)
+      : bounds(bounds), nativeStackGap(stackGap) {}
 
  public:
-  /// Upper bound on the stack, nullptr if currently unknown.
-  const void *nativeStackHigh{nullptr};
-  /// This has already taken \c nativeStackGap into account,
-  /// so any stack outside [nativeStackHigh-nativeStackSize, nativeStackHigh]
-  /// is overflowing.
-  size_t nativeStackSize{0};
+  /// Current stack bounds.
+  SHOverflowGuard bounds;
   /// Native stack remaining before assuming overflow.
   unsigned nativeStackGap;
 
-  static StackOverflowGuard nativeStackGuard(unsigned stackGap) {
-    return StackOverflowGuard(stackGap);
+  /// \return a guard with \p stackGap, starting from \p bounds (unknown by
+  ///   default).
+  static StackOverflowGuard nativeStackGuard(
+      unsigned stackGap,
+      SHOverflowGuard bounds = {nullptr, 0}) {
+    return StackOverflowGuard(stackGap, bounds);
   }
 
   /// \return true if the native stack is overflowing the bounds of the
   ///   current thread. Updates the stack bounds if the thread which Runtime
   ///   is executing on changes.
   inline bool isOverflowing() {
-    // Check for overflow by subtracting the sp from the high pointer.
-    // If the sp is outside the valid stack range, the difference will
-    // be greater than the known stack size.
-    // This is clearly true when 0 < sp < nativeStackHigh_ - size.
-    // If nativeStackHigh_ < sp, then the subtraction will wrap around.
-    // We know that nativeStackSize_ <= nativeStackHigh_
-    // (because otherwise the stack wouldn't fit in the memory),
-    // so the overflowed difference will be greater than nativeStackSize_.
+    return isOverflowing(&bounds, nativeStackGap);
+  }
+
+  /// Same as the member \c isOverflowing, for bounds stored elsewhere.
+  /// \p guard is updated when the bounds are recomputed with \p gap.
+  static inline bool isOverflowing(SHOverflowGuard *guard, unsigned gap) {
 #ifdef _MSC_VER
     void *stackPointer = _AddressOfReturnAddress();
 #else
     void *stackPointer = __builtin_frame_address(0);
 #endif
-    if (LLVM_LIKELY(
-            !((uintptr_t)nativeStackHigh - (uintptr_t)stackPointer >
-              nativeStackSize))) {
+    if (LLVM_LIKELY(!sh_overflow_guard_out_of_bounds(guard, stackPointer))) {
       // Fast path: quickly check the stored stack bounds.
       // NOTE: It is possible to have a false negative here (highly unlikely).
       // If the program creates many threads and destroys them, a new
@@ -86,21 +85,13 @@ class StackOverflowGuard {
     }
     // Slow path: might be overflowing, but update the stack bounds first
     // in case execution has changed threads.
-    return isStackOverflowingSlowPath();
+    return sh_overflow_guard_update(guard, gap);
   }
 
-  /// Clear the native stack bounds and force recomputation.
-  inline void clearStackBounds() {
-    nativeStackHigh = nullptr;
-    nativeStackSize = 0;
+  /// Clear the native stack bounds in \p guard and force recomputation.
+  static inline void clearStackBounds(SHOverflowGuard *guard) {
+    sh_overflow_guard_clear(guard);
   }
-
- private:
-  /// Slow path for \c isOverflowing.
-  /// Sets \c stackLow_ \c stackHigh_.
-  /// \return true if the native stack is overflowing the bounds of the
-  ///   current thread.
-  bool isStackOverflowingSlowPath();
 };
 
 #else

@@ -8,6 +8,7 @@
 #ifndef HERMES_SH_RUNTIME_H
 #define HERMES_SH_RUNTIME_H
 
+#include "hermes/Support/sh_overflow_guard.h"
 #include "hermes/VM/sh_legacy_value.h"
 #include "hermes/VM/sh_segment_info.h"
 
@@ -15,6 +16,7 @@
 
 #include <assert.h>
 #include <setjmp.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -95,6 +97,10 @@ typedef struct SHRuntime {
 
   /// [SH] head of locals list.
   SHLocals *shLocals;
+
+  /// Native stack bounds, checked inline by native code. Unknown (null) when
+  /// the native stack is not checked.
+  SHOverflowGuard overflowGuard;
 
 #define SHRUNTIME_HV_FIELD(name) SHLegacyValue name;
 #include "hermes/VM/SHRuntimeHermesValueFields.def"

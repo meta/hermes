@@ -8,23 +8,18 @@
 #include "hermes/Support/StackOverflowGuard.h"
 #include "hermes/Support/OSCompat.h"
 
-namespace hermes {
-
 #ifdef HERMES_CHECK_NATIVE_STACK
 
-bool StackOverflowGuard::isStackOverflowingSlowPath() {
-  auto [highPtr, size] = oscompat::thread_stack_bounds(nativeStackGap);
-  nativeStackHigh = (const char *)highPtr;
-  nativeStackSize = size;
+extern "C" bool sh_overflow_guard_update(SHOverflowGuard *guard, unsigned gap) {
+  auto [highPtr, size] = hermes::oscompat::thread_stack_bounds(gap);
+  guard->nativeStackHigh = highPtr;
+  guard->nativeStackSize = size;
 #ifdef _MSC_VER
   void *stackPointer = _AddressOfReturnAddress();
 #else
   void *stackPointer = __builtin_frame_address(0);
 #endif
-  return LLVM_UNLIKELY(
-      (uintptr_t)nativeStackHigh - (uintptr_t)stackPointer > nativeStackSize);
+  return LLVM_UNLIKELY(sh_overflow_guard_out_of_bounds(guard, stackPointer));
 }
 
 #endif
-
-} // namespace hermes

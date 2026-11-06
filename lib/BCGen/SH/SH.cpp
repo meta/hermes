@@ -2899,11 +2899,10 @@ void generateFunction(
           ->getContext()
           .getNativeContext()
           .settings.emitCheckNativeStack) {
-    // This call contains the fast path out of line for now,
-    // but _sh_check_native_stack_overflow can be updated to contain inline
-    // code and avoid the function call in the future, when SHRuntime
-    // has better visibility into the fields of vm::Runtime.
-    OS << "  _sh_check_native_stack_overflow(shr);\n";
+    OS
+        << (options.smallC
+                ? "  _sh_check_native_stack_overflow(shr);\n"
+                : "  _sh_check_native_stack_overflow_inline(shr, &locals);\n");
   }
 
   // Emit instructions for native stack traces if the debug info level is set to
