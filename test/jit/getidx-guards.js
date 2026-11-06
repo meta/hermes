@@ -29,11 +29,10 @@
 // (see test/hermes/typedarray-detached.js); every RUN line that runs the
 // script runs the detach case below, so each carries the flag.
 //
-// ARCHITECTURE-INDEPENDENT. arm64 has no GetByIndex load tier of either
-// kind; every read below still goes through its bare helper call, which
-// the interpreter diff exercises identically. The point of this file is
-// the read SEMANTICS at a GetByIndex site, not any inline tier's
-// presence.
+// ARCHITECTURE-INDEPENDENT. Both backends emit the GetByIndex JSArray and
+// typed-array load tiers, so on either one these reads exercise the inline
+// tiers and their decline paths. The point of this file is the read
+// SEMANTICS at a GetByIndex site, not any inline tier's presence.
 //
 // EVERY read below uses a LITERAL uint8 key, never a variable: ISel.cpp
 // only lowers a literal number key representable as uint8 to GetByIndex

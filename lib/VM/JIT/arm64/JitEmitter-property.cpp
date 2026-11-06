@@ -1419,6 +1419,37 @@ void Emitter::emitGetByValFastArrayTier(
   a.bind(doneLab);
 }
 
+/// The element width of typed-array \p kind, as a log2 byte count. On arm64
+/// this doubles as the scale an element access's addressing mode must carry:
+/// both natural forms -- a register index extended by `uxtw #logWidth`, and a
+/// 12-bit unsigned immediate -- are scaled by the access size, so a scaled
+/// element access IS the addressing mode here, with no separate shifted add
+/// (unlike the fast array tiers' slot arithmetic).
+///
+/// One definition for all three users -- emitTypedArrayElementLoad()'s
+/// cross-check assert, and the two typed-array load tiers that build the
+/// address it checks -- so that a width can never disagree between the
+/// address and the load made through it.
+static uint32_t typedArrayLogWidth(CellKind kind) {
+  switch (kind) {
+    case CellKind::Uint8ArrayKind:
+    case CellKind::Uint8ClampedArrayKind:
+    case CellKind::Int8ArrayKind:
+      return 0;
+    case CellKind::Uint16ArrayKind:
+    case CellKind::Int16ArrayKind:
+      return 1;
+    case CellKind::Uint32ArrayKind:
+    case CellKind::Int32ArrayKind:
+    case CellKind::Float32ArrayKind:
+      return 2;
+    case CellKind::Float64ArrayKind:
+      return 3;
+    default:
+      llvm_unreachable("unsupported typed-array load tier kind");
+  }
+}
+
 void Emitter::emitTypedArrayElementLoad(
     CellKind kind,
     const a64::Mem &elemBase,
@@ -1428,32 +1459,7 @@ void Emitter::emitTypedArrayElementLoad(
     const asmjit::Label &doneLab) {
   const bool isFloat64 = kind == CellKind::Float64ArrayKind;
   const bool isFloat32 = kind == CellKind::Float32ArrayKind;
-  // The element width, as a log2 byte count: on arm64 it is also the scale
-  // the caller's addressing mode must already carry, because a scaled
-  // element access IS the addressing mode here -- there is no separate
-  // shifted add, unlike the fast array tier's slot arithmetic.
-  uint32_t logWidth;
-  switch (kind) {
-    case CellKind::Uint8ArrayKind:
-    case CellKind::Uint8ClampedArrayKind:
-    case CellKind::Int8ArrayKind:
-      logWidth = 0;
-      break;
-    case CellKind::Uint16ArrayKind:
-    case CellKind::Int16ArrayKind:
-      logWidth = 1;
-      break;
-    case CellKind::Uint32ArrayKind:
-    case CellKind::Int32ArrayKind:
-    case CellKind::Float32ArrayKind:
-      logWidth = 2;
-      break;
-    case CellKind::Float64ArrayKind:
-      logWidth = 3;
-      break;
-    default:
-      llvm_unreachable("unsupported typed-array load tier kind");
-  }
+  const uint32_t logWidth = typedArrayLogWidth(kind);
   (void)logWidth;
   // Whichever of the two addressing forms the caller built, it has to be one
   // this width can encode: a register index is scaled by the access size, so
@@ -1461,9 +1467,17 @@ void Emitter::emitTypedArrayElementLoad(
   // scaled the same way, so it must be a multiple of the width and inside
   // the 12-bit scaled range. (An immediate that is not would silently become
   // an unscaled LDUR, whose reach is 9 signed bits.)
+  //
+  // The index form's EXTEND is checked too, not just its shift: the index is
+  // a 32-bit element index in the low half of a 64-bit register, so the only
+  // correct extend is `uxtw`. An `lsl`-built Mem carries the right shift and
+  // would pass a shift-only assert, but it encodes the index as a full
+  // 64-bit register (`uxtx`), reading whatever the upper half happens to
+  // hold.
   assert(
       (elemBase.hasIndex()
-           ? elemBase.shift() == logWidth
+           ? elemBase.shift() == logWidth &&
+               elemBase.shiftOp() == a64::ShiftOp::kUXTW
            : (uint32_t)elemBase.offsetLo32() % (1u << logWidth) == 0 &&
                (uint32_t)elemBase.offsetLo32() <
                    maxNaturalBaseOffset(1u << logWidth)) &&
@@ -1575,28 +1589,7 @@ void Emitter::emitGetByValTypedArrayTier(
 
   // The element width, as a log2 byte count: the scale of the load's index
   // operand, since the index is an element count.
-  uint32_t logWidth;
-  switch (kind) {
-    case CellKind::Uint8ArrayKind:
-    case CellKind::Uint8ClampedArrayKind:
-    case CellKind::Int8ArrayKind:
-      logWidth = 0;
-      break;
-    case CellKind::Uint16ArrayKind:
-    case CellKind::Int16ArrayKind:
-      logWidth = 1;
-      break;
-    case CellKind::Uint32ArrayKind:
-    case CellKind::Int32ArrayKind:
-    case CellKind::Float32ArrayKind:
-      logWidth = 2;
-      break;
-    case CellKind::Float64ArrayKind:
-      logWidth = 3;
-      break;
-    default:
-      llvm_unreachable("unsupported typed-array load tier kind");
-  }
+  const uint32_t logWidth = typedArrayLogWidth(kind);
 
   // The object and exact-kind checks come FIRST: at a duo site a kind miss
   // must reach the JSArray tier, and a non-object cannot be read by either
@@ -1840,24 +1833,370 @@ void Emitter::getByVal(FR frRes, FR frSource, FR frKey) {
   getByValImpl(frRes, frSource, frKey);
 }
 
-void Emitter::getByIndex(FR frRes, FR frSource, uint32_t key) {
+void Emitter::emitGetByIndexFastArrayTier(
+    const GetByIndexRegs &regs,
+    uint32_t key,
+    const asmjit::Label &helperLab,
+    bool sourceKnownObject) {
+  comment("// Inline fast array load");
+
+  // Every register this runs on was chosen by getByIndexImpl(); see
+  // GetByIndexRegs. Nothing here allocates or frees, so this emits code and
+  // nothing else.
+  const a64::GpX &xSource = regs.source;
+  // Holds the object, then the indexed storage, then the element address.
+  const a64::GpX &xLoc = regs.loc;
+  const a64::GpX &xIdx = regs.idx;
+  const a64::GpX &xTemp1 = regs.temp1;
+  const a64::GpX &xRes = regs.res;
+
+  // Is the source an object? At a site with a typed-array tier ahead of
+  // this one, that tier has already proved it, and nothing runs between
+  // the two tiers that could change the answer.
+  if (!sourceKnownObject) {
+    emit_sh_ljs_is_object(a, xTemp1, xSource);
+    a.b_ne(helperLab);
+  }
+  // xLoc is the pointer to the object.
+  emit_sh_ljs_get_pointer(a, xLoc, xSource);
+
+  // Is it a JSArray, and nothing else? Exactly emitGetByValFastArrayTier()'s
+  // guard: the exact CellKind is what lets this code skip ObjectVTable
+  // dispatch, and restricting to JSArray (rather than all of ArrayImpl) is
+  // what lets an Arguments object decline to the helper instead of being
+  // read inline.
+  emit_gccell_get_kind(a, xTemp1, xLoc);
+  a.cmp(xTemp1.w(), (uint32_t)CellKind::JSArrayKind);
+  a.b_ne(helperLab);
+
+  // No fastIndexProperties/frozen check here, for the same reason
+  // emitGetByValFastArrayTier() has none: the empty check below already
+  // subsumes it.
+
+  // ArrayImpl::at()'s range test, with K an emit-time constant:
+  // `K - beginIndex_ < elemCount_`, unsigned, one comparison for both ends.
+  // K being constant does NOT make the storage offset constant -- a first
+  // indexed write can set beginIndex_ to any index (JSArray.cpp) -- so the
+  // subtraction still has to happen at run time, and the constant has to be
+  // materialized into a register to be the MINUEND of it. The 32-bit
+  // mov/sub/cmp sequence zero-extends xIdx, which is what makes the scaled
+  // 64-bit index below the uint32 one. Out of range is a DECLINE, not
+  // `undefined`: the prototype chain may carry an indexed property at that
+  // index, so only the full path can answer.
+  static_assert(
+      RuntimeOffsets::arrayImplBeginIndex % 4 == 0 &&
+          RuntimeOffsets::arrayImplElemCount % 4 == 0 &&
+          RuntimeOffsets::arrayImplBeginIndex < maxNaturalBaseOffset(4) &&
+          RuntimeOffsets::arrayImplElemCount < maxNaturalBaseOffset(4),
+      "the array range fields must be reachable by unsigned-offset LDRs");
+  a.mov(xIdx.w(), key);
+  a.ldr(xTemp1.w(), a64::Mem(xLoc, RuntimeOffsets::arrayImplBeginIndex));
+  a.sub(xIdx.w(), xIdx.w(), xTemp1.w());
+  a.ldr(xTemp1.w(), a64::Mem(xLoc, RuntimeOffsets::arrayImplElemCount));
+  a.cmp(xIdx.w(), xTemp1.w());
+  a.b_hs(helperLab);
+
+  // The storage. It cannot be null here: elemCount_ is 0 whenever
+  // indexedStorage_ is, which the comparison above has already ruled out.
+  static_assert(
+      RuntimeOffsets::arrayImplIndexedStorage % sizeof(CompressedPointer) ==
+              0 &&
+          RuntimeOffsets::arrayImplIndexedStorage <
+              maxNaturalBaseOffset(sizeof(CompressedPointer)),
+      "the indexed storage must be reachable by an unsigned-offset LDR");
+  emit_load_cp(
+      a, xLoc, a64::Mem(xLoc, RuntimeOffsets::arrayImplIndexedStorage));
+  emit_sh_cp_decode_non_null(a, xLoc);
+
+  // The address of the element. The scale is the width of a heap value slot,
+  // which is four bytes under compressed pointers and eight otherwise -- an
+  // element index is not a byte offset in any mode. Verbatim from
+  // emitGetByValFastArrayTier(), including the absence of a jumbo-cell size
+  // gate: that guard exists solely for emitSafeStoreOrSlow()'s write-barrier
+  // card math, which a load never performs.
+  a.add(xLoc, xLoc, xIdx, a64::lsl(RuntimeOffsets::kLogSmallHermesValueSize));
+  static_assert(
+      offsetof(SHArrayStorageSmall, storage) <= 0xFFFFFF,
+      "the element base offset must fit emit_add_imm_u24()");
+  emit_add_imm_u24(a, xLoc, offsetof(SHArrayStorageSmall, storage));
+
+  // ArrayImpl::at() reports `empty` for a hole -- a read at a hole is not a
+  // fast-path read at all: the runtime resolves the property normally, and
+  // may find a data property or an accessor on the prototype chain. Decline,
+  // and let the helper do that. This is emitGetByValFastArrayTier()'s hole
+  // check verbatim, including why emit_shv_load_is_empty() cannot serve
+  // here: the raw bits are loaded INTO xRes because the decode below has to
+  // consume them, and that helper's 8-byte-slot branch shifts its input in
+  // place, which would leave xRes holding the shifted ETag instead of the
+  // value. Hence the check runs through a DISTINCT temp. The 4-byte-slot
+  // branch has no such hazard (cmp does not write its operand).
+  assert(xTemp1 != xRes && "the empty check needs a temp distinct from xRes");
+  emit_load_shv(a, xRes, a64::Mem(xLoc));
+  if constexpr (sizeof(SmallHermesValue) == 4) {
+    emit_cmp_imm32(
+        a,
+        xRes.w(),
+        (uint32_t)SmallHermesValue::encodeEmptyValue().getRaw(),
+        xScratch.w());
+  } else {
+    emit_sh_ljs_is_empty(a, xTemp1, xRes);
+  }
+  a.b_eq(helperLab);
+
+  // Unbox the SmallHermesValue into the HermesValue the result register must
+  // hold -- the same shared decode emitGetByValFastArrayTier() uses, which
+  // never has anything left to decline.
+  asmjit::Label doneLab = a.newLabel();
+  emit_sh_shv_decode(a, xRes, doneLab);
+  a.bind(doneLab);
+}
+
+void Emitter::emitGetByIndexTypedArrayTier(
+    const GetByIndexRegs &regs,
+    uint32_t key,
+    CellKind kind,
+    const asmjit::Label &kindMissLab,
+    const asmjit::Label &helperLab) {
+  comment("// Inline typed array load (kind %u)", (unsigned)kind);
+
+  // Every register this runs on was chosen by getByIndexImpl(); see
+  // GetByIndexRegs. Nothing here allocates or frees.
+  const a64::GpX &xSource = regs.source;
+  // Holds the object, then the buffer, then the element base address.
+  const a64::GpX &xLoc = regs.loc;
+  const a64::GpX &xTemp1 = regs.temp1;
+  // Holds the loaded element, widened to the double it must become.
+  const a64::VecD &dValTmp = regs.valTmp;
+  const a64::GpX &xRes = regs.res;
+
+  // The element width of this kind, in bytes -- what K has to be scaled by
+  // to become the constant displacement below. It comes from the same
+  // helper the shared tail cross-checks the address with, so the two cannot
+  // disagree.
+  const uint32_t width = 1u << typedArrayLogWidth(kind);
+
+  // The object and exact-kind checks come FIRST, for the same reason they
+  // do in emitGetByValTypedArrayTier(): at a duo site a kind miss must
+  // reach the JSArray tier, and a non-object cannot be read by either tier,
+  // so only the kind check chains.
+  emit_sh_ljs_is_object(a, xTemp1, xSource);
+  a.b_ne(helperLab);
+  emit_sh_ljs_get_pointer(a, xLoc, xSource);
+  emit_gccell_get_kind(a, xTemp1, xLoc);
+  a.cmp(xTemp1.w(), (uint32_t)kind);
+  a.b_ne(kindMissLab);
+
+  // No object-flags check, and no key conversion: the read path checks
+  // neither fastIndexProperties nor frozen for a typed array
+  // (tryFastGetComputedNoAlloc(), JSObject-inline.h), and K is an emit-time
+  // constant in [0, 255], so there is nothing to convert and no parity exit.
+
+  // From here on the answer is this tier's, whatever it is: an
+  // out-of-bounds index and a detached buffer both read as `undefined`, so
+  // they branch to a local `undefined` rather than to the helper. Nothing
+  // is recorded on that path, and nothing should be: the source's shape
+  // there IS the specialized kind.
+  asmjit::Label undefLab = a.newLabel();
+  asmjit::Label doneLab = a.newLabel();
+
+  // Bounds: K < length_, one unsigned 32-bit compare. With K an immediate
+  // the compare is against the loaded length DIRECTLY, which reverses both
+  // the operand order and the condition of emitGetByValTypedArrayTier()'s
+  // `cmp idx, length_` / `b.hs`: `b.ls` is taken exactly when
+  // `length_ <= K`, i.e. exactly when K is not a valid index. Acceptance
+  // stays STRICT -- K == length_ is out of bounds, and takes the branch.
+  // K is a uint8, so it is always a valid `cmp` immediate. This tree has no
+  // resizable ArrayBuffers, so length_ is fixed for the object's lifetime.
+  static_assert(
+      RuntimeOffsets::jsTypedArrayBaseLength % 4 == 0 &&
+          RuntimeOffsets::jsTypedArrayBaseLength < maxNaturalBaseOffset(4),
+      "the typed array length must be reachable by an unsigned-offset LDR");
+  assert(key <= UINT8_MAX && "the GetByIndex key must be a uint8");
+  a.ldr(xTemp1.w(), a64::Mem(xLoc, RuntimeOffsets::jsTypedArrayBaseLength));
+  a.cmp(xTemp1.w(), key);
+  a.b_ls(undefLab);
+
+  // The element base address: the buffer's data_, plus the view's byte
+  // offset_ into it. A detached buffer has a null data_, so the attached
+  // check is free with a load the read needs anyway. Verbatim from
+  // emitGetByValTypedArrayTier(), including its use of a real temp rather
+  // than xScratch to carry the offset -- on arm64 xScratch is what mask and
+  // immediate materializations use, so nothing may live there across other
+  // emitters. The 32-bit load zeroes the upper half of xTemp1, which is what
+  // makes the 64-bit add below the zero-extended one.
+  static_assert(
+      RuntimeOffsets::jsTypedArrayBaseOffset % 4 == 0 &&
+          RuntimeOffsets::jsTypedArrayBaseOffset < maxNaturalBaseOffset(4),
+      "the typed array offset must be reachable by an unsigned-offset LDR");
+  static_assert(
+      RuntimeOffsets::jsTypedArrayBaseBuffer % sizeof(CompressedPointer) == 0 &&
+          RuntimeOffsets::jsTypedArrayBaseBuffer <
+              maxNaturalBaseOffset(sizeof(CompressedPointer)),
+      "the typed array buffer must be reachable by an unsigned-offset LDR");
+  static_assert(
+      RuntimeOffsets::jsArrayBufferData % 8 == 0 &&
+          RuntimeOffsets::jsArrayBufferData < maxNaturalBaseOffset(8),
+      "the buffer data pointer must be reachable by an unsigned-offset LDR");
+  a.ldr(xTemp1.w(), a64::Mem(xLoc, RuntimeOffsets::jsTypedArrayBaseOffset));
+  emit_load_cp(a, xLoc, a64::Mem(xLoc, RuntimeOffsets::jsTypedArrayBaseBuffer));
+  emit_sh_cp_decode_non_null(a, xLoc);
+  a.ldr(xLoc, a64::Mem(xLoc, RuntimeOffsets::jsArrayBufferData));
+  a.cbz(xLoc, undefLab);
+  a.add(xLoc, xLoc, xTemp1);
+
+  // The element access itself, through the tail shared with the ByVal tier.
+  // Unlike that tier's base+index operand this one has NO index register at
+  // all: the element index is a constant, so `K * width` becomes the
+  // IMMEDIATE displacement here and the tail has nothing left to scale.
+  // K <= 255 and width <= 8, so the product is at most 2040, a multiple of
+  // the width and inside every width's scaled 12-bit range.
+  emitTypedArrayElementLoad(
+      kind,
+      a64::Mem(xLoc, (int32_t)(key * width)),
+      xRes,
+      xTemp1,
+      dValTmp,
+      doneLab);
+
+  a.bind(undefLab);
+  loadBits64InGp(xRes, (uint64_t)_sh_ljs_undefined().raw, "undefined");
+  a.bind(doneLab);
+}
+
+void Emitter::getByIndexImpl(FR frRes, FR frSource, uint32_t key) {
+  // The GetByIndex instruction's own bytecode offset, unique within this
+  // function and stable across recompiles: identifies this site's entry in
+  // versionData_'s consumer records (see JitFunctionData.h). GetByIndex is
+  // a distinct opcode from GetByVal, so sharing the byValSites deque with
+  // the ByVal sites can never collide.
+  uint32_t siteId =
+      (uint32_t)((const char *)emittingIP - (const char *)codeBlock_->begin());
+
   comment("// getByIdx r%u, r%u, %u", frRes.index(), frSource.index(), key);
 
   syncAllFRTempExcept(frRes != frSource ? frRes : FR());
   syncToFrame(frSource);
-  freeAllFRTempExcept({});
 
+  // Monotone tier selection, exactly getByValImpl()'s -- see its comment
+  // for why the JSArray tier is a static prior rather than a decision, and
+  // why selecting the typed-array tier from the observed field alone is
+  // already monotone. The predicate is the LOAD one, which admits
+  // Uint8Clamped where the store predicate does not; the recording helper
+  // for this site validated the kind against the same predicate before
+  // storing it.
+  JitByValSiteRecord &site = byValSiteRecord(siteId);
+  const bool emitTA = site.taKind != JitByValSiteRecord::kTAKindNone &&
+      isJitSupportedTypedArrayLoadKind((CellKind)site.taKind);
+  site.specializedTAKind =
+      emitTA ? site.taKind : JitByValSiteRecord::kTAKindNone;
+
+  asmjit::Label helperLab = a.newLabel();
+  asmjit::Label contLab = a.newLabel();
+
+  // The register assignment for the whole tier chain, made once (see
+  // GetByIndexRegs) -- the only register-allocator bookkeeping in the
+  // sequence, exactly as getByValImpl() does it. The allocs and frees below
+  // emit no code at all: they only decide which registers the tiers may
+  // use. There is no key register: K is an emit-time constant.
+  freeAllFRTempExcept(frSource);
+  // The source is needed as a raw HermesValue in a GP register.
+  HWReg hwSource = getOrAllocFRInGpX(frSource, true);
+  HWReg hwLoc = allocTempGpX();
+  HWReg hwIdx = allocTempGpX();
+  HWReg hwTemp1 = allocTempGpX();
+  HWReg hwValTmp = emitTA ? allocTempVecD() : HWReg{};
+  freeReg(hwLoc);
+  freeReg(hwIdx);
+  freeReg(hwTemp1);
+  if (emitTA)
+    freeReg(hwValTmp);
+  freeFRTemp(frSource);
+  // The result register comes last, so it may overlap the temps just freed
+  // -- the same ordering getByValImpl() uses for hwRes. The gpX(0) hint is
+  // what lets the slow path (whose helper call returns in x0) reconcile with
+  // this register at no cost in the common case. `false`: this is a fresh
+  // output, no current value to load.
+  HWReg hwRes = getOrAllocFRInGpX(frRes, false, HWReg::gpX(0));
+
+  GetByIndexRegs regs;
+  regs.source = hwSource.a64GpX();
+  regs.loc = hwLoc.a64GpX();
+  regs.idx = hwIdx.a64GpX();
+  regs.temp1 = hwTemp1.a64GpX();
+  if (emitTA)
+    regs.valTmp = hwValTmp.a64VecD();
+  regs.res = hwRes.a64GpX();
+  // res may share a register with loc or idx -- both are dead by the time a
+  // tier writes it -- but NOT with temp1, which the fast array tier still
+  // needs after loading the element into res (see its hole check). The
+  // allocation above guarantees it: res is either a global register, which
+  // is never a temp, or x0, which is free here and therefore was handed out
+  // as the FIRST temp, loc.
+  assert(regs.temp1 != regs.res && "the result must not alias temp1");
+
+  if (emitTA) {
+    // The recorded kind is compared first: it is what the site was observed
+    // declining on. Its kind miss chains into the JSArray tier below, never
+    // into the helper.
+    asmjit::Label kindMissLab = a.newLabel();
+    emitGetByIndexTypedArrayTier(
+        regs, key, (CellKind)site.taKind, kindMissLab, helperLab);
+    // Falling out of the inline tier means the load is done.
+    a.b(contLab);
+    a.bind(kindMissLab);
+  }
+  emitGetByIndexFastArrayTier(
+      regs, key, helperLab, /* sourceKnownObject */ emitTA);
+  // Falling out of the inline tier means the load is done.
+  a.b(contLab);
+  a.bind(helperLab);
+
+  // No freeAllFRTempExcept({}) here: the prologue above already left every
+  // temp free and no FR but frRes registered in one, and frRes's register
+  // must survive into the call below so the slow-path result lands in the
+  // same register the tier used -- the same structure getByValImpl() uses
+  // between its fast path and its shared call.
   a.mov(a64::x0, xRuntime);
   loadFrameAddr(a64::x1, frSource);
+  // The key goes into w2 BY VALUE, as an immediate: _jit_get_by_index takes
+  // the uint32 itself, matching the plain helper it forwards to, not a
+  // pointer to a frame slot the way _jit_get_by_val's key does.
   a.mov(a64::w2, key);
-  EMIT_RUNTIME_CALL(
-      *this,
-      SHLegacyValue (*)(SHRuntime *, SHLegacyValue *, uint32_t),
-      _sh_ljs_get_by_index_rjs);
+  loadBits64InGp(a64::x3, (uint64_t)versionData_, "JitVersionData");
+  a.mov(a64::w4, siteId);
 
-  HWReg hwRes = getOrAllocFRInAnyReg(frRes, false, HWReg::gpX(0));
+  // site.helper is per-site mutable state (spec: "Slow-path demotion: the
+  // pointer flip"): it starts out null on a fresh record and is carried
+  // forward as-is across recompiles, so a demoted slot (flipped by the
+  // runtime to the plain _sh_ljs_get_by_index_rjs) stays demoted. Only a
+  // still-null slot -- never yet flipped -- is initialized here. An
+  // unconditional store would silently restart recording at every
+  // recompile.
+  if (!site.helper)
+    site.helper = (void *)_jit_get_by_index;
+  // Type-check the recording callee against the signature the emitted call
+  // sequence assumes, the same way EMIT_RUNTIME_CALL does for a direct call
+  // -- even though it is not called directly here, since the actual callee
+  // is loaded from site.helper at runtime. The demoted callee takes three
+  // arguments rather than five; under AAPCS64 the extra argument registers
+  // are simply ignored, exactly as for the ByVal sites'.
+  using _FnT = SHLegacyValue (*)(
+      SHRuntime *, SHLegacyValue *, uint32_t, SHJitVersionData *, uint32_t);
+  _FnT _fn = _jit_get_by_index;
+  (void)_fn;
+  // WithSavedIP, not the plain indirect call: the fallback resolves the
+  // property, which may run a getter and may throw.
+  callRuntimeWithSavedIPIndirect(
+      (uint64_t)&site.helper, "_jit_get_by_index [indirect]");
+
   movHWFromHW<false>(hwRes, HWReg::gpX(0));
   frUpdatedWithHW(frRes, hwRes);
+
+  a.bind(contLab);
+}
+
+void Emitter::getByIndex(FR frRes, FR frSource, uint32_t key) {
+  getByIndexImpl(frRes, frSource, key);
 }
 
 #if HERMES_JIT_INLINE_SAFE_STORE
