@@ -104,6 +104,14 @@ inline int32_t doBitXor(int32_t x, int32_t y) {
   return x ^ y;
 }
 
+/// \return Math.imul(x, y): the 32-bit integer product of x and y, computed
+/// by multiplying the operands as unsigned 32-bit values (to avoid signed
+/// overflow UB) and reinterpreting the result as signed.
+inline int32_t doImul(int32_t x, int32_t y) {
+  uint32_t product = static_cast<uint32_t>(x) * static_cast<uint32_t>(y);
+  return static_cast<int32_t>(product);
+}
+
 inline int32_t doLShift(uint32_t x, uint32_t y) {
   return x << y;
 }
@@ -154,6 +162,14 @@ ExecutionStatus doBitNotSlowPath_RJS(
     const Inst *ip);
 
 ExecutionStatus doNegateSlowPath_RJS(
+    Runtime &runtime,
+    PinnedHermesValue *frameRegs,
+    const Inst *ip);
+
+/// Slow path for Imul: converts both operands with ToInt32 (raising a
+/// TypeError if either is a BigInt, since Math.imul is not BigInt-aware)
+/// and multiplies them with doImul.
+ExecutionStatus doImulSlowPath_RJS(
     Runtime &runtime,
     PinnedHermesValue *frameRegs,
     const Inst *ip);

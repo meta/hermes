@@ -1399,6 +1399,26 @@ ExecutionStatus doNegateSlowPath_RJS(
   return ExecutionStatus::RETURNED;
 }
 
+ExecutionStatus doImulSlowPath_RJS(
+    Runtime &runtime,
+    PinnedHermesValue *frameRegs,
+    const Inst *ip) {
+  // Math.imul(a, b) always converts both operands with ToInt32 (which
+  // raises a TypeError for a BigInt operand) and never falls back to a
+  // BigInt result, unlike the other bitwise binops. So, unlike
+  // doBitOperSlowPath_RJS, there is no BigInt path here.
+  auto leftRes = toInt32_RJS(runtime, Handle<>(&O2REG(Imul)));
+  if (LLVM_UNLIKELY(leftRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  int32_t left = leftRes->getNumberAs<int32_t>();
+  auto rightRes = toInt32_RJS(runtime, Handle<>(&O3REG(Imul)));
+  if (LLVM_UNLIKELY(rightRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  int32_t right = rightRes->getNumberAs<int32_t>();
+  O1REG(Imul) = HermesValue::encodeTrustedNumberValue(doImul(left, right));
+  return ExecutionStatus::RETURNED;
+}
+
 ExecutionStatus doCallRequireSlowPath_RJS(
     Runtime &runtime,
     PinnedHermesValue *frameRegs,

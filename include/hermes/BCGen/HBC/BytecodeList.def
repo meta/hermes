@@ -251,6 +251,9 @@ DEFINE_OPCODE_3(BitAnd, Reg8, Reg8, Reg8)
 /// Arg1 = Arg2 ^ Arg3 (JS bitwise XOR)
 DEFINE_OPCODE_3(BitXor, Reg8, Reg8, Reg8)
 
+/// Arg1 = Math.imul(Arg2, Arg3) (32-bit integer multiplication)
+DEFINE_OPCODE_3(Imul, Reg8, Reg8, Reg8)
+
 /// Arg1 = Arg2 | Arg3 (JS bitwise OR)
 DEFINE_OPCODE_3(BitOr, Reg8, Reg8, Reg8)
 

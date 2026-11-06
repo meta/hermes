@@ -3230,6 +3230,30 @@ tailCall:
       BITWISEBINOP(BitAnd);
       BITWISEBINOP(BitOr);
       BITWISEBINOP(BitXor);
+      CASE(Imul) {
+        // Math.imul is not BigInt-aware: unlike the other bitwise binops,
+        // it always converts both operands with ToInt32 and throws on a
+        // BigInt operand instead of producing a BigInt result. So it cannot
+        // use BITWISEBINOP/doBitOperSlowPath_RJS, which are BigInt-aware.
+        int32_t lhsInt, rhsInt;
+        if (LLVM_LIKELY(
+                _sh_ljs_tryfast_truncate_to_int32(O2REG(Imul), &lhsInt) &&
+                _sh_ljs_tryfast_truncate_to_int32(O3REG(Imul), &rhsInt))) {
+          /* Fast-path. */
+          O1REG(Imul) =
+              HermesValue::encodeTrustedNumberValue(doImul(lhsInt, rhsInt));
+          ip = NEXTINST(Imul);
+          DISPATCH;
+        }
+        CAPTURE_IP_ASSIGN(
+            ExecutionStatus status, doImulSlowPath_RJS(runtime, frameRegs, ip));
+        if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
+          goto exception;
+        }
+        gcScope.flushToSmallCount(KEEP_HANDLES);
+        ip = NEXTINST(Imul);
+        DISPATCH;
+      }
       SHIFTOP(LShift);
       SHIFTOP(RShift);
       SHIFTOP(URshift);

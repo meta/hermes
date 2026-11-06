@@ -3066,6 +3066,14 @@ inline int32_t doBitXor(int32_t x, int32_t y) {
   return x ^ y;
 }
 
+/// \return Math.imul(x, y): the 32-bit integer product of x and y, computed
+/// by multiplying the operands as unsigned 32-bit values (to avoid signed
+/// overflow UB) and reinterpreting the result as signed.
+inline int32_t doImul(int32_t x, int32_t y) {
+  uint32_t product = static_cast<uint32_t>(x) * static_cast<uint32_t>(y);
+  return static_cast<int32_t>(product);
+}
+
 inline int32_t doLShift(uint32_t x, uint32_t y) {
   return x << y;
 }
@@ -3314,6 +3322,40 @@ extern "C" SHLegacyValue _sh_ljs_bit_xor_rjs(
     const SHLegacyValue *a,
     const SHLegacyValue *b) {
   return bitOperImpl<doBitXor, BigIntPrimitive::bitwiseXOR>(shr, a, b);
+}
+
+LLVM_ATTRIBUTE_NOINLINE
+extern "C" SHLegacyValue _sh_ljs_imul_rjs(
+    SHRuntime *shr,
+    const SHLegacyValue *a,
+    const SHLegacyValue *b) {
+  Handle<> lhs{toPHV(a)}, rhs{toPHV(b)};
+  // Fast path, both arguments are numbers.
+  if (LLVM_LIKELY(_sh_ljs_are_both_non_nan_numbers(*a, *b)))
+    return HermesValue::encodeTrustedNumberValue(doImul(
+        hermes::truncateToInt32(lhs->getNumber()),
+        hermes::truncateToInt32(rhs->getNumber())));
+
+  // Math.imul(a, b) always converts both operands with ToInt32 (which
+  // raises a TypeError for a BigInt operand) and never falls back to a
+  // BigInt result, unlike the other bitwise binops. So, unlike
+  // bitOperImpl, there is no BigInt path here.
+  auto res = [&]() -> CallResult<HermesValue> {
+    Runtime &runtime = getRuntime(shr);
+    GCScopeMarkerRAII marker{runtime};
+    auto lIntRes = toInt32_RJS(runtime, lhs);
+    if (LLVM_UNLIKELY(lIntRes == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    int32_t lnum = lIntRes->getNumberAs<int32_t>();
+    auto rIntRes = toInt32_RJS(runtime, rhs);
+    if (LLVM_UNLIKELY(rIntRes == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    int32_t rnum = rIntRes->getNumberAs<int32_t>();
+    return HermesValue::encodeTrustedNumberValue(doImul(lnum, rnum));
+  }();
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
+    _sh_throw_current(shr);
+  return *res;
 }
 
 LLVM_ATTRIBUTE_NOINLINE

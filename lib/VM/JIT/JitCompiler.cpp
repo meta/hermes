@@ -620,6 +620,7 @@ JITCompiledFunctionPtr JITContext::Compiler::compileCodeBlockImpl() {
   }
 
 EMIT_UNIMPLEMENTED(AsyncBreakCheck)
+EMIT_UNIMPLEMENTED(Imul)
 
 #undef EMIT_UNIMPLEMENTED
 

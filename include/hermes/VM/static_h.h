@@ -1274,6 +1274,28 @@ static inline SHLegacyValue _sh_ljs_bit_xor_rjs_inline(
   }
   return _sh_ljs_bit_xor_rjs(shr, a, b);
 }
+/// Math.imul(a, b): unlike the other bitwise binops above, it is not
+/// BigInt-aware -- it always converts both operands with ToInt32 (which
+/// throws a TypeError for a BigInt operand) and never falls back to a
+/// BigInt result.
+SHERMES_EXPORT SHLegacyValue _sh_ljs_imul_rjs(
+    SHRuntime *shr,
+    const SHLegacyValue *a,
+    const SHLegacyValue *b);
+static inline SHLegacyValue _sh_ljs_imul_rjs_inline(
+    SHRuntime *shr,
+    const SHLegacyValue *a,
+    const SHLegacyValue *b) {
+  int32_t aInt, bInt;
+  if (SH_LIKELY(
+          _sh_ljs_tryfast_truncate_to_int32(*a, &aInt) &&
+          _sh_ljs_tryfast_truncate_to_int32(*b, &bInt))) {
+    // Multiply as unsigned 32-bit values (to avoid signed overflow UB) and
+    // reinterpret the result as signed.
+    return _sh_ljs_double((double)(int32_t)((uint32_t)aInt * (uint32_t)bInt));
+  }
+  return _sh_ljs_imul_rjs(shr, a, b);
+}
 SHERMES_EXPORT SHLegacyValue _sh_ljs_right_shift_rjs(
     SHRuntime *shr,
     const SHLegacyValue *a,
