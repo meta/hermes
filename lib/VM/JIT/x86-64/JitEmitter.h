@@ -702,14 +702,22 @@ class Emitter {
             x86body);                                                    \
   }
 
+  // The 32-bit forms drop the REX.W prefix whenever both temps land in the
+  // legacy register file (rax/rcx/rdx/rsi/rdi), which the GP temp pool
+  // (kGPTemp1/kGPTemp2) makes the common case: 5 of its 8 registers are
+  // legacy, and lowest-first allocation with only two temps live picks them
+  // first. This matches lShift/rShift/urShift/imul below, which already use
+  // the 32-bit forms; emit_int32_to_double's signed path already only reads
+  // the low 32 bits, and its unsigned path re-zero-extends explicitly, so
+  // both are indifferent to what the write left in the upper 32 bits.
   DECL_BIT_BINOP(bitAnd, false, false, "bit_and", _sh_ljs_bit_and_rjs, {
-    a.and_(res, right);
+    a.and_(res.r32(), right.r32());
   })
   DECL_BIT_BINOP(bitOr, false, false, "bit_or", _sh_ljs_bit_or_rjs, {
-    a.or_(res, right);
+    a.or_(res.r32(), right.r32());
   })
   DECL_BIT_BINOP(bitXor, false, false, "bit_xor", _sh_ljs_bit_xor_rjs, {
-    a.xor_(res, right);
+    a.xor_(res.r32(), right.r32());
   })
   DECL_BIT_BINOP(lShift, false, true, "lshift", _sh_ljs_left_shift_rjs, {
     assert(right.id() == x86::rcx.id() && "shift count must be in cl");
