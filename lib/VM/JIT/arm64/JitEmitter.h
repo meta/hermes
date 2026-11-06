@@ -641,6 +641,9 @@ class Emitter {
   DECL_BIT_BINOP(urShift, true, "rshiftu", _sh_ljs_unsigned_right_shift_rjs, {
     a.lsr(res.w(), dl.w(), dr.w());
   })
+  DECL_BIT_BINOP(imul, false, "imul", _sh_ljs_imul_rjs, {
+    a.mul(res.w(), dl.w(), dr.w());
+  })
 
 #undef DECL_BIT_BINOP
 

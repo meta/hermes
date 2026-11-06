@@ -894,6 +894,21 @@ DECL_* macro tables in JitEmitter.h) with per-op fast-path callbacks:
   low 32 bits (which is exactly ToInt32 for exact ints; shifts use the
   hardware modulo-32 semantics matching the spec's `& 31`), and re-encode
   via `scvtf`/`ucvtf` (unsigned only for `>>>`).
+- `Math.imul` compiles to a dedicated `Imul` bytecode instruction (lowered
+  from `CallBuiltin(Math.imul)` by the compiler, not emitted by IRGen) and
+  joins the `bitBinOp` tables on both backends (`DECL_BIT_BINOP` in
+  JitEmitter.h on x86-64, the arm64 equivalent), reusing each backend's
+  existing int32-proof machinery unchanged: `imul r32, r32` on x86-64,
+  `mul w, w, w` on arm64, both on the low 32 bits the guard already proves
+  is ToInt32. The two backends' int32 proofs accept different ranges
+  beyond exact int32 (x86-64 round-trips through `cvttsd2si`, arm64 through
+  `fcvtzs` + the 63-bit sign-extension trick), but that asymmetry does not
+  matter here: the multiply only consumes the low 32 bits of each operand,
+  which is ToInt32 under either guard, and the shared slow path (BigInt,
+  Symbol, non-numeric operands) falls back to `_sh_ljs_imul_rjs`. This
+  replaces a `CallBuiltin` -- frame construction, builtin-table dispatch,
+  and argument marshalling -- with one multiply instruction on both
+  backends, and in the interpreter and shermes as well.
 - `strictEqualImpl` is a three-tier pipeline: raw 64-bit compare when a side
   is statically Bool/OtherNonPtr; `fcmp` alone when a side is statically
   Number; otherwise `fcmp`, and on unordered a tag-dispatch chain (double

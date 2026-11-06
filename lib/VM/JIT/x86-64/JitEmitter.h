@@ -732,6 +732,9 @@ class Emitter {
         (void)right;
         a.shr(res.r32(), x86::cl);
       })
+  DECL_BIT_BINOP(imul, false, false, "imul", _sh_ljs_imul_rjs, {
+    a.imul(res.r32(), right.r32());
+  })
 #undef DECL_BIT_BINOP
 
   // x86-64: the fast body receives the Emitter rather than the assembler,
