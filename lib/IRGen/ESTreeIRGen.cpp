@@ -311,6 +311,13 @@ void ESTreeIRGen::doCJSModule(
   assert(Root && "no root in ESTreeIRGen");
   auto *func = cast<ESTree::FunctionExpressionNode>(Root);
 
+  // Create a top level FunctionContext that will never be executed, because
+  // genBasicFunction reads state from the current function context (e.g. the
+  // class contexts captured when enqueueing the compilation of the module
+  // function).
+  FunctionContext topLevelFunctionContext{
+      this, Mod->getTopLevelFunction(), nullptr};
+
   // Take care of the additions to the global scope that this module could
   // have done. A module can only add ambient global properties. Look for new
   // ones (customData == nullptr) and declare them.
