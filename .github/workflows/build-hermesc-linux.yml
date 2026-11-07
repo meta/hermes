@@ -4,7 +4,18 @@ on: workflow_call
 
 jobs:
   build-hermesc-linux:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            cmake-arch: x86_64
+            binary-dir: linux64-bin
+            artifact: hermes-linux-bin
+          - runner: ubuntu-24.04-arm
+            cmake-arch: aarch64
+            binary-dir: linuxarm64-bin
+            artifact: hermes-linux-arm64-bin
+    runs-on: ${{ matrix.runner }}
     env:
       HERMES_TARBALL_ARTIFACTS_DIR: /tmp/hermes/hermes-runtime-darwin
     steps:
@@ -18,7 +29,7 @@ jobs:
               libreadline-dev libicu-dev jq zip python3
 
           sudo mkdir -p /usr/local/cmake
-          sudo wget -qO- https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz \
+          sudo wget -qO- https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-${{ matrix.cmake-arch }}.tar.gz \
           | sudo tar --strip-components=1 -xz -C /usr/local/cmake
           sudo cp /usr/local/cmake/bin/* /usr/local/bin/
           export PATH=/usr/local/bin:$PATH
@@ -27,7 +38,7 @@ jobs:
       - name: Set up workspace
         shell: bash
         run: |
-          mkdir -p /tmp/hermes/linux64-bin
+          mkdir -p /tmp/hermes/${{ matrix.binary-dir }}
       - name: Build HermesC for Linux
         shell: bash
         run: |
@@ -35,9 +46,16 @@ jobs:
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=True -DCMAKE_CXX_FLAGS=-s -DCMAKE_C_FLAGS=-s \
             -DCMAKE_EXE_LINKER_FLAGS="-Wl,--whole-archive -lpthread -Wl,--no-whole-archive"
           cmake --build build --target hermesc -j 4
-          cp build/bin/hermesc /tmp/hermes/linux64-bin/.
+          cp build/bin/hermesc /tmp/hermes/${{ matrix.binary-dir }}/.
+          test "$(uname -m)" = '${{ matrix.cmake-arch }}'
+          /tmp/hermes/${{ matrix.binary-dir }}/hermesc --version
+          printf 'print(1);\n' > /tmp/hermes/smoke.js
+          /tmp/hermes/${{ matrix.binary-dir }}/hermesc -emit-binary \
+            -out /tmp/hermes/smoke.hbc /tmp/hermes/smoke.js
+          test -s /tmp/hermes/smoke.hbc
       - name: Upload linux artifacts
         uses: actions/upload-artifact@v4.3.4
         with:
-          name: hermes-linux-bin
-          path: /tmp/hermes/linux64-bin
+          name: ${{ matrix.artifact }}
+          path: /tmp/hermes/${{ matrix.binary-dir }}
+          if-no-files-found: error

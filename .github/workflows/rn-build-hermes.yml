@@ -151,6 +151,11 @@ jobs:
         with:
           name: hermes-linux-bin
           path: /tmp/hermes/linux64-bin
+      - name: Download linux-arm64-bin artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: hermes-linux-arm64-bin
+          path: /tmp/hermes/linuxarm64-bin
       - name: Download windows-bin artifacts
         uses: actions/download-artifact@v4
         with:
@@ -167,6 +172,22 @@ jobs:
         shell: bash
         run: |
           node ./utils/scripts/hermes/prepare-artifacts.js
+      - name: Verify Linux compilers are included in the npm package
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const {execFileSync} = require('node:child_process');
+          const [packed] = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], {
+            cwd: 'npm/hermes-compiler',
+          }));
+          const files = new Set(packed.files.map(file => file.path));
+          for (const binary of [
+            'hermesc/linux64-bin/hermesc',
+            'hermesc/linuxarm64-bin/hermesc',
+          ]) {
+            if (!files.has(binary)) throw new Error(`Missing from npm package: ${binary}`);
+          }
+          NODE
       - name: Print Artifacts Directory
         shell: bash
         run: ls -lR ./android/ios-artifacts/artifacts/

@@ -22,6 +22,7 @@ function copyHermesBinaries() {
   // Create directories for npm/hermes-compiler/hermesc binaries
   mkdir('-p', './npm/hermes-compiler/hermesc/osx-bin');
   mkdir('-p', './npm/hermes-compiler/hermesc/linux64-bin');
+  mkdir('-p', './npm/hermes-compiler/hermesc/linuxarm64-bin');
   mkdir('-p', './npm/hermes-compiler/hermesc/win64-bin');
 
   const osxBinDir = path.join(HERMES_WS_DIR, 'osx-bin');
@@ -81,6 +82,16 @@ function copyHermesBinaries() {
     '-r',
     path.join(HERMES_WS_DIR, 'linux64-bin/*'),
     './npm/hermes-compiler/hermesc/linux64-bin/.',
+  );
+  echo('Copying Linux ARM64 binary...');
+  const linuxArm64Hermesc = path.join(HERMES_WS_DIR, 'linuxarm64-bin', 'hermesc');
+  if (!test('-f', linuxArm64Hermesc)) {
+    echo('Could not locate Linux ARM64 hermesc binary.');
+    exit(1);
+  }
+  cp(
+    linuxArm64Hermesc,
+    './npm/hermes-compiler/hermesc/linuxarm64-bin/.',
   );
 
   echo('Making hermesc files executable...');
