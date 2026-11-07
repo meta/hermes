@@ -1426,6 +1426,43 @@ TEST_P(HermesRuntimeTest, ExternalMemoryTest) {
   waitForFinalized(2 * kNumIter);
 }
 
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
+TEST_P(HermesRuntimeTest, ExternalMemoryReleasedBeforeCollectionTest) {
+  // HermesSandboxRuntime uses the default JSI instrumentation, which reports no
+  // heap information, so the collections cannot be counted.
+  if (dynamic_cast<HermesSandboxRuntime *>(rt.get()))
+    return;
+
+  auto youngCollections = [&] {
+    return rt->instrumentation().getHeapInfo(false).at(
+        "hermes_yg_numCollections");
+  };
+
+  // Start from an empty YG, so the allocations counted below fit in it however
+  // much room the runtime's creation left.
+  rt->instrumentation().collectGarbage("test");
+
+  // The first pressure set on a fresh object may lazily allocate the property
+  // maps of the hidden classes it passes through, so set and clear one up
+  // front to keep that out of the collections counted below.
+  {
+    Object warmUp{*rt};
+    warmUp.setExternalMemoryPressure(*rt, 1);
+    warmUp.setExternalMemoryPressure(*rt, 0);
+  }
+
+  // Each object's external memory is more than the YG holds, and is released
+  // before the next object is made, so nothing needs collecting.
+  const auto before = youngCollections();
+  for (int i = 0; i < 16; ++i) {
+    Object o{*rt};
+    o.setExternalMemoryPressure(*rt, 16 * 1024 * 1024);
+    o.setExternalMemoryPressure(*rt, 0);
+  }
+  EXPECT_EQ(youngCollections(), before);
+}
+#endif
+
 TEST_P(HermesRuntimeTest, ExternalMemoryNoOpTest) {
   // HermesSandboxRuntime uses the default JSI instrumentation, which reports no
   // heap information, so the external memory cannot be measured.

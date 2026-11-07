@@ -1374,8 +1374,9 @@ class HadesGC final : public GCBase {
   /// cause a race condition and a deadlock.
   void checkTripwireAndSubmitStats();
 
-  /// Transfer any external memory charges from YG to OG. Used as part of YG
-  /// collection.
+  /// Credit the YG's external memory to the OG and reset the YG's effective
+  /// end, which drops its external memory charge. Used by YG collections and
+  /// by finalizeAll.
   void transferExternalMemoryToOldGen();
 
   /// Update the scaling factor for the size of the young gen to meet our pause
