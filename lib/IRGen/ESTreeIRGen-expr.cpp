@@ -591,6 +591,19 @@ Value *ESTreeIRGen::genCallExpr(ESTree::CallExpressionNode *call) {
     if (curFunction()->hasLegacyClassContext()) {
       return genLegacyDirectSuper(call);
     }
+    if (!curFunction()->superClassNode_) {
+      // This is a typed class, where super() is only supported as the first
+      // statement of the derived constructor itself; genClassDeclaration
+      // rejects a constructor which doesn't start with one. SemanticResolver
+      // has already verified that we are lexically inside a derived
+      // constructor, so the only way to get here is a super() nested in an
+      // arrow function, which has its own FunctionContext and therefore no
+      // superclass, 'this' or new.target of the constructor.
+      Mod->getContext().getSourceErrorManager().error(
+          call->getSourceRange(),
+          "super() is only supported as the first statement of a derived class constructor");
+      return Builder.getLiteralUndefined();
+    }
     if (curFunction()->calledSuperConstructor_) {
       // Found another super() call than the one that actually initializes the
       // base class.
@@ -602,9 +615,6 @@ Value *ESTreeIRGen::genCallExpr(ESTree::CallExpressionNode *call) {
     // Check for a super() call.
     // Call with the passed-in 'this'.
     thisVal = curFunction()->jsParams[0];
-    assert(
-        curFunction()->superClassNode_ &&
-        "SemanticResolver must check super() is in a class with a superclass");
     callee = genExpression(curFunction()->superClassNode_);
     newTarget = Builder.createGetNewTargetInst(
         curFunction()->function->getNewTargetParam());
