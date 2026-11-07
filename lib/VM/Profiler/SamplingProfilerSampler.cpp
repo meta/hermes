@@ -64,15 +64,22 @@ void Sampler::unregisterRuntime(SamplingProfiler *profiler) {
 bool Sampler::sampleStacks() {
   for (SamplingProfiler *localProfiler : profilers_) {
     std::lock_guard<std::mutex> lk(localProfiler->runtimeDataLock_);
-    if (!sampleStack(localProfiler)) {
-      return false;
+    switch (sampleStack(localProfiler)) {
+      case SampleResult::Success:
+        platformPostSampleStack(localProfiler);
+        break;
+      case SampleResult::ThreadExited:
+        // The registered thread is gone; skip this profiler but keep
+        // sampling the others.
+        continue;
+      case SampleResult::Failed:
+        return false;
     }
-    platformPostSampleStack(localProfiler);
   }
   return true;
 }
 
-bool Sampler::sampleStack(SamplingProfiler *localProfiler) {
+SampleResult Sampler::sampleStack(SamplingProfiler *localProfiler) {
   if (localProfiler->suspendCount_ > 0) {
     // Sampling profiler is suspended. Copy pre-captured stack instead without
     // interrupting the VM thread.
@@ -97,8 +104,12 @@ bool Sampler::sampleStack(SamplingProfiler *localProfiler) {
         localProfiler->nativeFunctions_.capacity();
     (void)nativeFunctionsCapacityBefore;
 
-    if (!platformSuspendVMAndWalkStack(localProfiler)) {
-      return false;
+    SampleResult result = platformSuspendVMAndWalkStack(localProfiler);
+    if (result != SampleResult::Success) {
+      // Either the registered thread has exited (skip this profiler) or an
+      // unrecoverable error occurred (stop the loop). Nothing was walked, so
+      // there is no sample to record; propagate the outcome to the caller.
+      return result;
     }
 
     // The stack trace was truncated due to insufficient pre-allocated size in
@@ -125,7 +136,7 @@ bool Sampler::sampleStack(SamplingProfiler *localProfiler) {
 
   sampleStorage_.stack.clear();
   numSkippedFrames_ = 0;
-  return true;
+  return SampleResult::Success;
 }
 
 void Sampler::walkRuntimeStack(
