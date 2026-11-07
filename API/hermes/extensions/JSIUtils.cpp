@@ -18,14 +18,14 @@ TypedArrayBufferInfo getTypedArrayBuffer(
     const char *errorMessage,
     const char *detachedErrorMessage) {
   if (!val.isObject()) {
-    throw jsi::JSError(rt, errorMessage);
+    throwTypeError(rt, errorMessage);
   }
   jsi::Object obj = val.asObject(rt);
 
   // Get the underlying ArrayBuffer via the 'buffer' property
   jsi::Value bufferVal = obj.getProperty(rt, "buffer");
   if (!bufferVal.isObject() || !bufferVal.asObject(rt).isArrayBuffer(rt)) {
-    throw jsi::JSError(rt, errorMessage);
+    throwTypeError(rt, errorMessage);
   }
   jsi::ArrayBuffer arrayBuffer = bufferVal.asObject(rt).getArrayBuffer(rt);
 
@@ -35,7 +35,7 @@ TypedArrayBufferInfo getTypedArrayBuffer(
   llvh::Optional<size_t> byteLength =
       valueToUnsigned<size_t>(obj.getProperty(rt, "byteLength"));
   if (!byteOffset || !byteLength) {
-    throw jsi::JSError(rt, errorMessage);
+    throwTypeError(rt, errorMessage);
   }
 
   // Get raw pointer. data(rt) throws JSINativeException if the buffer is
@@ -51,7 +51,7 @@ TypedArrayBufferInfo getTypedArrayBuffer(
   // be validated.
   size_t bufferSize = arrayBuffer.size(rt);
   if (*byteOffset > bufferSize || *byteLength > bufferSize - *byteOffset) {
-    throw jsi::JSError(rt, errorMessage);
+    throwTypeError(rt, errorMessage);
   }
 
   return TypedArrayBufferInfo(

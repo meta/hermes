@@ -177,3 +177,26 @@ try {
   print(e.name, e.message);
   // CHECK-NEXT: TypeError TextEncoder.prototype.encodeInto called on a detached ArrayBuffer
 }
+
+// WebIDL reports a bad receiver, a bad destination and a missing argument as a
+// TypeError, like the detached case above.
+function nameOfThrow(f) {
+  try {
+    f();
+    return 'no throw';
+  } catch (e) {
+    return e.name;
+  }
+}
+print(nameOfThrow(function () { TextEncoder.prototype.encode.call({}, 'a'); }));
+// CHECK-NEXT: TypeError
+print(nameOfThrow(function () {
+  TextEncoder.prototype.encodeInto.call({}, 'a', new Uint8Array(4));
+}));
+// CHECK-NEXT: TypeError
+print(nameOfThrow(function () { encoder.encodeInto('a', {}); }));
+// CHECK-NEXT: TypeError
+print(nameOfThrow(function () { encoder.encodeInto('a', 123); }));
+// CHECK-NEXT: TypeError
+print(nameOfThrow(function () { encoder.encodeInto('a'); }));
+// CHECK-NEXT: TypeError
