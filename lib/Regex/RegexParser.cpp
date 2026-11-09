@@ -930,6 +930,10 @@ class Parser {
         }
         CharT ec = *current_;
         switch (ec) {
+          case 'c':
+            return ClassAtom(
+                tryConsumeControlEscape(true /* inClass */).getValueOr('\\'));
+
             /// ES6 21.2.2.12 CharacterClassEscape.
             /// Note this is used inside brackets only, like /[\d]/.
           case 'd':
@@ -1096,13 +1100,15 @@ class Parser {
   /// Given that we have consumed a backslash and there is a following
   /// character, consume the next character as a CharacterEscape. \return the
   /// escaped character. Note this cannot fail as IdentityEscape is a fallback
-  /// (e.g. /\q/ is the same as /q/).
+  /// (e.g. /\q/ is the same as /q/). The caller must handle \c, whose meaning
+  /// depends on context (see tryConsumeControlEscape).
   CodePoint consumeCharacterEscape() {
     if (current_ == end_) {
       setError(constants::ErrorType::EscapeIncomplete);
       return 0;
     }
     const CharT c = *current_;
+    assert(c != 'c' && "\\c must be handled by tryConsumeControlEscape");
     switch (c) {
       case 'f':
         consume('f');
@@ -1119,18 +1125,6 @@ class Parser {
       case 'v':
         consume('v');
         return 0xB;
-
-      case 'c': {
-        consume('c');
-        auto isControlLetter = [](CharT c) {
-          return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z');
-        };
-        if (auto cc = consumeCharIf(isControlLetter)) {
-          return *cc % 32;
-        } else {
-          return identityEscape('c');
-        }
-      }
 
       case '0': {
         // CharacterEscape :: "0 [lookahead != DecimalDigit]"
@@ -1192,6 +1186,32 @@ class Parser {
     }
     // TODO: disallow "UnicodeIDContinue".
     return c;
+  }
+
+  /// CharacterEscape :: c AsciiLetter, with the Annex B extensions that apply
+  /// without Unicode. Here the backslash has been consumed and the cursor is
+  /// on the 'c'. If \p inClass, a decimal digit or '_' following the 'c' also
+  /// forms a control character (Annex B ClassEscape :: c ClassControlLetter).
+  /// \return the control character, or None if the backslash is a literal
+  /// (Annex B ExtendedAtom and ClassAtomNoDash :: \ [lookahead = c]). The 'c'
+  /// is not consumed in that case, so it is parsed as the next atom.
+  Optional<CodePoint> tryConsumeControlEscape(bool inClass) {
+    assert(check('c') && "Cursor must be on the 'c' of a control escape");
+    const bool unicode = curFlags_.unicode;
+    auto isControlLetter = [inClass, unicode](CharT c) {
+      return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
+          (inClass && !unicode && (('0' <= c && c <= '9') || c == '_'));
+    };
+    auto next = std::next(current_);
+    if (next != end_ && isControlLetter(*next)) {
+      consume('c');
+      return consume(*next) % 32;
+    }
+    if (unicode) {
+      // Annex B does not apply, so \c must begin a valid control escape.
+      setError(constants::ErrorType::EscapeInvalid);
+    }
+    return llvh::None;
   }
 
   /// ES6 21.2.2.10 RegExpUnicodeEscapeSequence
@@ -1408,6 +1428,12 @@ class Parser {
         }
         break;
       }
+
+      case 'c':
+        re_->pushChar(
+            tryConsumeControlEscape(false /* inClass */).getValueOr('\\'),
+            curFlags_.ignoreCase);
+        break;
 
       case 'k': {
         if (curFlags_.unicode || hasNamedGroups_) {

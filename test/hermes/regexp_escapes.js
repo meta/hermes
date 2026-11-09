@@ -255,3 +255,49 @@ printCharCodesMatching(/[\09]/);
 // CHECK-NEXT: /[\07]/: 7
 // CHECK-NEXT: /[\08]/: 0,56
 // CHECK-NEXT: /[\09]/: 0,57
+
+// Without the u flag, \c that does not begin a control escape is a literal
+// backslash followed by c, except that inside a class a digit or _ after \c
+// forms a control character.
+printCharCodesMatching(/\cJ/);
+printCharCodesMatching(/\c/);
+printCharCodesMatching(/\c*/);
+printCharCodesMatching(/[\cj]/);
+printCharCodesMatching(/[\c]/);
+printCharCodesMatching(/[\c1]/);
+printCharCodesMatching(/[\c_]/);
+printCharCodesMatching(/[\c:]/);
+printCharCodesMatching(/[\c1-\c3]/);
+printCharCodesMatching(/[\c-e]/);
+// CHECK-NEXT: /\cJ/: 10
+// CHECK-NEXT: /\c/: 92,99
+// CHECK-NEXT: /\c*/: 92
+// CHECK-NEXT: /[\cj]/: 10
+// CHECK-NEXT: /[\c]/: 92,99
+// CHECK-NEXT: /[\c1]/: 17
+// CHECK-NEXT: /[\c_]/: 31
+// CHECK-NEXT: /[\c:]/: 58,92,99
+// CHECK-NEXT: /[\c1-\c3]/: 17,18,19
+// CHECK-NEXT: /[\c-e]/: 92,99,100,101
+
+print(/^\c$/.test("\\c"), /^\c$/.test("c"), /^\c$/i.test("\\C"));
+print(/^\c1$/.test("\\c1"), /^\c1$/.test("\x11"));
+print(/^[\c1]$/.test("\x11"), /^[\c1]$/.test("1"));
+// CHECK-NEXT: true false true
+// CHECK-NEXT: true false
+// CHECK-NEXT: true false
+
+function printRegExpError(source, flags) {
+  try {
+    new RegExp(source, flags);
+    print("no error");
+  } catch (e) {
+    print(e.name);
+  }
+}
+printRegExpError("[\\c-a]", "");
+printRegExpError("\\c", "u");
+printRegExpError("[\\c1]", "u");
+// CHECK-NEXT: SyntaxError
+// CHECK-NEXT: SyntaxError
+// CHECK-NEXT: SyntaxError
