@@ -197,9 +197,6 @@ agent-perf/tools/perf_proxies.sh ./shermes-optimized benchmarks/octane/ --json
 Create a diff with benchmark results as the test plan:
 
 ```bash
-# Format code
-arc f
-
 # Run tests
 cmake --build cmake-build-debug --target check-shermes
 
