@@ -37,6 +37,11 @@ void BytecodeModule::setFunction(
   functions_[index] = std::move(F);
 }
 
+void BytecodeModule::popUncompiledFunctions() {
+  while (!functions_.empty() && !functions_.back())
+    functions_.pop_back();
+}
+
 BytecodeFunction &BytecodeModule::getFunction(unsigned index) {
   assert(index < getNumFunctions() && "Function ID out of bound");
   assert(functions_[index] && "Invalid function");

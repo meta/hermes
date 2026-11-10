@@ -285,6 +285,9 @@ class BytecodeModule {
   void addFunction() {
     functions_.push_back(nullptr);
   }
+  /// Remove the uncompiled BytecodeFunctions at the end of the table, which
+  /// were added but not generated because bytecode generation failed.
+  void popUncompiledFunctions();
   const FunctionList &getFunctionTable() const {
     return functions_;
   }

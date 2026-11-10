@@ -644,33 +644,6 @@ bool BytecodeModuleGenerator::generateAddedFunctions(
   // Generated function with ID replacedFunctionID, installed last.
   std::unique_ptr<BytecodeFunction> replacement{};
   for (auto [F, functionID] : functionIDMap_) {
-    auto *cjsModule = M_->findCJSModule(F);
-    if (cjsModule) {
-      if (M_->getCJSModulesResolved()) {
-        addCJSModuleStatic(cjsModule->id, functionID);
-      } else {
-        addCJSModule(functionID, getStringID(cjsModule->filename.str()));
-      }
-    }
-
-    // Add entries to function source table for non-default source.
-    if (!F->isGlobalScope()) {
-      if (auto source = F->getSourceRepresentationStr()) {
-        auto it = unicodeFunctionSources_.find(*source);
-        // If the original source was mapped to a re-encoded one in
-        // unicodeFunctionSources, then use the re-encoded source to lookup the
-        // string ID. Otherwise it's ASCII and can be used directly.
-        if (it != unicodeFunctionSources_.end()) {
-          addFunctionSource(
-              functionID,
-              getStringID(
-                  llvh::StringRef{it->second.begin(), it->second.size()}));
-        } else {
-          addFunctionSource(functionID, getStringID(*source));
-        }
-      }
-    }
-
     // Under full debug info, ensure the environment IDs are all valid. Without
     // debug info, there are not environment IDs set at all.
     if (M_->getContext().getDebugInfoSetting() == DebugInfoSetting::ALL) {
@@ -720,6 +693,35 @@ bool BytecodeModuleGenerator::generateAddedFunctions(
       if (replacement)
         replacement->setFunctionIR(nullptr);
       return false;
+    }
+
+    // Add the table entries only for generated functions: after a failed lazy
+    // compilation, the IDs of the other functions are reused.
+    auto *cjsModule = M_->findCJSModule(F);
+    if (cjsModule) {
+      if (M_->getCJSModulesResolved()) {
+        addCJSModuleStatic(cjsModule->id, functionID);
+      } else {
+        addCJSModule(functionID, getStringID(cjsModule->filename.str()));
+      }
+    }
+
+    // Add entries to function source table for non-default source.
+    if (!F->isGlobalScope()) {
+      if (auto source = F->getSourceRepresentationStr()) {
+        auto it = unicodeFunctionSources_.find(*source);
+        // If the original source was mapped to a re-encoded one in
+        // unicodeFunctionSources, then use the re-encoded source to lookup the
+        // string ID. Otherwise it's ASCII and can be used directly.
+        if (it != unicodeFunctionSources_.end()) {
+          addFunctionSource(
+              functionID,
+              getStringID(
+                  llvh::StringRef{it->second.begin(), it->second.size()}));
+        } else {
+          addFunctionSource(functionID, getStringID(*source));
+        }
+      }
     }
 
     if (replacedFunctionID && functionID == *replacedFunctionID)
@@ -812,6 +814,8 @@ bool BytecodeModuleGenerator::generateLazyFunctions(
 
   lowerModuleIR(M_, options_);
 
+  [[maybe_unused]] const uint32_t numFunctionsBefore = bm_.getNumFunctions();
+
   // Add each function to BMGen so that each function has a unique ID.
   // Start by giving the real Function the ID of the lazy Function.
   // generateAddedFunctions() replaces the lazy BytecodeFunction only if all
@@ -861,6 +865,15 @@ bool BytecodeModuleGenerator::generateLazyFunctions(
           options_.optimizationEnabled));
 
   bool result = generateAddedFunctions(lazyFuncID);
+  if (!result) {
+    // Code that walks the function table expects a BytecodeFunction for every
+    // ID. The new functions are generated in ID order, so the ones that were
+    // not generated are at the end of the table.
+    bm_.popUncompiledFunctions();
+    assert(
+        bm_.getNumFunctions() >= numFunctionsBefore &&
+        "removed a function that existed before this compilation");
+  }
 
   // Any of the previous steps may have modified existing tables,
   // so make sure we update the provider and clean up even if errors occurred

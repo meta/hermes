@@ -123,7 +123,8 @@ class BytecodeModuleGenerator {
   /// After this succeeds, the lazy BytecodeFunction at \p lazyFuncID has been
   /// replaced, which cleans up its data, and the lazy children of \p lazyFunc
   /// have their IDs assigned. If it fails, the lazy BytecodeFunction stays in
-  /// place.
+  /// place, and the functions that were not generated are removed from the
+  /// BytecodeModule.
   /// \param lazyFunc a new function replacing an existing lazy function.
   /// \param lazyFuncID the existing ID of the lazy function.
   /// \return true on success, false on failure (will report errors).
