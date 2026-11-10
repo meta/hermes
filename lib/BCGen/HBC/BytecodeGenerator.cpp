@@ -632,7 +632,8 @@ static void fixupEnvironmentIDs(Function *F) {
 #endif
 }
 
-bool BytecodeModuleGenerator::generateAddedFunctions() {
+bool BytecodeModuleGenerator::generateAddedFunctions(
+    OptValue<uint32_t> replacedFunctionID) {
   BytecodeOptions &bytecodeOptions = bm_.getBytecodeOptionsMut();
   bytecodeOptions.setCjsModulesStaticallyResolved(M_->getCJSModulesResolved());
 
@@ -640,6 +641,8 @@ bool BytecodeModuleGenerator::generateAddedFunctions() {
 
   const uint32_t strippedFunctionNameId =
       options_.stripFunctionNames ? bm_.getStringID(kStrippedFunctionName) : 0;
+  // Generated function with ID replacedFunctionID, installed last.
+  std::unique_ptr<BytecodeFunction> replacement{};
   for (auto [F, functionID] : functionIDMap_) {
     auto *cjsModule = M_->findCJSModule(F);
     if (cjsModule) {
@@ -710,11 +713,23 @@ bool BytecodeModuleGenerator::generateAddedFunctions() {
             options_,
             debugIdCache_,
             debugInfoGenerator_);
-    if (!func)
+    if (!func) {
+      // Leave the IR of the replacement in the Module, as when its own
+      // generation fails: destroying the BytecodeFunction would remove the IR
+      // from the compiled function list, which does not contain it.
+      if (replacement)
+        replacement->setFunctionIR(nullptr);
       return false;
+    }
 
-    bm_.setFunction(functionID, std::move(func));
+    if (replacedFunctionID && functionID == *replacedFunctionID)
+      replacement = std::move(func);
+    else
+      bm_.setFunction(functionID, std::move(func));
   }
+
+  if (replacement)
+    bm_.setFunction(*replacedFunctionID, std::move(replacement));
 
   std::move(debugInfoGenerator_).generate();
   return true;
@@ -798,8 +813,10 @@ bool BytecodeModuleGenerator::generateLazyFunctions(
   lowerModuleIR(M_, options_);
 
   // Add each function to BMGen so that each function has a unique ID.
-  // Start by replacing the lazy Function with the real Function.
-  // NOTE: The old lazy BytecodeFunction's destructor will run,
+  // Start by giving the real Function the ID of the lazy Function.
+  // generateAddedFunctions() replaces the lazy BytecodeFunction only if all
+  // the functions are generated, because the runtime still references it.
+  // NOTE: The old lazy BytecodeFunction's destructor will then run,
   // which will remove the lazy IR Function from the Module.
   functionIDMap_.insert({lazyFunc, lazyFuncID});
 
@@ -843,7 +860,7 @@ bool BytecodeModuleGenerator::generateLazyFunctions(
           [this](llvh::StringRef str) { return getStringID(str); },
           options_.optimizationEnabled));
 
-  bool result = generateAddedFunctions();
+  bool result = generateAddedFunctions(lazyFuncID);
 
   // Any of the previous steps may have modified existing tables,
   // so make sure we update the provider and clean up even if errors occurred

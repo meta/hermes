@@ -120,8 +120,10 @@ class BytecodeModuleGenerator {
   /// All the functions generated will have \p lazyFunc as a lexical ancestor,
   /// and \p lazyFunc will be the only Function that had a bytecode function ID
   /// prior to this call.
-  /// After this is called, the data for lazyFunc will be cleaned up,
-  /// and its lazy children will have their IDs assigned.
+  /// After this succeeds, the lazy BytecodeFunction at \p lazyFuncID has been
+  /// replaced, which cleans up its data, and the lazy children of \p lazyFunc
+  /// have their IDs assigned. If it fails, the lazy BytecodeFunction stays in
+  /// place.
   /// \param lazyFunc a new function replacing an existing lazy function.
   /// \param lazyFuncID the existing ID of the lazy function.
   /// \return true on success, false on failure (will report errors).
@@ -253,8 +255,12 @@ class BytecodeModuleGenerator {
 
   /// Generate all functions added to the functionIDMap_.
   /// \pre all strings and literals have been collected.
+  /// \param replacedFunctionID the ID of an existing BytecodeFunction, which
+  ///   the function added with that ID replaces only if all the functions
+  ///   are generated.
   /// \return true on success, false otherwise.
-  bool generateAddedFunctions();
+  bool generateAddedFunctions(
+      OptValue<uint32_t> replacedFunctionID = llvh::None);
 };
 
 /// This class is used by the hermes backend.
