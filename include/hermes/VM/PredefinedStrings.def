@@ -202,6 +202,7 @@ STR(flat, "flat")
 STR(flatMap, "flatMap")
 STR(toReversed, "toReversed")
 STR(toSpliced, "toSpliced")
+STR(toSorted, "toSorted")
 STR(with, "with")
 
 STR(ArrayBuffer, "ArrayBuffer")
