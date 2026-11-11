@@ -197,6 +197,19 @@ target_link_libraries(hermesvmlean_a PUBLIC
 add_library(hermesvm SHARED dummy.cpp)
 add_library(hermesvmlean SHARED dummy.cpp)
 
+# Define the deployment target in the framework's metadata.
+function(hermes_set_framework_min_os_version target)
+  if(HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone|appletv|xr")
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:${target}>/Info.plist
+    )
+  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "catalyst|macos")
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:${target}>/Resources/Info.plist
+    )
+  endif()
+endfunction()
+
 if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
   set_target_properties(hermesvm PROPERTIES
     FRAMEWORK TRUE
@@ -207,32 +220,10 @@ if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
     MACOSX_FRAMEWORK_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_FRAMEWORK_IDENTIFIER dev.hermesengine.${HERMES_APPLE_TARGET_PLATFORM}
   )
-  # Define the deployment target in the frameworks metadata
-  if(HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone")
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Info.plist
-    )
-  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "appletv")
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Info.plist
-    )
-  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "catalyst")
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Resources/Info.plist
-    )
-  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "macos")
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Resources/Info.plist
-    )
-  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "xr")
-    if(CMAKE_VERSION VERSION_LESS 3.28.4)
-      message("VisionOS Simulator requires CMake version >= 3.28.4")
-    endif()
-
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Info.plist
-    )
+  if(HERMES_APPLE_TARGET_PLATFORM MATCHES "xr" AND CMAKE_VERSION VERSION_LESS 3.28.4)
+    message("VisionOS Simulator requires CMake version >= 3.28.4")
   endif()
+  hermes_set_framework_min_os_version(hermesvm)
 endif()
 
 # Force the entire hermesvm_a library to be used by hermesvm. There is
