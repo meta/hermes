@@ -270,6 +270,39 @@ if(HERMES_ENABLE_NAPI)
   endif()
 endif()
 
+# A library with a stable name for Node-API addons to link against, which
+# re-exports only the Node-API functions from hermesvm.
+if(APPLE AND HERMES_ENABLE_NAPI)
+  add_library(node-api SHARED dummy.cpp)
+  if(HERMES_BUILD_APPLE_FRAMEWORK)
+    set_target_properties(node-api PROPERTIES
+      FRAMEWORK TRUE
+      # Part of the install name addons record, so it can't follow the Hermes version.
+      FRAMEWORK_VERSION A
+      MACOSX_FRAMEWORK_SHORT_VERSION_STRING ${PROJECT_VERSION}
+      MACOSX_FRAMEWORK_BUNDLE_VERSION ${PROJECT_VERSION}
+      MACOSX_FRAMEWORK_IDENTIFIER dev.hermesengine.node-api.${HERMES_APPLE_TARGET_PLATFORM}
+    )
+    hermes_set_framework_min_os_version(node-api)
+  endif()
+
+  set(NODE_API_SYMBOLS_FILE ${PROJECT_SOURCE_DIR}/API/napi/node-api.symbols)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${NODE_API_SYMBOLS_FILE})
+  file(STRINGS ${NODE_API_SYMBOLS_FILE} NODE_API_SYMBOLS)
+  list(TRANSFORM NODE_API_SYMBOLS PREPEND "_")
+  list(JOIN NODE_API_SYMBOLS "\n" NODE_API_SYMBOLS)
+  set(NODE_API_REEXPORTS ${CMAKE_CURRENT_BINARY_DIR}/node-api.reexports)
+  file(CONFIGURE OUTPUT ${NODE_API_REEXPORTS} CONTENT "${NODE_API_SYMBOLS}\n")
+
+  target_link_libraries(node-api PRIVATE hermesvm)
+  target_link_options(node-api PRIVATE
+    "LINKER:-reexported_symbols_list,${NODE_API_REEXPORTS}"
+    ${HERMES_EXTRA_LINKER_FLAGS}
+  )
+  set_property(TARGET node-api APPEND PROPERTY LINK_DEPENDS ${NODE_API_REEXPORTS})
+  target_include_directories(node-api PUBLIC ${PROJECT_SOURCE_DIR}/include/hermes/napi)
+endif()
+
 # Since we use private dependencies above, we need to enumerate all the headers
 # that should be available to consumers of hermesvm. Note that we only expose
 # the headers which produce visible symbols.
