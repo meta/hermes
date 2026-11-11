@@ -1944,7 +1944,13 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::genOptionalMemberExpression(
     auto *insertionBB = Builder.getInsertionBlock();
     shortCircuitBB = Builder.createBasicBlock(Builder.getFunction());
     Builder.setInsertionBlock(shortCircuitBB);
-    values.push_back(Builder.getLiteralUndefined());
+    // A short-circuited chain evaluates to undefined (ES2026 13.3.9.1),
+    // which is not a reference, so deleting it yields true
+    // (ES2026 13.5.1.2, step 2).
+    if (op == MemberExpressionOperation::Delete)
+      values.push_back(Builder.getLiteralBool(true));
+    else
+      values.push_back(Builder.getLiteralUndefined());
     // When short circuiting, just use 'undefined' as this, because the short
     // circuit will result in an attempt to call 'undefined' that will throw
     // anyway.
@@ -1971,7 +1977,7 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::genOptionalMemberExpression(
   if (mem->_optional) {
     BasicBlock *evalRHSBB = Builder.createBasicBlock(Builder.getFunction());
 
-    // If baseValue is undefined or null, then return undefined.
+    // If baseValue is undefined or null, short-circuit the chain.
     // NOTE: We use `obj == null` to account for both null and undefined.
     Builder.createCondBranchInst(
         Builder.createBinaryOperatorInst(

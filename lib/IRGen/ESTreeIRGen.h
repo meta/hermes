@@ -1223,6 +1223,8 @@ class ESTreeIRGen {
   /// \param op the operation to perform on the property if it exists.
   ///    If Load, the result is set to the value of the property.
   ///    If Delete, the result is the result of DeletePropertyInst.
+  ///    If the chain short-circuits, the result is undefined for Load and
+  ///    true for Delete.
   /// \return both the result and the base object.
   MemberExpressionResult genOptionalMemberExpression(
       ESTree::OptionalMemberExpressionNode *mem,

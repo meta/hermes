@@ -288,7 +288,7 @@ function f9(a) {
 // CHECK-NEXT:  %5 = BinaryEqualInst (:any) %4: any, null: null
 // CHECK-NEXT:       CondBranchInst %5: any, %BB2, %BB3
 // CHECK-NEXT:%BB1:
-// CHECK-NEXT:  %7 = PhiInst (:any) undefined: undefined, %BB2, %11: any, %BB3
+// CHECK-NEXT:  %7 = PhiInst (:any) true: boolean, %BB2, %11: any, %BB3
 // CHECK-NEXT:  %8 = PhiInst (:any) undefined: undefined, %BB2, %4: any, %BB3
 // CHECK-NEXT:       ReturnInst %7: any
 // CHECK-NEXT:%BB2:

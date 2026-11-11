@@ -88,3 +88,18 @@ print(delete obj?.a);
 // CHECK-NEXT: true
 print(obj?.a?.b);
 // CHECK-NEXT: undefined
+
+// A short-circuited chain evaluates to undefined, not a reference, so
+// deleting through it returns true.
+print(delete a?.x);
+// CHECK-NEXT: true
+print(delete null?.x);
+// CHECK-NEXT: true
+print(delete a?.[foo()]);
+// CHECK-NEXT: true
+print(delete a?.b.c);
+// CHECK-NEXT: true
+print(delete a?.b().c);
+// CHECK-NEXT: true
+print(delete obj?.a?.b);
+// CHECK-NEXT: true
