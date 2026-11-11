@@ -273,14 +273,11 @@ endif()
 # A library with a stable name for Node-API addons to link against, which
 # forwards only the Node-API functions to hermesvm.
 if(HERMES_ENABLE_NAPI AND (APPLE OR HERMES_IS_ANDROID))
-  include(HermesNodeApi)
-  set(NODE_API_SYMBOLS_FILE ${PROJECT_SOURCE_DIR}/API/napi/node-api.symbols)
+  set(NODE_API_DIR ${PROJECT_SOURCE_DIR}/API/napi)
+  add_library(node-api SHARED dummy.cpp)
 
   if(APPLE)
-    set(NODE_API_REEXPORTS ${CMAKE_CURRENT_BINARY_DIR}/node-api.reexports)
-    hermes_write_node_api_reexports(${NODE_API_SYMBOLS_FILE} ${NODE_API_REEXPORTS})
-
-    add_library(node-api SHARED dummy.cpp)
+    set(NODE_API_REEXPORTS ${NODE_API_DIR}/node-api.reexports)
     if(HERMES_BUILD_APPLE_FRAMEWORK)
       set_target_properties(node-api PROPERTIES
         FRAMEWORK TRUE
@@ -297,25 +294,39 @@ if(HERMES_ENABLE_NAPI AND (APPLE OR HERMES_IS_ANDROID))
       ${HERMES_EXTRA_LINKER_FLAGS}
     )
     set_property(TARGET node-api APPEND PROPERTY LINK_DEPENDS ${NODE_API_REEXPORTS})
+    add_custom_command(TARGET node-api POST_BUILD
+      COMMAND ${Python_EXECUTABLE} ${NODE_API_DIR}/check_node_api.py apple
+        --nm ${CMAKE_NM}
+        --hermesvm $<TARGET_FILE:hermesvm>
+        --reexports ${NODE_API_REEXPORTS}
+      VERBATIM
+    )
   elseif(HERMES_IS_ANDROID)
     # bionic searches libnode-api.so before libhermesvm.so, so this defines
-    # nothing. Referencing every symbol fails the link if hermesvm lacks one.
-    set(NODE_API_REFS_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/node-api-refs.c)
-    hermes_write_node_api_refs_source(${NODE_API_SYMBOLS_FILE} ${NODE_API_REFS_SOURCE})
-    add_library(node-api SHARED ${NODE_API_REFS_SOURCE})
+    # nothing and has to keep its DT_NEEDED on hermesvm.
+    target_link_options(node-api PRIVATE "LINKER:--no-as-needed")
 
     # lld doesn't resolve symbols through libnode-api.so's DT_NEEDED, so addons
     # link against this libnode-api.so instead.
     set(HERMES_NODE_API_STUB_DIR ${CMAKE_CURRENT_BINARY_DIR}/node-api-stub CACHE PATH
       "Directory for the libnode-api.so that Node-API addons link against")
-    set(NODE_API_STUB_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/node-api-stub.c)
-    hermes_write_node_api_stub_source(${NODE_API_SYMBOLS_FILE} ${NODE_API_STUB_SOURCE})
-    add_library(node-api-stub SHARED ${NODE_API_STUB_SOURCE})
+    add_library(node-api-stub SHARED ${NODE_API_DIR}/node-api-stub.c)
     set_target_properties(node-api-stub PROPERTIES
       OUTPUT_NAME node-api
       LIBRARY_OUTPUT_DIRECTORY ${HERMES_NODE_API_STUB_DIR}/${ANDROID_ABI}
     )
     add_dependencies(node-api node-api-stub)
+    # Relinks node-api, and so reruns the check, when the stub changes.
+    set_property(TARGET node-api APPEND PROPERTY LINK_DEPENDS $<TARGET_FILE:node-api-stub>)
+    add_custom_command(TARGET node-api POST_BUILD
+      COMMAND ${Python_EXECUTABLE} ${NODE_API_DIR}/check_node_api.py android
+        --nm ${CMAKE_NM}
+        --readelf ${CMAKE_READELF}
+        --hermesvm $<TARGET_FILE:hermesvm>
+        --stub $<TARGET_FILE:node-api-stub>
+        --node-api $<TARGET_FILE:node-api>
+      VERBATIM
+    )
   endif()
 
   target_link_libraries(node-api PRIVATE hermesvm)
