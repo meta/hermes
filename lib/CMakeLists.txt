@@ -273,15 +273,12 @@ endif()
 # A library with a stable name for Node-API addons to link against, which
 # forwards only the Node-API functions to hermesvm.
 if(HERMES_ENABLE_NAPI AND (APPLE OR HERMES_IS_ANDROID))
+  include(HermesNodeApi)
   set(NODE_API_SYMBOLS_FILE ${PROJECT_SOURCE_DIR}/API/napi/node-api.symbols)
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${NODE_API_SYMBOLS_FILE})
-  file(STRINGS ${NODE_API_SYMBOLS_FILE} NODE_API_SYMBOLS)
 
   if(APPLE)
-    list(TRANSFORM NODE_API_SYMBOLS PREPEND "_" OUTPUT_VARIABLE NODE_API_REEXPORTS_LIST)
-    list(JOIN NODE_API_REEXPORTS_LIST "\n" NODE_API_REEXPORTS_LIST)
     set(NODE_API_REEXPORTS ${CMAKE_CURRENT_BINARY_DIR}/node-api.reexports)
-    file(CONFIGURE OUTPUT ${NODE_API_REEXPORTS} CONTENT "${NODE_API_REEXPORTS_LIST}\n")
+    hermes_write_node_api_reexports(${NODE_API_SYMBOLS_FILE} ${NODE_API_REEXPORTS})
 
     add_library(node-api SHARED dummy.cpp)
     if(HERMES_BUILD_APPLE_FRAMEWORK)
@@ -300,22 +297,11 @@ if(HERMES_ENABLE_NAPI AND (APPLE OR HERMES_IS_ANDROID))
       ${HERMES_EXTRA_LINKER_FLAGS}
     )
     set_property(TARGET node-api APPEND PROPERTY LINK_DEPENDS ${NODE_API_REEXPORTS})
-  else()
-    set(NODE_API_DECLS "")
-    set(NODE_API_REFS "")
-    set(NODE_API_STUBS "")
-    foreach(symbol ${NODE_API_SYMBOLS})
-      string(APPEND NODE_API_DECLS "void ${symbol}(void);\n")
-      string(APPEND NODE_API_REFS "  ${symbol},\n")
-      string(APPEND NODE_API_STUBS
-        "__attribute__((visibility(\"default\"))) void ${symbol}(void) { __builtin_trap(); }\n")
-    endforeach()
-
+  elseif(HERMES_IS_ANDROID)
     # bionic searches libnode-api.so before libhermesvm.so, so this defines
     # nothing. Referencing every symbol fails the link if hermesvm lacks one.
     set(NODE_API_REFS_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/node-api-refs.c)
-    file(CONFIGURE OUTPUT ${NODE_API_REFS_SOURCE} CONTENT
-      "${NODE_API_DECLS}\n__attribute__((used, retain)) static void (*const refs[])(void) = {\n${NODE_API_REFS}};\n")
+    hermes_write_node_api_refs_source(${NODE_API_SYMBOLS_FILE} ${NODE_API_REFS_SOURCE})
     add_library(node-api SHARED ${NODE_API_REFS_SOURCE})
 
     # lld doesn't resolve symbols through libnode-api.so's DT_NEEDED, so addons
@@ -323,7 +309,7 @@ if(HERMES_ENABLE_NAPI AND (APPLE OR HERMES_IS_ANDROID))
     set(HERMES_NODE_API_STUB_DIR ${CMAKE_CURRENT_BINARY_DIR}/node-api-stub CACHE PATH
       "Directory for the libnode-api.so that Node-API addons link against")
     set(NODE_API_STUB_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/node-api-stub.c)
-    file(CONFIGURE OUTPUT ${NODE_API_STUB_SOURCE} CONTENT "${NODE_API_STUBS}")
+    hermes_write_node_api_stub_source(${NODE_API_SYMBOLS_FILE} ${NODE_API_STUB_SOURCE})
     add_library(node-api-stub SHARED ${NODE_API_STUB_SOURCE})
     set_target_properties(node-api-stub PROPERTIES
       OUTPUT_NAME node-api
