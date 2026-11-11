@@ -201,11 +201,11 @@ add_library(hermesvmlean SHARED dummy.cpp)
 function(hermes_set_framework_min_os_version target)
   if(HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone|appletv|xr")
     add_custom_command(TARGET ${target} POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:${target}>/Info.plist
+      COMMAND plutil -replace MinimumOSVersion -string ${CMAKE_OSX_DEPLOYMENT_TARGET} $<TARGET_FILE_DIR:${target}>/Info.plist
     )
   elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "catalyst|macos")
     add_custom_command(TARGET ${target} POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:${target}>/Resources/Info.plist
+      COMMAND plutil -replace LSMinimumSystemVersion -string ${CMAKE_OSX_DEPLOYMENT_TARGET} $<TARGET_FILE_DIR:${target}>/Resources/Info.plist
     )
   endif()
 endfunction()
