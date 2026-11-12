@@ -627,9 +627,10 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4201")
   # C4530 C++ exception handler used, but unwind semantics are not enabled
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4530")
-  # Parallelize build
+  # Parallelize build. Only the C and C++ compilers take /MP: ml64, which
+  # assembles boost.context, warns A4018 on it.
   if (HERMES_MSVC_MP)
-    add_definitions( /MP )
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/MP>)
   endif()
   # MSVC does not have strict aliasing so there is no need to support it.
   # Similar to GCC/Clang above, disable strict signed integer overflow.
