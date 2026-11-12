@@ -11,7 +11,7 @@ if(IMPORT_HOST_COMPILERS)
   include(${IMPORT_HOST_COMPILERS_CMAKE})
   set(hermesc_EXE imported-hermesc)
 else()
-  set(hermesc_EXE ${HERMES_TOOLS_OUTPUT_DIR}/hermesc)
+  set(hermesc_EXE ${HERMES_TOOLS_OUTPUT_DIR}/hermesc${CMAKE_EXECUTABLE_SUFFIX})
 endif()
 
 # Concatenate all JS files into one source file for compilation.
