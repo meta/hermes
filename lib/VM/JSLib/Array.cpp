@@ -2865,19 +2865,18 @@ CallResult<HermesValue> arrayPrototypeSplice(void *, Runtime &runtime) {
       gcScope.flushToMarker(gcMarker);
     }
 
-    // Use i here to refer to (k-1) in the spec, and reindex the loop.
-    double i = len - 1;
+    // (len - actualDeleteCount + itemCount) >= 0 so k never underflow
+    uint64_t k = len;
 
     // Delete the remaining elements from the right that we didn't copy into.
-    while (i > (len - actualDeleteCount + itemCount - 1)) {
-      lv.i = HermesValue::encodeTrustedNumberValue(i);
+    while (k-- > len - actualDeleteCount + itemCount) {
+      lv.i = HermesValue::encodeTrustedNumberValue(k);
       if (LLVM_UNLIKELY(
               JSObject::deleteComputed(
                   lv.O, runtime, lv.i, PropOpFlags().plusThrowOnError()) ==
               ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      i -= 1;
       gcScope.flushToMarker(gcMarker);
     }
   } else if (itemCount > actualDeleteCount) {
