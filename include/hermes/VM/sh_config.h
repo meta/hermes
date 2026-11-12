@@ -28,9 +28,15 @@ typedef uint16_t char16_t;
 
 /// \macro SHERMES_NO_SANITIZE
 /// Disable a particular sanitizer for a function.
-#if defined(__has_attribute) && __has_attribute(no_sanitize)
+// __has_attribute(...) needs an #if of its own: MSVC lacks it, and "&&"
+// after defined(__has_attribute) skips evaluating it, not parsing it, so
+// MSVC would warn C4067.
+#ifdef __has_attribute
+#if __has_attribute(no_sanitize)
 #define SHERMES_NO_SANITIZE(KIND) __attribute__((no_sanitize(KIND)))
-#else
+#endif
+#endif
+#ifndef SHERMES_NO_SANITIZE
 #define SHERMES_NO_SANITIZE(KIND)
 #endif
 
