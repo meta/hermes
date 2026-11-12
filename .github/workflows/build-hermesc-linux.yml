@@ -4,7 +4,7 @@ on: workflow_call
 
 jobs:
   build-hermesc-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       HERMES_TARBALL_ARTIFACTS_DIR: /tmp/hermes/hermes-runtime-darwin
     steps:
@@ -16,12 +16,6 @@ jobs:
           sudo apt update
           sudo apt install -y git openssh-client build-essential \
               libreadline-dev libicu-dev jq zip python3
-
-          sudo mkdir -p /usr/local/cmake
-          sudo wget -qO- https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz \
-          | sudo tar --strip-components=1 -xz -C /usr/local/cmake
-          sudo cp /usr/local/cmake/bin/* /usr/local/bin/
-          export PATH=/usr/local/bin:$PATH
           cmake --version
 
       - name: Set up workspace
