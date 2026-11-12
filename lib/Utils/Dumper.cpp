@@ -29,6 +29,8 @@ using llvh::isa;
 
 namespace hermes::irdumper {
 
+#if !defined(NDEBUG) || !defined(HERMES_IS_MOBILE_BUILD)
+
 IRPrinter::IRPrinter(
     Context &ctx,
     bool usePersistent,
@@ -93,6 +95,8 @@ std::string IRPrinter::quoteStr(llvh::StringRef name) {
   return name.str();
 }
 
+#endif // !defined(NDEBUG) || !defined(HERMES_IS_MOBILE_BUILD)
+
 void ValueNamer::clear() {
   currentGen_ = 0;
   counter_ = 0;
@@ -150,6 +154,8 @@ llvh::raw_ostream &operator<<(
     os << "#" << n.suffix;
   return os;
 }
+
+#if !defined(NDEBUG) || !defined(HERMES_IS_MOBILE_BUILD)
 
 void IRPrinter::printTypeLabel(Value *v) {
   // Don't print the type of basic blocks or certain literals.
@@ -602,6 +608,8 @@ struct DottyPrinter : public IRVisitor<DottyPrinter, void> {
 };
 
 } // anonymous namespace
+
+#endif // !defined(NDEBUG) || !defined(HERMES_IS_MOBILE_BUILD)
 
 void viewGraph(Function *F) {
 #ifndef NDEBUG

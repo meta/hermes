@@ -19,6 +19,8 @@
 
 namespace hermes {
 
+#if !defined(NDEBUG) || !defined(HERMES_IS_MOBILE_BUILD)
+
 template <class RegisterAllocator, typename RegClass>
 struct LivenessRegAllocIRPrinter : irdumper::IRPrinter {
   RegisterAllocator &allocator;
@@ -100,6 +102,19 @@ struct LivenessRegAllocIRPrinter : irdumper::IRPrinter {
     IRPrinter::printValueLabel(I, V, opIndex);
   }
 };
+
+#else
+
+template <class RegisterAllocator, typename RegClass>
+struct LivenessRegAllocIRPrinter : irdumper::IRPrinter {
+  explicit LivenessRegAllocIRPrinter(
+      RegisterAllocator &RA,
+      llvh::raw_ostream &ost,
+      bool escape = false)
+      : IRPrinter(RA.getContext(), ost, escape) {}
+};
+
+#endif // !defined(NDEBUG) || !defined(HERMES_IS_MOBILE_BUILD)
 
 } // namespace hermes
 

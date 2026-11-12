@@ -191,6 +191,8 @@ llvh::raw_ostream &operator<<(
     llvh::raw_ostream &os,
     const VariableNamer::Name &n);
 
+#if !defined(NDEBUG) || !defined(HERMES_IS_MOBILE_BUILD)
+
 class IRPrinter : public IRVisitor<IRPrinter, void> {
  protected:
   /// Indentation level.
@@ -303,6 +305,24 @@ class IRPrinter : public IRVisitor<IRPrinter, void> {
       bool Bold = false,
       bool BG = false);
 };
+
+#else
+
+/// An IRPrinter that prints nothing.
+class IRPrinter {
+ public:
+  explicit IRPrinter(
+      Context &,
+      llvh::raw_ostream &,
+      bool /* escape */ = false,
+      bool /* labelAllInsts */ = false) {}
+
+  void visit(const Value &) {}
+  void visitFunction(const Function &) {}
+  void visitFunction(const Function &, llvh::ArrayRef<BasicBlock *>) {}
+};
+
+#endif // !defined(NDEBUG) || !defined(HERMES_IS_MOBILE_BUILD)
 
 } // namespace irdumper
 
