@@ -196,8 +196,9 @@ function build_apple_framework {
 
   pushd "$HERMES_PATH" > /dev/null || exit 1
     mkdir -p "destroot/Library/Frameworks/$1"
-    cmake --build "./build_$1" --target hermesvm -j "${NUM_CORES}"
+    cmake --build "./build_$1" --target hermesvm node-api -j "${NUM_CORES}"
     cp -R "./build_$1"/lib/hermesvm.framework* "destroot/Library/Frameworks/$1"
+    cp -R "./build_$1"/lib/node-api.framework "destroot/Library/Frameworks/$1"
     generate_dSYM "$1"
 
     # In a MacOS build, also produce the hermes and hermesc CLI tools.
@@ -217,6 +218,9 @@ function build_apple_framework {
     mkdir -p destroot/include/hermes/cdp
     cp API/hermes/cdp/*.h destroot/include/hermes/cdp
 
+    mkdir -p destroot/include/hermes/napi
+    cp include/hermes/napi/*.h destroot/include/hermes/napi
+
     mkdir -p destroot/include/jsi
     cp "$JSI_PATH"/jsi/*.h destroot/include/jsi
   popd > /dev/null || exit 1
@@ -227,6 +231,7 @@ function prepare_dest_root_for_ci {
   for platform in "${PLATFORMS[@]}"; do
     mkdir -p "destroot/Library/Frameworks/$platform"
     cp -R "./build_$platform/lib/hermesvm.framework"* "destroot/Library/Frameworks/$platform"
+    cp -R "./build_$platform/lib/node-api.framework" "destroot/Library/Frameworks/$platform"
   done
 
   cp "./build_macosx/bin/"* "destroot/bin"
@@ -241,6 +246,9 @@ function prepare_dest_root_for_ci {
   mkdir -p destroot/include/hermes/cdp
   cp API/hermes/cdp/*.h destroot/include/hermes/cdp
 
+  mkdir -p destroot/include/hermes/napi
+  cp include/hermes/napi/*.h destroot/include/hermes/napi
+
   mkdir -p destroot/include/jsi
   cp "$JSI_PATH"/jsi/*.h destroot/include/jsi
 }
@@ -252,19 +260,21 @@ function create_universal_framework {
   pushd "$HERMES_PATH/destroot/Library/Frameworks" > /dev/null || exit 1
 
   local platforms=("$@")
-  local args=""
+  local failed=""
 
   echo "Creating universal framework for platforms: ${platforms[*]}"
 
-  for i in "${!platforms[@]}"; do
-    local platform="${platforms[$i]}"
-    local hermes_framework_path="${platform}/hermesvm.framework"
-    args+="-framework $hermes_framework_path "
+  mkdir -p universal
+  for framework in hermesvm node-api; do
+    local args=""
+    for platform in "${platforms[@]}"; do
+      args+="-framework ${platform}/${framework}.framework "
+    done
+    # shellcheck disable=SC2086
+    xcodebuild -create-xcframework $args -output "universal/${framework}.xcframework" || failed=1
   done
 
-  mkdir -p universal
-  # shellcheck disable=SC2086
-  if xcodebuild -create-xcframework $args -output "universal/hermesvm.xcframework"
+  if [[ -z $failed ]]
   then
     # # Remove the thin hermesvm.frameworks that are now part of the universal
     # XCFramework
