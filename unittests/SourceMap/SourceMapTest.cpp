@@ -317,6 +317,21 @@ TEST(SourceMap, NoRepresentedLocation) {
   verifySegment(*sourceMap, generatedLine, sources, loc(1, sourceIndex, 3, 2));
 };
 
+TEST(SourceMap, OutOfRangeSourceIndex) {
+  // A segment whose sourceIndex names no entry in "sources" must be rejected.
+  // Otherwise getLocationForAddress() indexes the sources vector out of bounds.
+  // "sources" has one entry; "AgqjGAA" decodes to sourceIndex 100000, and
+  // "ADAA" decodes to sourceIndex -1.
+  for (const char *mappings : {"AgqjGAA", "ADAA"}) {
+    SourceErrorManager sm;
+    SimpleDiagHandlerRAII diagHandler(sm);
+    std::string content = std::string(R"#({"version":3,"sources":["a.js"],)#") +
+        R"#("mappings":")#" + mappings + R"#("})#";
+    std::unique_ptr<SourceMap> sourceMap = parseSourceMap(content, sm);
+    EXPECT_TRUE(sourceMap == nullptr);
+  }
+};
+
 /// Test source map merging behavior.
 ///
 /// Suppose we're compiling file1 and file2 and we have input source maps for
