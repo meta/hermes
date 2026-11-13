@@ -117,6 +117,16 @@ class TS2FlowConverter
     visitESTreeChildren(*this, node);
   }
 
+  void visit(ESTree::FunctionExpressionNode *node) {
+    node->_returnType = convertTSNode(node->_returnType);
+    visitESTreeChildren(*this, node);
+  }
+
+  void visit(ESTree::ArrowFunctionExpressionNode *node) {
+    node->_returnType = convertTSNode(node->_returnType);
+    visitESTreeChildren(*this, node);
+  }
+
   /// Iterate over the given list and convert any TS nodes in the list.
   void visit(ESTree::NodeList &list, ESTree::Node *parent) {
     for (auto iter = list.begin(), end = list.end(); iter != end; ++iter) {
