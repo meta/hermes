@@ -8,6 +8,7 @@
 #include "hermes/Parser/JSONParser.h"
 #include "hermes/ADT/HalfPairIterator.h"
 
+#include "llvh/ADT/STLExtras.h"
 #include "llvh/ADT/SmallVector.h"
 #include "llvh/Support/Casting.h"
 
@@ -119,8 +120,8 @@ JSONHiddenClass *JSONFactory::getHiddenClass(const HiddenClassKey &key) {
 
 JSONString *JSONFactory::sortProps(Prop *from, Prop *to) {
   // Sort the keys by sorting the indexes first.
-  std::sort(from, to, [](const Prop &a, const Prop &b) {
-    return a.first->str() < b.first->str();
+  llvh::array_pod_sort(from, to, [](const Prop *a, const Prop *b) {
+    return a->first->str().compare(b->first->str());
   });
 
   // Check for duplicate keys

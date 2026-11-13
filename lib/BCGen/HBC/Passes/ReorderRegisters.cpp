@@ -12,6 +12,8 @@
 #include "hermes/IR/Instrs.h"
 #include "hermes/Optimizer/PassManager/Pass.h"
 
+#include "llvh/ADT/STLExtras.h"
+
 namespace hermes::hbc {
 
 static bool run(Function *F, HVMRegisterAllocator &RA) {
@@ -128,14 +130,15 @@ static bool run(Function *F, HVMRegisterAllocator &RA) {
   for (size_t regClass = 1; regClass < (size_t)RegClass::Other; ++regClass) {
     auto &rt = regTypes[regClass];
     // Sort the registers in the class.
-    std::sort(
+    llvh::array_pod_sort(
         rt.begin(),
         rt.end(),
-        [](const RegSortData &a, const RegSortData &b) -> bool {
+        [](const RegSortData *a, const RegSortData *b) -> int {
           // Sort by score, then by register index.
           // Place higher numbers earlier.
-          return std::tuple{a.score, a.reg.getIndexInClass()} >
-              std::tuple{b.score, b.reg.getIndexInClass()};
+          auto ka = std::tuple{a->score, a->reg.getIndexInClass()};
+          auto kb = std::tuple{b->score, b->reg.getIndexInClass()};
+          return ka > kb ? -1 : ka < kb ? 1 : 0;
         });
 
     // Record the remapping for each register in the class.
