@@ -18,6 +18,7 @@
 #include "hermes/Support/Statistic.h"
 
 #include "llvh/ADT/Optional.h"
+#include "llvh/ADT/STLExtras.h"
 
 #define DEBUG_TYPE "hbc-backend-isel"
 
@@ -448,19 +449,24 @@ void HBCISel::generateJumpTable() {
 
   std::vector<uint32_t> res{};
 
-  // Sort the jump table entries so iteration order is deterministic.
-  llvh::SmallVector<UIntSwitchInfoEntry, 1> infoVector{
-      uintSwitchImmInfo_.begin(), uintSwitchImmInfo_.end()};
-  std::sort(
+  // Sort the jump table entries so iteration order is deterministic. Sort
+  // pointers to the entries, so that the sort can use qsort.
+  llvh::SmallVector<const UIntSwitchInfoEntry *, 1> infoVector;
+  for (const auto &info : uintSwitchImmInfo_)
+    infoVector.push_back(&info);
+  llvh::array_pod_sort(
       infoVector.begin(),
       infoVector.end(),
-      [](UIntSwitchInfoEntry &a, UIntSwitchInfoEntry &b) {
-        return a.second.offset < b.second.offset;
+      [](const UIntSwitchInfoEntry *const *a,
+         const UIntSwitchInfoEntry *const *b) {
+        uint32_t aOffset = (*a)->second.offset;
+        uint32_t bOffset = (*b)->second.offset;
+        return aOffset < bOffset ? -1 : aOffset > bOffset ? 1 : 0;
       });
 
   // Fix up all UIntSwitchImm instructions with correct offset.
-  for (auto &tuple : infoVector) {
-    auto entry = tuple.second;
+  for (const UIntSwitchInfoEntry *tuple : infoVector) {
+    const auto &entry = tuple->second;
     uint32_t startOfTable = res.size();
     for (uint32_t jmpIdx = 0; jmpIdx < entry.table.size(); jmpIdx++) {
       res.push_back(basicBlockMap_[entry.table[jmpIdx]].first - entry.offset);
@@ -487,18 +493,23 @@ void HBCISel::generateStringSwitchTable() {
   std::vector<StringSwitchTableCase> res{};
 
   // Sort the string switch table entries so iteration order is deterministic.
-  llvh::SmallVector<StringSwitchInfoEntry, 1> infoVector{
-      stringSwitchImmInfo_.begin(), stringSwitchImmInfo_.end()};
-  std::sort(
+  // Sort pointers to the entries, so that the sort can use qsort.
+  llvh::SmallVector<const StringSwitchInfoEntry *, 1> infoVector;
+  for (const auto &info : stringSwitchImmInfo_)
+    infoVector.push_back(&info);
+  llvh::array_pod_sort(
       infoVector.begin(),
       infoVector.end(),
-      [](StringSwitchInfoEntry &a, StringSwitchInfoEntry &b) {
-        return a.second.offset < b.second.offset;
+      [](const StringSwitchInfoEntry *const *a,
+         const StringSwitchInfoEntry *const *b) {
+        uint32_t aOffset = (*a)->second.offset;
+        uint32_t bOffset = (*b)->second.offset;
+        return aOffset < bOffset ? -1 : aOffset > bOffset ? 1 : 0;
       });
 
   // Fix up all StringSwitchImm instructions with correct offset.
-  for (auto &tuple : infoVector) {
-    auto entry = tuple.second;
+  for (const StringSwitchInfoEntry *tuple : infoVector) {
+    const auto &entry = tuple->second;
     uint32_t startOfTable = res.size();
     for (const StringSwitchCase &stringSwitchCase : entry.table) {
       res.emplace_back(
