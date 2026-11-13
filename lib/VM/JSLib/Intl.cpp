@@ -13,6 +13,7 @@
 
 #include "hermes/VM/ArrayLike.h"
 #include "hermes/VM/JSLib/DateUtil.h"
+#include "hermes/VM/JSLib/JSLibStorage.h"
 #include "hermes/VM/PrimitiveBox.h"
 #include "hermes/VM/Runtime.h"
 #include "hermes/VM/StackFrame-inline.h"
@@ -1672,14 +1673,25 @@ CallResult<HermesValue> intlStringPrototypeLocaleCompare(
     return ExecutionStatus::EXCEPTION;
   }
 
-  CallResult<std::unique_ptr<platform_intl::Collator>> collatorRes =
-      platform_intl::Collator::create(runtime, *localesRes, *optionsRes);
-  if (LLVM_UNLIKELY(collatorRes == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
+  // Reuse the previous collator when its inputs are equal: creating one costs
+  // far more than a comparison. This must stay after every read and conversion
+  // of the arguments, so the reuse is not observable.
+  auto &cached = runtime.getJSLibStorage()->localeCompareCollator;
+  if (!cached.collator || cached.locales != *localesRes ||
+      cached.options != *optionsRes ||
+      cached.collator->defaultLocaleChanged()) {
+    CallResult<std::unique_ptr<platform_intl::Collator>> collatorRes =
+        platform_intl::Collator::create(runtime, *localesRes, *optionsRes);
+    if (LLVM_UNLIKELY(collatorRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    cached.collator = std::move(*collatorRes);
+    cached.locales = std::move(*localesRes);
+    cached.options = std::move(*optionsRes);
   }
 
   return HermesValue::encodeTrustedNumberValue(
-      (*collatorRes)->compare(*thisRes, *thatRes));
+      cached.collator->compare(*thisRes, *thatRes));
 }
 
 CallResult<HermesValue> intlStringPrototypeToLocaleLowerCase(

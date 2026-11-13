@@ -7,6 +7,7 @@
 
 package com.facebook.hermes.intl;
 
+import android.icu.util.ULocale;
 import android.os.Build;
 import com.facebook.proguard.annotations.DoNotStrip;
 import java.util.ArrayList;
@@ -14,6 +15,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -78,6 +80,19 @@ public class Collator {
   // [[InitializedCollator]]
   private IPlatformCollator mPlatformCollatorObject;
 
+  // The default locale that locale resolution fell back to, or null if a requested locale was used.
+  private Object mDefaultLocale;
+
+  // Must read the same locale as LocaleObject.createDefault(), or defaultLocaleChanged() compares
+  // the wrong value.
+  private static Object currentDefaultLocale() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      return ULocale.getDefault(ULocale.Category.FORMAT);
+    } else {
+      return Locale.getDefault();
+    }
+  }
+
   // https://tc39.es/ecma402/#sec-initializecollator
   private void initializeCollator(List<String> locales, Map<String, Object> options)
       throws JSRangeErrorException {
@@ -141,6 +156,7 @@ public class Collator {
     HashMap<String, Object> r = LocaleResolver.resolveLocale(locales, opt, relevantExtensionKeys);
 
     mResolvedLocaleObject = (ILocaleObject<?>) JSObjects.getJavaMap(r).get("locale");
+    mDefaultLocale = JSObjects.getJavaMap(r).get("defaultLocale");
     mResolvedLocaleObjectForResolvedOptions = mResolvedLocaleObject.cloneObject();
 
     Object collation = JSObjects.Get(r, "co");
@@ -296,5 +312,12 @@ public class Collator {
   @DoNotStrip
   public double compare(String source, String target) {
     return mPlatformCollatorObject.compare(source, target);
+  }
+
+  // Whether this collator uses a default locale that is no longer the default, in which case a
+  // collator created now from the same locales and options would resolve differently.
+  @DoNotStrip
+  public boolean defaultLocaleChanged() {
+    return mDefaultLocale != null && !mDefaultLocale.equals(currentDefaultLocale());
   }
 }
