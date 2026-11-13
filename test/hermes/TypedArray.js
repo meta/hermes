@@ -222,16 +222,20 @@ cons.forEach(function(TypedArray) {
   assert.equal(view[2], 3);
 });
 
-(function testArrayCopyWithDeletedElement() {
+(function checkArrayCopyWithDeletedElement() {
   var source = [1, 2, 3];
   delete source[1];
 
+  // The deleted element reads as undefined, which converts to NaN for a float
+  // type and to 0 for an integer type.
   var view = new Float64Array(source);
   assert.arrayEqual([view[0], view[1], view[2]], [1, NaN, 3]);
 
   view = Uint8Array.from(source);
   assert.arrayEqual([view[0], view[1], view[2]], [1, 0, 3]);
 
+  // The mapper visits every index once and gets undefined for the deleted
+  // element, and the source keeps its hole.
   var visited = [];
   view = Float64Array.from(source, function(value, index) {
     visited.push(index);
@@ -264,28 +268,44 @@ cons.forEach(function(TypedArray) {
     // Array.prototype, which disables the array fast path for later tests.
     Array.prototype.length = 0;
   }
+  assert.equal(Array.prototype.length, 0);
   assert.arrayEqual([view[0], view[1], view[2], view[3]], [1, NaN, 3, NaN]);
 })();
 
-(function testArrayIteratorFastPathSemantics() {
+// Check constructor from dense Array
+(function() {
   var dense = [1, 2, 3];
   var view = new Float64Array(dense);
   assert.arrayEqual([view[0], view[1], view[2]], dense);
+})();
 
+// Check constructor from Array with a hole, which reads as undefined
+(function() {
   var sparse = [1, , 3];
-  view = new Float64Array(sparse);
+  var view = new Float64Array(sparse);
   assert.equal(view[0], 1);
   assert.equal(view[1], NaN);
   assert.equal(view[2], 3);
+})();
 
+// Check constructor from Array with a hole, which reads through the
+// prototype chain
+(function() {
+  var sparse = [1, , 3];
   Array.prototype[1] = 7;
   try {
-    view = new Float64Array(sparse);
+    var view = new Float64Array(sparse);
     assert.equal(view[1], 7);
   } finally {
-    delete Array.prototype[1];
+    // Truncate rather than delete: deleting would leave holes in
+    // Array.prototype, which disables the array fast path for later tests.
+    Array.prototype.length = 0;
   }
+  assert.equal(Array.prototype.length, 0);
+})();
 
+// Check constructor from Array that a getter grows during iteration
+(function() {
   var growing = [1, 2];
   Object.defineProperty(growing, 0, {
     get: function() {
@@ -293,10 +313,13 @@ cons.forEach(function(TypedArray) {
       return 1;
     },
   });
-  view = new Float64Array(growing);
+  var view = new Float64Array(growing);
   assert.equal(view.length, 3);
   assert.equal(view[2], 3);
+})();
 
+// Check constructor from Array that a getter shrinks during iteration
+(function() {
   var shrinking = [];
   shrinking.length = 0xffffffff;
   Object.defineProperty(shrinking, 0, {
@@ -305,10 +328,14 @@ cons.forEach(function(TypedArray) {
       return 7;
     },
   });
-  view = new Float64Array(shrinking);
+  var view = new Float64Array(shrinking);
   assert.equal(view.length, 1);
   assert.equal(view[0], 7);
+})();
 
+// Check that constructor reads every element of an Array before converting
+// any of them
+(function() {
   var source = [
     {
       valueOf: function() {
@@ -318,26 +345,32 @@ cons.forEach(function(TypedArray) {
     },
     2,
   ];
-  view = new Float64Array(source);
+  var view = new Float64Array(source);
   assert.equal(view[0], 1);
   assert.equal(view[1], 2);
+})();
 
-  source = [1, 2];
+// Check constructor from Array with its own Symbol.iterator
+(function() {
+  var source = [1, 2];
   source[Symbol.iterator] = function*() {
     yield 7;
     yield 8;
   };
-  view = new Float64Array(source);
+  var view = new Float64Array(source);
   assert.equal(view[0], 7);
   assert.equal(view[1], 8);
+})();
 
+// Check constructor from Array when %ArrayIteratorPrototype%.next is replaced
+(function() {
   var iteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
   var originalNext = iteratorPrototype.next;
   iteratorPrototype.next = function() {
     return {value: 11, done: true};
   };
   try {
-    view = new Float64Array([1, 2]);
+    var view = new Float64Array([1, 2]);
     assert.equal(view.length, 0);
   } finally {
     iteratorPrototype.next = originalNext;
@@ -796,7 +829,9 @@ cons.forEach(function(c, i) {
   });
 });
 
-(function testFromArrayIteratorFastPathSemantics() {
+(function checkFromArrayIteratorFastPathSemantics() {
+  // All the values are read before any of them is converted, so the valueOf
+  // of the first element does not change the second value.
   var source = [
     {
       valueOf: function() {
@@ -810,6 +845,7 @@ cons.forEach(function(c, i) {
   assert.equal(ta[0], 1);
   assert.equal(ta[1], 2);
 
+  // Likewise, all the values are read before the mapper runs.
   source = [1, 2];
   ta = Float64Array.from(source, function(value, index) {
     if (index === 0) {

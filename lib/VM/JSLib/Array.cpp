@@ -543,6 +543,37 @@ bool arrayFastPathCheck(
   return true;
 }
 
+void arrayFastPathCopy(
+    Runtime &runtime,
+    Handle<JSArray> dest,
+    Handle<JSArray> src,
+    uint32_t len) {
+  assert(
+      arrayFastPathCheck(
+          runtime, src, Runtime::makeNullHandle<HiddenClass>(), len) &&
+      "src must pass arrayFastPathCheck");
+  // An empty array may have no storage, and there is nothing to copy.
+  if (len == 0)
+    return;
+  // dest is freshly created with the default class, so length is writable.
+  // May allocate, so encode before NoAllocScope.
+  auto newLen = SmallHermesValue::encodeNumberValue(len, runtime);
+  NoAllocScope noAllocScope{runtime};
+  auto *srcStorage = src->getIndexedStorageNullable(runtime);
+  auto *destStorage = dest->getIndexedStorageNullable(runtime);
+  assert(srcStorage && destStorage && "storage should not be null");
+  destStorage->appendWithinCapacity(runtime, srcStorage);
+  dest->setElemCountUnsafe(len);
+  JSArray::putLengthUnsafe(dest.get(), runtime, newLen);
+  // Replace holes (empty values) with undefined.
+  for (uint32_t k = 0; k < len; ++k) {
+    if (LLVM_UNLIKELY(destStorage->at(k).isEmpty())) {
+      destStorage->set(
+          k, SmallHermesValue::encodeUndefinedValue(), runtime.getHeap());
+    }
+  }
+}
+
 CallResult<HermesValue> arrayConstructor(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   // NativeConstructors create their own this when called with new. The array
@@ -4888,24 +4919,7 @@ CallResult<HermesValue> arrayPrototypeToSorted(void *, Runtime &runtime) {
   if (jsArr &&
       arrayFastPathCheck(
           runtime, jsArr, Runtime::makeNullHandle<HiddenClass>(), len32)) {
-    // A is freshly created with the default class, so length is writable.
-    // May allocate, so encode before NoAllocScope.
-    auto newLen = SmallHermesValue::encodeNumberValue(len32, runtime);
-    NoAllocScope noAllocScope{runtime};
-    auto *srcStorage = jsArr->getIndexedStorageNullable(runtime);
-    auto *destStorage = lv.A->getIndexedStorageNullable(runtime);
-    assert(srcStorage && destStorage && "storage should not be null");
-    // Bulk copy the source storage into the destination.
-    destStorage->appendWithinCapacity(runtime, srcStorage);
-    lv.A->setElemCountUnsafe(len32);
-    JSArray::putLengthUnsafe(lv.A.get(), runtime, newLen);
-    // Replace holes (empty values) with undefined.
-    for (uint32_t k = 0; k < len32; ++k) {
-      if (LLVM_UNLIKELY(destStorage->at(k).isEmpty())) {
-        destStorage->set(
-            k, SmallHermesValue::encodeUndefinedValue(), runtime.getHeap());
-      }
-    }
+    arrayFastPathCopy(runtime, lv.A, jsArr, len32);
   } else {
     if (LLVM_UNLIKELY(
             JSArray::setStorageEndIndex(lv.A, runtime, len32) ==

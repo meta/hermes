@@ -31,7 +31,12 @@ namespace {
 /// @name Abstract Operations and Helper functions
 /// @{
 
-/// Copies an array whose iterator and iterator-next methods are unmodified.
+/// IterableToArrayLike for an array \p sourceArray whose @@iterator is the
+/// builtin Array.prototype.values, when %ArrayIteratorPrototype%.next is the
+/// builtin next too. Iterating such an array only reads its elements by index,
+/// so read them directly, without creating the iterator and an iterator result
+/// object for every element.
+/// \return a new JSArray with the values that the iteration would produce.
 CallResult<HermesValue> iterableToArrayLikeFastPath(
     Runtime &runtime,
     Handle<JSArray> sourceArray) {
@@ -40,9 +45,9 @@ CallResult<HermesValue> iterableToArrayLikeFastPath(
     PinnedValue<JSArray> A;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope{runtime};
 
   uint32_t length = JSArray::getLength(*sourceArray, runtime);
+  // JSArray fast path: copy the elements directly from indexed storage.
   if (arrayFastPathCheck(
           runtime,
           sourceArray,
@@ -53,24 +58,7 @@ CallResult<HermesValue> iterableToArrayLikeFastPath(
       return ExecutionStatus::EXCEPTION;
     }
     lv.A = std::move(*arrRes);
-    if (length == 0) {
-      return lv.A.getHermesValue();
-    }
-
-    auto newLength = SmallHermesValue::encodeNumberValue(length, runtime);
-    NoAllocScope noAllocScope{runtime};
-    auto *srcStorage = sourceArray->getIndexedStorageNullable(runtime);
-    auto *destStorage = lv.A->getIndexedStorageNullable(runtime);
-    assert(srcStorage && destStorage && "storage should not be null");
-    destStorage->appendWithinCapacity(runtime, srcStorage);
-    lv.A->setElemCountUnsafe(length);
-    JSArray::putLengthUnsafe(lv.A.get(), runtime, newLength);
-    for (uint32_t k = 0; k < length; ++k) {
-      if (LLVM_UNLIKELY(destStorage->at(k).isEmpty())) {
-        destStorage->set(
-            k, SmallHermesValue::encodeUndefinedValue(), runtime.getHeap());
-      }
-    }
+    arrayFastPathCopy(runtime, lv.A, sourceArray, length);
     return lv.A.getHermesValue();
   }
 
@@ -80,10 +68,15 @@ CallResult<HermesValue> iterableToArrayLikeFastPath(
   }
   lv.A = std::move(*arrRes);
 
+  // Like the iterator, read the length again before every element, since a
+  // getter may have changed it.
   uint32_t k = 0;
   while (k < JSArray::getLength(*sourceArray, runtime)) {
-    GCScopeMarkerRAII marker{gcScope};
+    GCScopeMarkerRAII marker{runtime};
 
+    // Get(array, k). Use the value in indexed storage if there is one. Holes,
+    // accessors and elements stored as named properties need the full Get,
+    // which may run a getter.
     lv.nextValue = sourceArray->at(runtime, k).unboxToHV(runtime);
     if (LLVM_UNLIKELY(lv.nextValue->isEmpty())) {
       auto valueRes = getIndexed_RJS(runtime, sourceArray, k);
@@ -101,6 +94,7 @@ CallResult<HermesValue> iterableToArrayLikeFastPath(
     ++k;
   }
 
+  // Update the dest array length.
   if (LLVM_UNLIKELY(
           JSArray::setLengthProperty(lv.A, runtime, k) ==
           ExecutionStatus::EXCEPTION)) {
@@ -151,6 +145,9 @@ CallResult<HermesValue> iterableToArrayLike(Runtime &runtime, Handle<> items) {
     if (LLVM_LIKELY(propObj) && LLVM_LIKELY(!desc.flags.accessor) &&
         LLVM_LIKELY(!desc.flags.proxyObject) &&
         LLVM_LIKELY(!desc.flags.hostObject)) {
+      // `next` must be the builtin %ArrayIteratorPrototype%.next,
+      // which is the native function arrayIteratorPrototypeNext with no
+      // context.
       SmallHermesValue nextMethod =
           JSObject::getNamedSlotValueUnsafe(propObj, runtime, desc);
       auto *nativeNext = nextMethod.isObject()

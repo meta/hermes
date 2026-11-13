@@ -322,6 +322,20 @@ advanceStringIndex(const StringPrimitive *S, uint64_t index, bool unicode);
 /// \return the global Array constructor.
 HermesValue createArrayConstructor(Runtime &runtime);
 
+/// Copy the elements of \p src, an array of length \p len, into \p dest, and
+/// set the length of \p dest to \p len. Holes become undefined, which is what
+/// reading them from \p src returns, since arrayFastPathCheck ensured that the
+/// prototype chain has no indexed properties in bounds.
+/// \pre \p src passes arrayFastPathCheck with length \p len.
+/// \pre \p dest is a new empty array from JSArray::create.
+/// \pre \p dest has capacity for at least \p len elements, since the copy
+///   does not grow its storage.
+void arrayFastPathCopy(
+    Runtime &runtime,
+    Handle<JSArray> dest,
+    Handle<JSArray> src,
+    uint32_t len);
+
 HermesValue createArrayBufferConstructor(Runtime &runtime);
 
 HermesValue createDataViewConstructor(Runtime &runtime);
