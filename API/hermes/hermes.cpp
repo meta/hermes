@@ -66,6 +66,7 @@
 #include <list>
 #include <mutex>
 #include <system_error>
+#include <type_traits>
 #include <unordered_map>
 
 #include <jsi/instrumentation.h>
@@ -291,6 +292,7 @@ vm::ThreadRunner finalizerThreadRunner(const vm::RuntimeConfig &runtimeConfig) {
 
 class HermesRuntimeImpl final : public HermesRuntime,
                                 private IHermesTestHelpers,
+                                private IStringWriter,
                                 private InstallHermesFatalErrorHandler,
                                 private jsi::Instrumentation,
                                 public ISetEventLoopControl
@@ -821,6 +823,22 @@ class HermesRuntimeImpl final : public HermesRuntime,
   jsi::String createStringFromUtf8(const uint8_t *utf8, size_t length) override;
   jsi::String createStringFromUtf16(const char16_t *utf16, size_t length)
       override;
+  jsi::String createStringFromAsciiWriter(
+      size_t length,
+      void *ctx,
+      IStringWriter::AsciiWriteFn write) override;
+  jsi::String createStringFromUtf16Writer(
+      size_t length,
+      void *ctx,
+      IStringWriter::Utf16WriteFn write) override;
+  /// IStringWriter's AsciiWriteFn (char) or Utf16WriteFn (char16_t).
+  template <typename CharT>
+  using StringWriteFn =
+      bool (*)(void *ctx, CharT *dst, size_t offset, size_t count) noexcept;
+  /// Shared by the string writers: \p CharT is char (ASCII) or char16_t.
+  template <typename CharT>
+  jsi::String
+  createStringFromWriter(size_t length, void *ctx, StringWriteFn<CharT> write);
   std::string utf8(const jsi::String &) override;
   size_t length(const jsi::String &) override;
 
@@ -1720,6 +1738,8 @@ jsi::ICast *HermesRuntimeImpl::castInterface(const jsi::UUID &interfaceUUID) {
     return static_cast<IHermes *>(this);
   } else if (interfaceUUID == IHermesSHUnit::uuid) {
     return static_cast<IHermesSHUnit *>(this);
+  } else if (interfaceUUID == IStringWriter::uuid) {
+    return static_cast<IStringWriter *>(this);
   }
 #ifdef JSI_UNSTABLE
   else if (interfaceUUID == ISerialization::uuid) {
@@ -2575,6 +2595,122 @@ jsi::String HermesRuntimeImpl::createStringFromUtf16(
   ExecutionScopeRAII scopeRAII(mutatorScope);
   vm::GCScope gcScope(runtime_);
   return add<jsi::String>(stringHVFromUtf16(utf16, length));
+}
+
+jsi::String HermesRuntimeImpl::createStringFromAsciiWriter(
+    size_t length,
+    void *ctx,
+    IStringWriter::AsciiWriteFn write) {
+  return createStringFromWriter(length, ctx, write);
+}
+
+jsi::String HermesRuntimeImpl::createStringFromUtf16Writer(
+    size_t length,
+    void *ctx,
+    IStringWriter::Utf16WriteFn write) {
+  return createStringFromWriter(length, ctx, write);
+}
+
+template <typename S, typename = void>
+struct HasResizeDefaultInit : std::false_type {};
+template <typename S>
+struct HasResizeDefaultInit<
+    S,
+    std::void_t<decltype(std::declval<S &>().__resize_default_init(0))>>
+    : std::true_type {};
+
+/// Resizes \p s to \p n without zero-filling it where the standard library
+/// allows (libc++); the caller overwrites every element.
+template <typename S>
+static void resizeUninitialized(S &s, size_t n) {
+  if constexpr (HasResizeDefaultInit<S>::value) {
+    s.__resize_default_init(n);
+  } else {
+    s.resize(n);
+  }
+}
+
+template <typename CharT>
+jsi::String HermesRuntimeImpl::createStringFromWriter(
+    size_t length,
+    void *ctx,
+    StringWriteFn<CharT> write) {
+  constexpr bool ascii = std::is_same<CharT, char>::value;
+  // Every string is contiguous today, so write is invoked once for the whole
+  // range.
+  if (length < 2) {
+    // 0/1-char strings come from the interned table in createEfficient.
+    CharT buf[1];
+    if (length != 0 && !write(ctx, buf, 0, length)) {
+      throw jsi::JSError(*this, "String writer failed");
+    }
+    if constexpr (ascii) {
+      return createStringFromAscii(buf, length);
+    } else {
+      return createStringFromUtf16(buf, length);
+    }
+  }
+  ExecutionScopeRAII scopeRAII(mutatorScope);
+  if (length > vm::StringPrimitive::MAX_STRING_LENGTH) {
+    // The same error the other createStringFrom* methods give.
+    checkStatus(runtime_.raiseRangeError("String length exceeds limit"));
+  }
+  if (!ascii && length >= vm::StringPrimitive::EXTERNAL_STRING_THRESHOLD) {
+    // External strings adopt a std::basic_string. Filling one we own skips
+    // the zero-fill of StringPrimitive::create, which for char16_t is a scalar
+    // loop that costs more than the copy this writer saves (for char it is a
+    // fast memset, so ASCII keeps the regular path).
+    // Reject requests that exceed the limit before allocating native memory.
+    if (!runtime_.getHeap().canAllocExternalMemory(length * sizeof(CharT))) {
+      checkStatus(runtime_.raiseRangeError(
+          "Cannot allocate an external string primitive."));
+    }
+    std::basic_string<CharT> storage;
+    resizeUninitialized(storage, length);
+    // Check the actual capacity too: std::basic_string may over-allocate.
+    if (!runtime_.getHeap().canAllocExternalMemory(
+            storage.capacity() * sizeof(CharT))) {
+      checkStatus(runtime_.raiseRangeError(
+          "Cannot allocate an external string primitive."));
+    }
+    if (!write(ctx, &storage[0], 0, length)) {
+      throw jsi::JSError(*this, "String writer failed");
+    }
+    auto res =
+        vm::StringPrimitive::createEfficient(runtime_, std::move(storage));
+    checkStatus(res.getStatus());
+    return add<jsi::String>(*res);
+  }
+  auto res = vm::StringPrimitive::create(
+      runtime_, static_cast<uint32_t>(length), /* asciiNotUTF16 */ ascii);
+  checkStatus(res.getStatus());
+  CharT *dst;
+  if constexpr (ascii) {
+    dst = res->getString()->castToASCIIPointerForWrite();
+  } else {
+    dst = res->getString()->castToUTF16PointerForWrite();
+  }
+  bool ok;
+  {
+    // The new cell is unrooted, so write must not allocate on the JS heap.
+    vm::NoAllocScope noAlloc(runtime_);
+    ok = write(ctx, dst, 0, length);
+  }
+  if (!ok) {
+    // Zero the discarded string: an ASCII string must not hold other bytes.
+    std::fill_n(dst, length, CharT(0));
+    throw jsi::JSError(*this, "String writer failed");
+  }
+#ifndef NDEBUG
+  if constexpr (ascii) {
+    for (size_t i = 0; i < length; ++i) {
+      assert(
+          static_cast<unsigned char>(dst[i]) < 128 &&
+          "non-ASCII character in string");
+    }
+  }
+#endif
+  return add<jsi::String>(*res);
 }
 
 std::string HermesRuntimeImpl::utf8(const jsi::String &str) {
