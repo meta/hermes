@@ -403,6 +403,9 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   Array getPropertyNames(const Object& o) override {
     return plain_.getPropertyNames(o);
   }
+  std::vector<PropNameID> getPropertyNameIDs(const Object& o) override {
+    return plain_.getPropertyNameIDs(o);
+  }
 
   WeakObject createWeakObject(const Object& o) override {
     return plain_.createWeakObject(o);
@@ -1042,6 +1045,10 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
   Array getPropertyNames(const Object& o) override {
     Around around{with_};
     return RD::getPropertyNames(o);
+  }
+  std::vector<PropNameID> getPropertyNameIDs(const Object& o) override {
+    Around around{with_};
+    return RD::getPropertyNameIDs(o);
   }
 
   WeakObject createWeakObject(const Object& o) override {

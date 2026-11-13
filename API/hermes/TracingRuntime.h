@@ -140,6 +140,13 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
   jsi::Value getPrototypeOf(const jsi::Object &object) override;
 
   jsi::Array getPropertyNames(const jsi::Object &o) override;
+  // Uses the default implementation of jsi::Runtime, which calls the traced
+  // getPropertyNames and the other traced methods, so replay sees the same
+  // calls.
+  std::vector<jsi::PropNameID> getPropertyNameIDs(
+      const jsi::Object &o) override {
+    return jsi::Runtime::getPropertyNameIDs(o);
+  }
 
   jsi::WeakObject createWeakObject(const jsi::Object &o) override;
 

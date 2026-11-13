@@ -882,6 +882,8 @@ class HermesRuntimeImpl final : public HermesRuntime,
   bool isHostObject(const jsi::Object &) const override;
   bool isHostFunction(const jsi::Function &) const override;
   jsi::Array getPropertyNames(const jsi::Object &) override;
+  std::vector<jsi::PropNameID> getPropertyNameIDs(
+      const jsi::Object &obj) override;
 
   void setPrototypeOf(const jsi::Object &object, const jsi::Value &prototype)
       override;
@@ -3116,6 +3118,49 @@ jsi::Array HermesRuntimeImpl::getPropertyNames(const jsi::Object &obj) {
   }
 
   return ret;
+}
+
+std::vector<jsi::PropNameID> HermesRuntimeImpl::getPropertyNameIDs(
+    const jsi::Object &obj) {
+  ExecutionScopeRAII scopeRAII(mutatorScope);
+  vm::GCScope gcScope(runtime_);
+  uint32_t beginIndex;
+  uint32_t endIndex;
+  vm::CallResult<vm::Handle<vm::ArrayStorageSmall>> cr =
+      vm::getForInPropertyNames(runtime_, handle(obj), beginIndex, endIndex);
+  checkStatus(cr.getStatus());
+  vm::Handle<vm::ArrayStorageSmall> names = *cr;
+
+  std::vector<jsi::PropNameID> result;
+  result.reserve(endIndex - beginIndex);
+  for (uint32_t i = beginIndex; i < endIndex; ++i) {
+    vm::GCScopeMarkerRAII marker{runtime_};
+    vm::SmallHermesValue name = names->at(i);
+    if (name.isSymbol()) {
+      // for-in keeps the names of ordinary objects as symbols, which are what
+      // a PropNameID holds.
+      result.push_back(add<jsi::PropNameID>(
+          vm::HermesValue::encodeSymbolValue(name.getSymbol())));
+      continue;
+    }
+    vm::StringPrimitive *str;
+    if (name.isString()) {
+      str = name.getString(runtime_);
+    } else if (name.isNumber()) {
+      // May allocate. 'name' must not be used afterwards.
+      auto strRes =
+          vm::numberToStringPrimitive(runtime_, name.getNumber(runtime_));
+      checkStatus(strRes.getStatus());
+      str = strRes->get();
+    } else {
+      llvm_unreachable("property name is not String, Symbol or Number");
+    }
+    auto symbolRes =
+        vm::stringToSymbolID(runtime_, vm::createPseudoHandle(str));
+    checkStatus(symbolRes.getStatus());
+    result.push_back(add<jsi::PropNameID>(symbolRes->getHermesValue()));
+  }
+  return result;
 }
 
 jsi::WeakObject HermesRuntimeImpl::createWeakObject(const jsi::Object &obj) {
