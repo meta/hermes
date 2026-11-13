@@ -9,6 +9,8 @@
 #include "hermes/Support/UTF8.h"
 
 #include "llvh/ADT/DenseMap.h"
+#include "llvh/ADT/STLExtras.h"
+#include "llvh/ADT/SmallVector.h"
 #include "llvh/Support/raw_ostream.h"
 
 namespace hermes {
@@ -57,23 +59,34 @@ void SourceErrorManager::disableBuffering() {
   if (--bufferingEnabled_ != 0)
     return;
 
-  // Sort all messages.
-  std::sort(
-      bufferedMessages_.begin(),
-      bufferedMessages_.end(),
-      [](const BufferedMessage &a, const BufferedMessage &b) {
+  // Sort pointers to the messages, so that the sort can use qsort. Messages
+  // at the same location keep their emission order.
+  llvh::SmallVector<const BufferedMessage *, 8> sorted;
+  sorted.reserve(bufferedMessages_.size());
+  for (const auto &bm : bufferedMessages_)
+    sorted.push_back(&bm);
+  llvh::array_pod_sort(
+      sorted.begin(),
+      sorted.end(),
+      [](const BufferedMessage *const *pa, const BufferedMessage *const *pb) {
+        const BufferedMessage *a = *pa;
+        const BufferedMessage *b = *pb;
         // Make sure the "too many errors" message is always last.
-        if (a.dk == DK_Error && !a.loc.isValid() && a.msg == sTooManyErrors)
-          return false;
-        if (b.dk == DK_Error && !b.loc.isValid() && b.msg == sTooManyErrors)
-          return true;
-        return a.loc.getPointer() < b.loc.getPointer();
+        bool aLast =
+            a->dk == DK_Error && !a->loc.isValid() && a->msg == sTooManyErrors;
+        bool bLast =
+            b->dk == DK_Error && !b->loc.isValid() && b->msg == sTooManyErrors;
+        if (aLast != bLast)
+          return aLast ? 1 : -1;
+        if (!aLast && a->loc.getPointer() != b->loc.getPointer())
+          return a->loc.getPointer() < b->loc.getPointer() ? -1 : 1;
+        return a < b ? -1 : a > b ? 1 : 0;
       });
 
   // Print them.
-  for (const auto &bm : bufferedMessages_) {
-    doPrintMessage(bm.dk, bm.loc, bm.sm, bm.msg);
-    for (const auto &note : bm.notes(bufferedNotes_))
+  for (const BufferedMessage *bm : sorted) {
+    doPrintMessage(bm->dk, bm->loc, bm->sm, bm->msg);
+    for (const auto &note : bm->notes(bufferedNotes_))
       doPrintMessage(note.dk, note.loc, note.sm, note.msg);
   }
 
