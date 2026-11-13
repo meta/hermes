@@ -2279,6 +2279,50 @@ TEST_F(SynthTraceReplayTest, CreateValueFromJsonUtf8Replay) {
   }
 }
 
+/// These entry points use the recorded fallback, so returned objects and
+/// strings must be usable in subsequent records, including lone surrogates.
+TEST_F(SynthTraceReplayTest, CreateValueFromJsonBuffersReplay) {
+  {
+    auto &rt = *traceRt;
+    const char ascii[] = "{\"a\":[true,null,42,\"text\"]}";
+    auto value = jsi::Value::createFromJsonASCII(rt, ascii, sizeof(ascii) - 1);
+    rt.global().setProperty(rt, "asciiParsed", value);
+    const std::u16string utf16 =
+        u"[\"世界 \U0001F600\",\"" + std::u16string(1, 0xd800) + u"\"]";
+    auto array = jsi::Value::createFromJsonUtf16(rt, utf16.data(), utf16.size())
+                     .getObject(rt)
+                     .getArray(rt);
+    rt.global().setProperty(rt, "utf16Parsed", array);
+    rt.global().setProperty(rt, "surrogate", array.getValueAtIndex(rt, 1));
+    rt.global().setProperty(
+        rt, "jsonNull", jsi::Value::createFromJsonASCII(rt, "null", 4));
+    rt.global().setProperty(
+        rt, "jsonNumber", jsi::Value::createFromJsonUtf16(rt, u"42", 2));
+  }
+  replay();
+  {
+    auto &rt = *replayRt;
+    auto ascii = rt.global()
+                     .getPropertyAsObject(rt, "asciiParsed")
+                     .getPropertyAsObject(rt, "a")
+                     .getArray(rt);
+    EXPECT_TRUE(ascii.getValueAtIndex(rt, 0).getBool());
+    EXPECT_TRUE(ascii.getValueAtIndex(rt, 1).isNull());
+    EXPECT_EQ(ascii.getValueAtIndex(rt, 2).getNumber(), 42);
+    EXPECT_EQ(ascii.getValueAtIndex(rt, 3).getString(rt).utf8(rt), "text");
+    auto utf16 =
+        rt.global().getPropertyAsObject(rt, "utf16Parsed").getArray(rt);
+    EXPECT_EQ(
+        utf16.getValueAtIndex(rt, 0).getString(rt).utf16(rt),
+        u"世界 \U0001F600");
+    EXPECT_EQ(
+        rt.global().getProperty(rt, "surrogate").getString(rt).utf16(rt),
+        std::u16string(1, 0xd800));
+    EXPECT_TRUE(rt.global().getProperty(rt, "jsonNull").isNull());
+    EXPECT_EQ(rt.global().getProperty(rt, "jsonNumber").getNumber(), 42);
+  }
+}
+
 /// This test is here to make sure that the replayed string match is happening
 /// during replay.
 TEST_F(SynthTraceReplayTest, PropNameIDUtf8) {

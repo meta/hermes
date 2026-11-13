@@ -762,6 +762,18 @@ jsi::Value TracingRuntime::createValueFromJsonUtf8(
   return jsi::Runtime::createValueFromJsonUtf8(json, length);
 }
 
+jsi::Value TracingRuntime::createValueFromJsonASCII(
+    const char *json,
+    size_t length) {
+  return jsi::Runtime::createValueFromJsonASCII(json, length);
+}
+
+jsi::Value TracingRuntime::createValueFromJsonUtf16(
+    const char16_t *json,
+    size_t length) {
+  return jsi::Runtime::createValueFromJsonUtf16(json, length);
+}
+
 jsi::PropNameID TracingRuntime::createPropNameIDFromAscii(
     const char *str,
     size_t length) {

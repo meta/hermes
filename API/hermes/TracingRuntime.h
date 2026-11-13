@@ -76,6 +76,11 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
   /// needing a dedicated record type.
   jsi::Value createValueFromJsonUtf8(const uint8_t *json, size_t length)
       override;
+  /// Use the same recorded JSON.parse fallback as the UTF-8 entry point.
+  jsi::Value createValueFromJsonASCII(const char *json, size_t length) override;
+  /// Use the same recorded JSON.parse fallback, preserving UTF-16 code units.
+  jsi::Value createValueFromJsonUtf16(const char16_t *json, size_t length)
+      override;
   std::string utf8(const jsi::PropNameID &) override;
 
   jsi::PropNameID createPropNameIDFromAscii(const char *str, size_t length)
