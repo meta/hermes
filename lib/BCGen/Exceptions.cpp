@@ -12,6 +12,7 @@
 #include "hermes/IR/IR.h"
 #include "hermes/IR/IRBuilder.h"
 
+#include "llvh/ADT/STLExtras.h"
 #include "llvh/Support/raw_ostream.h"
 
 using namespace hermes;
@@ -172,7 +173,7 @@ ExceptionEntryList hermes::generateExceptionHandlers(
       }
       catch_ranges.push_back(resolved_loc);
     }
-    std::sort(catch_ranges.begin(), catch_ranges.end());
+    llvh::array_pod_sort(catch_ranges.begin(), catch_ranges.end());
     // After ranges are sorted, a range could only be merged with it's
     // previous range, if they are adjacent.
     // Note: no range can overlap, as basic blocks do not overlap.
@@ -201,7 +202,7 @@ ExceptionEntryList hermes::generateExceptionHandlers(
   }
   // Sort ranges by depth. In hermes, depth increase when you nest try inside
   // try/catch/finally.
-  std::sort(exception_entries.begin(), exception_entries.end());
+  llvh::array_pod_sort(exception_entries.begin(), exception_entries.end());
   return exception_entries;
 }
 

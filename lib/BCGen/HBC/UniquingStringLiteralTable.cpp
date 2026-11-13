@@ -9,6 +9,8 @@
 
 #include "BytecodeGenerator.h"
 
+#include "llvh/ADT/STLExtras.h"
+
 #include <cassert>
 
 namespace hermes {
@@ -190,9 +192,18 @@ void StringLiteralTable::sortAndRemap(bool optimize) {
     size_t origIndex;
     llvh::StringRef str;
     StringKind::Kind kind;
+    /// The number of identifier references to the string.
+    size_t numIdentifierRefs;
 
-    Index(size_t origIndex, llvh::StringRef str, StringKind::Kind kind)
-        : origIndex(origIndex), str(str), kind(kind) {}
+    Index(
+        size_t origIndex,
+        llvh::StringRef str,
+        StringKind::Kind kind,
+        size_t numIdentifierRefs)
+        : origIndex(origIndex),
+          str(str),
+          kind(kind),
+          numIdentifierRefs(numIdentifierRefs) {}
 
     using Key = std::tuple<StringKind::Kind, llvh::StringRef>;
 
@@ -234,21 +245,19 @@ void StringLiteralTable::sortAndRemap(bool optimize) {
     indices.emplace_back(
         i,
         stringsKeys_[i],
-        isIdentifier_[i] ? StringKind::Identifier : StringKind::String);
+        isIdentifier_[i] ? StringKind::Identifier : StringKind::String,
+        numIdentifierRefs_[i - existingStrings]);
   }
 
   // Sort indices of new strings by frequency of identifier references.
-  std::stable_sort(
-      indices.begin(),
-      indices.end(),
-      [this, existingStrings](const Index &a, const Index &b) {
-        assert(a.origIndex >= existingStrings && "Sorting an old string");
-        assert(b.origIndex >= existingStrings && "Sorting an old string");
-
-        auto ai = a.origIndex - existingStrings;
-        auto bi = b.origIndex - existingStrings;
-
-        return numIdentifierRefs_[ai] > numIdentifierRefs_[bi];
+  // Strings with equal frequency keep their original order.
+  llvh::array_pod_sort(
+      indices.begin(), indices.end(), [](const Index *a, const Index *b) {
+        if (a->numIdentifierRefs != b->numIdentifierRefs)
+          return a->numIdentifierRefs > b->numIdentifierRefs ? -1 : 1;
+        if (a->origIndex != b->origIndex)
+          return a->origIndex < b->origIndex ? -1 : 1;
+        return 0;
       });
 
   // Take an index into all the strings, and map it to an index in to a data
@@ -271,9 +280,9 @@ void StringLiteralTable::sortAndRemap(bool optimize) {
     return indices.begin() + remap(ix);
   };
 
-  std::sort(indicesFrom(0), indicesFrom(UINT8_MAX));
-  std::sort(indicesFrom(UINT8_MAX), indicesFrom(UINT16_MAX));
-  std::sort(indicesFrom(UINT16_MAX), indicesFrom(SIZE_MAX));
+  llvh::array_pod_sort(indicesFrom(0), indicesFrom(UINT8_MAX));
+  llvh::array_pod_sort(indicesFrom(UINT8_MAX), indicesFrom(UINT16_MAX));
+  llvh::array_pod_sort(indicesFrom(UINT16_MAX), indicesFrom(SIZE_MAX));
 
   { // Add the new strings to the storage.
     std::vector<llvh::StringRef> refs;
@@ -300,9 +309,9 @@ void StringLiteralTable::sortAndRemap(bool optimize) {
     return kindedEntries.begin() + remap(ix);
   };
 
-  std::sort(entriesFrom(0), entriesFrom(UINT8_MAX));
-  std::sort(entriesFrom(UINT8_MAX), entriesFrom(UINT16_MAX));
-  std::sort(entriesFrom(UINT16_MAX), entriesFrom(SIZE_MAX));
+  llvh::array_pod_sort(entriesFrom(0), entriesFrom(UINT8_MAX));
+  llvh::array_pod_sort(entriesFrom(UINT8_MAX), entriesFrom(UINT16_MAX));
+  llvh::array_pod_sort(entriesFrom(UINT16_MAX), entriesFrom(SIZE_MAX));
 
   // Write the re-ordered entries back into the table.
   for (size_t i = 0, j = existingStrings; i < newStrings; ++i, ++j) {
