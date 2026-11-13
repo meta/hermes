@@ -2833,6 +2833,173 @@ TEST_P(HermesRuntimeTest, IsUint8ArrayTest) {
   }
 }
 
+namespace {
+/// A property that IPropertyEnumeration::forEachProperty visits, with its name
+/// in UTF-16.
+struct VisitedProperty {
+  std::u16string name;
+  Value value;
+};
+
+/// Converts a name that forEachProperty passes to UTF-16.
+std::u16string nameToUTF16(bool ascii, const void *name, size_t length) {
+  if (ascii) {
+    const char *chars = static_cast<const char *>(name);
+    return std::u16string(chars, chars + length);
+  }
+  return std::u16string(static_cast<const char16_t *>(name), length);
+}
+
+/// The properties that getProperty returns for each name of getPropertyNames.
+std::vector<VisitedProperty> getPropertiesByName(
+    Runtime &rt,
+    const Object &obj) {
+  std::vector<VisitedProperty> properties;
+  Array names = obj.getPropertyNames(rt);
+  for (size_t i = 0; i < names.size(rt); ++i) {
+    String name = names.getValueAtIndex(rt, i).getString(rt);
+    properties.push_back({name.utf16(rt), obj.getProperty(rt, name)});
+  }
+  return properties;
+}
+} // namespace
+
+TEST_P(HermesRuntimeTest, ForEachPropertyMatchesGetProperty) {
+  auto *enumeration = castInterface<IPropertyEnumeration>(rt.get());
+  if (!enumeration) {
+    // HermesSandboxRuntime doesn't provide the interface.
+    return;
+  }
+  for (const char *source :
+       {"({title: 1, 7: 2, '\\u00e9t\\u00e9': 3, '\\ud800': 4,"
+        "  [Symbol('s')]: 5, empty: null})",
+        "[10, 20, 30]",
+        "(function() {"
+        "  var o = Object.create({inherited: 1});"
+        "  o.own = 2;"
+        "  Object.defineProperty(o, 'getter', {"
+        "    get: function() { return 3; }, enumerable: true});"
+        "  Object.defineProperty(o, 'hidden', {value: 4, enumerable: false});"
+        "  return o;"
+        "})()",
+        "new Proxy({a: 1, b: 2}, {"
+        "  get: function(target, key) { return key + '!'; }})",
+        "({})"}) {
+    Object obj = eval(source).getObject(*rt);
+    std::vector<VisitedProperty> expected = getPropertiesByName(*rt, obj);
+
+    struct Context {
+      Runtime &rt;
+      std::vector<VisitedProperty> visited;
+    } context{*rt, {}};
+    enumeration->forEachProperty(
+        obj,
+        &context,
+        [](void *ctx,
+           bool ascii,
+           const void *name,
+           size_t length,
+           Value &value) {
+          auto &c = *static_cast<Context *>(ctx);
+          std::u16string utf16 = nameToUTF16(ascii, name, length);
+          // The callback may use the runtime, which may allocate and move
+          // strings. The name stays valid during the call.
+          String::createFromUtf8(c.rt, "allocates");
+          c.rt.instrumentation().collectGarbage("forEachProperty");
+          EXPECT_EQ(nameToUTF16(ascii, name, length), utf16);
+          c.visited.push_back({std::move(utf16), std::move(value)});
+        });
+
+    ASSERT_EQ(context.visited.size(), expected.size()) << source;
+    for (size_t i = 0; i < expected.size(); ++i) {
+      EXPECT_EQ(context.visited[i].name, expected[i].name) << source;
+      EXPECT_TRUE(Value::strictEquals(
+          *rt, context.visited[i].value, expected[i].value))
+          << source;
+    }
+  }
+}
+
+TEST_P(HermesRuntimeTest, ForEachPropertyWhenTheObjectChanges) {
+  auto *enumeration = castInterface<IPropertyEnumeration>(rt.get());
+  if (!enumeration) {
+    // HermesSandboxRuntime doesn't provide the interface.
+    return;
+  }
+  Object obj = eval("({a: 1, b: 2, c: 3})").getObject(*rt);
+
+  // While visiting `a`, the callback deletes `b` and adds `d`. `b` is still
+  // visited, with the value that getProperty returns, and `d` isn't visited.
+  struct Context {
+    Runtime &rt;
+    Object &obj;
+    std::vector<VisitedProperty> visited;
+  } context{*rt, obj, {}};
+  enumeration->forEachProperty(
+      obj,
+      &context,
+      [](void *ctx, bool ascii, const void *name, size_t length, Value &value) {
+        auto &c = *static_cast<Context *>(ctx);
+        if (c.visited.empty()) {
+          c.obj.deleteProperty(c.rt, "b");
+          c.obj.setProperty(c.rt, "d", 4);
+        }
+        c.visited.push_back(
+            {nameToUTF16(ascii, name, length), std::move(value)});
+      });
+
+  ASSERT_EQ(context.visited.size(), 3);
+  EXPECT_EQ(context.visited[0].name, u"a");
+  EXPECT_EQ(context.visited[0].value.getNumber(), 1);
+  EXPECT_EQ(context.visited[1].name, u"b");
+  EXPECT_TRUE(context.visited[1].value.isUndefined());
+  EXPECT_EQ(context.visited[2].name, u"c");
+  EXPECT_EQ(context.visited[2].value.getNumber(), 3);
+}
+
+TEST_P(HermesRuntimeTest, ForEachPropertyStopsOnExceptions) {
+  auto *enumeration = castInterface<IPropertyEnumeration>(rt.get());
+  if (!enumeration) {
+    // HermesSandboxRuntime doesn't provide the interface.
+    return;
+  }
+  auto countCalls =
+      [](void *ctx, bool, const void *, size_t, Value &) {
+        ++*static_cast<int *>(ctx);
+      };
+
+  // A getter that throws stops the enumeration with a JSError.
+  Object withThrowingGetter = eval(
+                                  "({a: 1,"
+                                  "  get b() { throw new Error('getter'); },"
+                                  "  c: 3})")
+                                  .getObject(*rt);
+  int calls = 0;
+  EXPECT_THROW(
+      enumeration->forEachProperty(withThrowingGetter, &calls, countCalls),
+      JSError);
+  EXPECT_EQ(calls, 1);
+
+  // An exception from the callback stops the enumeration and propagates.
+  Object obj = eval("({a: 1, b: 2, c: 3})").getObject(*rt);
+  calls = 0;
+  EXPECT_THROW(
+      enumeration->forEachProperty(
+          obj,
+          &calls,
+          [](void *ctx, bool, const void *, size_t, Value &) {
+            ++*static_cast<int *>(ctx);
+            throw std::runtime_error("callback");
+          }),
+      std::runtime_error);
+  EXPECT_EQ(calls, 1);
+
+  // The runtime stays usable.
+  calls = 0;
+  enumeration->forEachProperty(obj, &calls, countCalls);
+  EXPECT_EQ(calls, 3);
+}
+
 #ifdef JSI_UNSTABLE
 class HermesSerializationTest : public HermesRuntimeTest {
  public:

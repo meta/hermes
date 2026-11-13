@@ -293,7 +293,8 @@ class HermesRuntimeImpl final : public HermesRuntime,
                                 private IHermesTestHelpers,
                                 private InstallHermesFatalErrorHandler,
                                 private jsi::Instrumentation,
-                                public ISetEventLoopControl
+                                public ISetEventLoopControl,
+                                public jsi::IPropertyEnumeration
 #ifdef JSI_UNSTABLE
     ,
                                 public jsi::ISerialization,
@@ -768,7 +769,18 @@ class HermesRuntimeImpl final : public HermesRuntime,
       const jsi::Serialized &serialized) const override;
   const std::shared_ptr<jsi::Serialized> makeSerialized(
       vm::SerializedValue &value) const override;
+
 #endif
+
+  void forEachProperty(
+      const jsi::Object &object,
+      void *ctx,
+      void (*cb)(
+          void *ctx,
+          bool ascii,
+          const void *name,
+          size_t length,
+          jsi::Value &value)) override;
 
   void setEventLoopControl(IEventLoopControl *eventLoopControl) override;
   IEventLoopControl *getEventLoopControl() override;
@@ -1728,7 +1740,9 @@ jsi::ICast *HermesRuntimeImpl::castInterface(const jsi::UUID &interfaceUUID) {
     return static_cast<IHermesTracingHelpers *>(this);
   }
 #endif
-  else if (interfaceUUID == ISetEventLoopControl::uuid) {
+  else if (interfaceUUID == IPropertyEnumeration::uuid) {
+    return static_cast<IPropertyEnumeration *>(this);
+  } else if (interfaceUUID == ISetEventLoopControl::uuid) {
     return static_cast<ISetEventLoopControl *>(this);
   }
   return nullptr;
@@ -3116,6 +3130,77 @@ jsi::Array HermesRuntimeImpl::getPropertyNames(const jsi::Object &obj) {
   }
 
   return ret;
+}
+
+void HermesRuntimeImpl::forEachProperty(
+    const jsi::Object &object,
+    void *ctx,
+    void (*cb)(
+        void *ctx,
+        bool ascii,
+        const void *name,
+        size_t length,
+        jsi::Value &value)) {
+  ExecutionScopeRAII scopeRAII(mutatorScope);
+  vm::GCScope gcScope(runtime_);
+  uint32_t beginIndex;
+  uint32_t endIndex;
+  auto objHandle = handle(object);
+  vm::CallResult<vm::Handle<vm::ArrayStorageSmall>> cr =
+      vm::getForInPropertyNames(runtime_, objHandle, beginIndex, endIndex);
+  checkStatus(cr.getStatus());
+  vm::Handle<vm::ArrayStorageSmall> names = *cr;
+
+  // The callback may use the runtime, which may move the strings, so each
+  // name is copied. The buffers are reused, so short names don't allocate.
+  std::string asciiName;
+  std::u16string utf16Name;
+  bool ascii = true;
+  auto copyName = [&](vm::StringView view) {
+    ascii = view.isASCII();
+    if (ascii) {
+      asciiName.assign(view.castToCharPtr(), view.length());
+    } else {
+      utf16Name.assign(view.castToChar16Ptr(), view.length());
+    }
+  };
+
+  for (uint32_t i = beginIndex; i < endIndex; ++i) {
+    vm::GCScopeMarkerRAII marker{runtime_};
+    vm::SmallHermesValue key = names->at(i);
+    jsi::Value value;
+    if (key.isSymbol()) {
+      // for-in keeps the names of ordinary objects as symbols. getProperty
+      // with a PropNameID reads them the same way.
+      vm::SymbolID id = key.getSymbol();
+      copyName(runtime_.getIdentifierTable().getStringView(runtime_, id));
+      auto valueRes = vm::JSObject::getNamedOrIndexed(objHandle, runtime_, id);
+      checkStatus(valueRes.getStatus());
+      value = valueFromHermesValue(valueRes->get());
+    } else {
+      vm::Handle<> keyHandle = runtime_.makeHandle(key.unboxToHV(runtime_));
+      if (key.isString()) {
+        copyName(vm::StringPrimitive::createStringView(
+            runtime_, vm::Handle<vm::StringPrimitive>::vmcast(keyHandle)));
+      } else if (key.isNumber()) {
+        // An index, whose name is its decimal digits.
+        ascii = true;
+        asciiName =
+            std::to_string(static_cast<uint32_t>(key.getNumber(runtime_)));
+      } else {
+        llvm_unreachable("property name is not String, Symbol or Number");
+      }
+      auto valueRes =
+          vm::JSObject::getComputed_RJS(objHandle, runtime_, keyHandle);
+      checkStatus(valueRes.getStatus());
+      value = valueFromHermesValue(valueRes->get());
+    }
+    if (ascii) {
+      cb(ctx, true, asciiName.data(), asciiName.size(), value);
+    } else {
+      cb(ctx, false, utf16Name.data(), utf16Name.size(), value);
+    }
+  }
 }
 
 jsi::WeakObject HermesRuntimeImpl::createWeakObject(const jsi::Object &obj) {
