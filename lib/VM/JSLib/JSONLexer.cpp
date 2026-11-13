@@ -195,6 +195,13 @@ ExecutionStatus JSONLexer<Kind>::scanNumber() {
     }
   }
 
+  // The integer part cannot start with 0, unless it's 0.
+  if (*iter_.cur == '0') {
+    ++iter_.cur;
+    if (LLVM_UNLIKELY(hasChar() && *iter_.cur >= '0' && *iter_.cur <= '9'))
+      return errorWithChar(u"Unexpected character in number: ", *iter_.cur);
+  }
+
   bool isTrivialInteger = true;
   uint64_t integer = 0;
   constexpr uint64_t kFirstIntThatCanOverflow = (UINT64_MAX - 9) / 10;
@@ -219,19 +226,6 @@ ExecutionStatus JSONLexer<Kind>::scanNumber() {
     numRef = llvh::ArrayRef<CharT>{beginNumContents, iter_.cur};
   } else {
     numRef = iter_.cur.endCapture();
-  }
-
-  // Check for illegal leading 0 in the integer part, which follows the
-  // optional minus sign.
-  assert(
-      numRef.size() > 0 &&
-      "scanNumber must be called on a number-looking char");
-  llvh::ArrayRef<CharT> intRef = multiplier < 0 ? numRef.drop_front() : numRef;
-  if (LLVM_UNLIKELY(
-          intRef.size() > 1 && intRef[0] == '0' && intRef[1] >= '0' &&
-          intRef[1] <= '9')) {
-    // The integer part cannot start with 0, unless it's 0.
-    return errorWithChar(u"Unexpected character in number: ", intRef[1]);
   }
 
   if (isTrivialInteger) {

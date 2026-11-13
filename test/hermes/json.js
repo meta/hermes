@@ -69,6 +69,16 @@ parse("[-01.5]");
 //CHECK-NEXT: SyntaxError: JSON Parse error: Unexpected character in number: 1
 print(1 / JSON.parse("-0"), JSON.parse("-0.5"), JSON.parse("[-10]")[0]);
 //CHECK-NEXT: -Infinity -0.5 -10
+// A non-ASCII character in the input makes JSON.parse use the UTF-16 lexer.
+parse("[\"\u4f60\", 015]");
+//CHECK-NEXT: SyntaxError: JSON Parse error: Unexpected character in number: 1
+parse("[\"\u4f60\", -015]");
+//CHECK-NEXT: SyntaxError: JSON Parse error: Unexpected character in number: 1
+parse("[\"\u4f60\", -00]");
+//CHECK-NEXT: SyntaxError: JSON Parse error: Unexpected character in number: 0
+var u = JSON.parse("[\"\u4f60\", -0, -0.5, -10]");
+print(1 / u[1], u[2], u[3]);
+//CHECK-NEXT: -Infinity -0.5 -10
 parse("+5");
 //CHECK-NEXT: SyntaxError: JSON Parse error: Unexpected character: +
 parse("-");
