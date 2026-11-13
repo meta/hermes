@@ -1271,6 +1271,25 @@ bool TypeInferenceImpl::runOnFunctionsAndVars(
   // Whether we've already run the reset step once (don't do it twice, because
   // it wouldn't do anything).
   bool haveRunReset = false;
+
+  // Within the instruction sweep, a function's instructions only read types
+  // from the function itself, its parameters, the return types of known call
+  // targets and the variables it loads. A function none of those changed for
+  // since its last sweep would infer the same types again, so only functions
+  // marked here are swept.
+  llvh::DenseMap<Function *, unsigned> funcIndex{};
+  for (unsigned i = 0, e = functions.size(); i < e; ++i)
+    funcIndex.try_emplace(functions[i], i);
+  std::vector<char> sweep(functions.size(), 1);
+  std::vector<char> sweepNext(functions.size(), 0);
+  auto sweepUsersNext = [&funcIndex, &sweepNext](Value *V) {
+    for (Instruction *user : V->getUsers()) {
+      auto it = funcIndex.find(user->getFunction());
+      if (it != funcIndex.end())
+        sweepNext[it->second] = 1;
+    }
+  };
+
   do {
     LLVM_DEBUG(dbgs() << "\nStart TypeInference pass:\n");
 
@@ -1279,8 +1298,11 @@ bool TypeInferenceImpl::runOnFunctionsAndVars(
     // Infer the type of formal parameters, based on knowing the (full) set
     // of call sites from which this function may be invoked.
     bool inferredParam = false;
-    for (Function *F : functions) {
-      inferredParam |= inferParams(F);
+    for (unsigned i = 0, e = functions.size(); i < e; ++i) {
+      if (inferParams(functions[i])) {
+        inferredParam = true;
+        sweep[i] = 1;
+      }
     }
     if (inferredParam)
       LLVM_DEBUG(dbgs() << ">> Inferred a parameter\n");
@@ -1288,13 +1310,20 @@ bool TypeInferenceImpl::runOnFunctionsAndVars(
 
     // Infer types of instructions.
     bool inferredInst = false;
-    for (Function *F : functions) {
-      llvh::ArrayRef<BasicBlock *> postOrder = funcPostOrders[F];
+    for (unsigned i = 0, e = functions.size(); i < e; ++i) {
+      if (!sweep[i])
+        continue;
+      bool inferredInFunc = false;
+      llvh::ArrayRef<BasicBlock *> postOrder = funcPostOrders[functions[i]];
       for (auto *bbit : llvh::reverse(postOrder)) {
         for (auto &it : *bbit) {
           Instruction *I = &it;
-          inferredInst |= inferInstruction(I);
+          inferredInFunc |= inferInstruction(I);
         }
+      }
+      if (inferredInFunc) {
+        inferredInst = true;
+        sweepNext[i] = 1;
       }
     }
     if (inferredInst)
@@ -1305,7 +1334,10 @@ bool TypeInferenceImpl::runOnFunctionsAndVars(
     // instructions in the function.
     bool inferredRetType = false;
     for (Function *F : functions) {
-      inferredRetType |= inferFunctionReturnType(F);
+      if (inferFunctionReturnType(F)) {
+        inferredRetType = true;
+        sweepUsersNext(F);
+      }
     }
     if (inferredRetType)
       LLVM_DEBUG(dbgs() << ">> Inferred function return type\n");
@@ -1314,7 +1346,10 @@ bool TypeInferenceImpl::runOnFunctionsAndVars(
     // Infer type of the supplied variables.
     bool inferredVarType = false;
     for (auto *var : vars) {
-      inferredVarType |= inferMemoryType(var);
+      if (inferMemoryType(var)) {
+        inferredVarType = true;
+        sweepUsersNext(var);
+      }
     }
     if (inferredVarType)
       LLVM_DEBUG(dbgs() << ">> Inferred variable type\n");
@@ -1327,16 +1362,25 @@ bool TypeInferenceImpl::runOnFunctionsAndVars(
     // We only have to do this once for this set of functions, so also check
     // haveRunReset.
     if (!localChanged && !haveRunReset) {
-      for (Function *F : functions) {
-        localChanged |= resetReturnAndParamNoTypesToPrePass(F);
+      for (unsigned i = 0, e = functions.size(); i < e; ++i) {
+        if (resetReturnAndParamNoTypesToPrePass(functions[i])) {
+          localChanged = true;
+          sweepNext[i] = 1;
+          sweepUsersNext(functions[i]);
+        }
       }
       for (Variable *var : vars) {
-        localChanged |= resetVariableNoTypesToPrePass(var);
+        if (resetVariableNoTypesToPrePass(var)) {
+          localChanged = true;
+          sweepUsersNext(var);
+        }
       }
       haveRunReset = true;
       if (localChanged)
         LLVM_DEBUG(dbgs() << ">> Reset NoTypes\n");
     }
+    sweep.swap(sweepNext);
+    std::fill(sweepNext.begin(), sweepNext.end(), 0);
   } while (localChanged);
 
   // Since we always infer from scratch, the inference has always "changed".
