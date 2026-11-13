@@ -1930,7 +1930,12 @@ class JSI_EXPORT Value {
 
   /// \return the boolean value, or throws JSIException if not a
   /// boolean.
-  bool asBool() const;
+  bool asBool() const {
+    if (!isBool()) {
+      throwUnexpectedKind("a boolean");
+    }
+    return getBool();
+  }
 
   /// \return the number value, or asserts if not a number.
   double getNumber() const {
@@ -1940,7 +1945,12 @@ class JSI_EXPORT Value {
 
   /// \return the number value, or throws JSIException if not a
   /// number.
-  double asNumber() const;
+  double asNumber() const {
+    if (!isNumber()) {
+      throwUnexpectedKind("a number");
+    }
+    return getNumber();
+  }
 
   /// \return the Symbol value, or asserts if not a symbol.
   Symbol getSymbol(IRuntime& runtime) const& {
@@ -2027,6 +2037,11 @@ class JSI_EXPORT Value {
 
  private:
   friend class Runtime;
+
+  /// Throws a JSINativeException saying that this value is not \p expected.
+  /// Defined out of line so that the checks in asBool() and asNumber() stay
+  /// small enough to inline.
+  [[noreturn]] void throwUnexpectedKind(const char* expected) const;
 
   enum ValueKind {
     UndefinedKind,

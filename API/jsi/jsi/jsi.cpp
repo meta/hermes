@@ -830,22 +830,9 @@ bool Value::strictEquals(IRuntime& runtime, const Value& a, const Value& b) {
   return false;
 }
 
-bool Value::asBool() const {
-  if (!isBool()) {
-    throw JSINativeException(
-        "Value is " + kindToString(*this) + ", expected a boolean");
-  }
-
-  return getBool();
-}
-
-double Value::asNumber() const {
-  if (!isNumber()) {
-    throw JSINativeException(
-        "Value is " + kindToString(*this) + ", expected a number");
-  }
-
-  return getNumber();
+void Value::throwUnexpectedKind(const char* expected) const {
+  throw JSINativeException(
+      "Value is " + kindToString(*this) + ", expected " + expected);
 }
 
 Object Value::asObject(IRuntime& rt) const& {
