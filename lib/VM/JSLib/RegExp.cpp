@@ -1684,10 +1684,12 @@ CallResult<HermesValue> getSubstitution(
         llvh::SmallVector<char16_t, 32> storage;
         // 2. Let groupName be the substring of templateRemainder from 2 to
         // gtPos.
-        auto identifier =
-            replacementView.slice(i + 2, gtPos - (i + 2)).getUTF16Ref(storage);
-        auto symbolRes =
-            runtime.getIdentifierTable().getSymbolHandle(runtime, identifier);
+        // Copy the name out of the replacement string: getSymbolHandle may
+        // allocate when creating a new identifier, which can move the string.
+        replacementView.slice(i + 2, gtPos - (i + 2))
+            .appendUTF16String(storage);
+        auto symbolRes = runtime.getIdentifierTable().getSymbolHandle(
+            runtime, UTF16Ref(storage));
         if (LLVM_UNLIKELY(symbolRes == ExecutionStatus::EXCEPTION)) {
           return ExecutionStatus::EXCEPTION;
         }
