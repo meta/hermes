@@ -1464,6 +1464,24 @@ jsi::Array TracingRuntime::deserializeWithTransfer(
     std::unique_ptr<jsi::Serialized> &serialized) {
   throw std::logic_error("Cannot transfer JS Values in tracing mode.");
 }
+
+std::shared_ptr<jsi::Serialized> TracingRuntime::serializeBound(
+    const jsi::Value &value) {
+  auto serializationInterface =
+      jsi::dynamicInterfaceCast<ISerialization>(runtime_);
+  assert(
+      serializationInterface &&
+      "Underlying runtime does not implement ISerialization interface");
+  trace_.emplace_back<SynthTrace::SerializeRecord>(
+      getTimeSinceStart(), useTraceValue(value));
+  return serializationInterface->serializeBound(value);
+}
+
+std::unique_ptr<jsi::Serialized> TracingRuntime::serializeBoundWithTransfer(
+    const jsi::Value &value,
+    const jsi::Array &transferList) {
+  throw std::logic_error("Cannot transfer JS Values in tracing mode.");
+}
 #endif
 
 void TracingRuntime::addMarker(const std::string &marker) {
