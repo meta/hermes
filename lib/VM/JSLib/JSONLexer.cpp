@@ -221,14 +221,17 @@ ExecutionStatus JSONLexer<Kind>::scanNumber() {
     numRef = iter_.cur.endCapture();
   }
 
-  // Check for illegal leading 0.
-  size_t len = numRef.size();
-  assert(len > 0 && "scanNumber must be called on a number-looking char");
+  // Check for illegal leading 0 in the integer part, which follows the
+  // optional minus sign.
+  assert(
+      numRef.size() > 0 &&
+      "scanNumber must be called on a number-looking char");
+  llvh::ArrayRef<CharT> intRef = multiplier < 0 ? numRef.drop_front() : numRef;
   if (LLVM_UNLIKELY(
-          numRef[0] == '0' && len > 1 && numRef[1] >= '0' &&
-          numRef[1] <= '9')) {
+          intRef.size() > 1 && intRef[0] == '0' && intRef[1] >= '0' &&
+          intRef[1] <= '9')) {
     // The integer part cannot start with 0, unless it's 0.
-    return errorWithChar(u"Unexpected character in number: ", numRef[1]);
+    return errorWithChar(u"Unexpected character in number: ", intRef[1]);
   }
 
   if (isTrivialInteger) {
