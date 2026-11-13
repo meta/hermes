@@ -1263,6 +1263,11 @@ double Collator::compare(
   return static_cast<CollatorApple *>(this)->compare(x, y);
 }
 
+bool Collator::defaultLocaleChanged() noexcept {
+  // getDefaultLocale() reads the default locale once per process.
+  return false;
+}
+
 namespace {
 // Implementation of
 // https://402.ecma-international.org/8.0/#datetimeformat-objects
