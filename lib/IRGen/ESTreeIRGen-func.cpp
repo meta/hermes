@@ -251,13 +251,15 @@ NormalFunction *ESTreeIRGen::genCapturingFunction(
         capturedState);
     return newFunc;
   }
-
+  const bool isGeneratorInnerFunction =
+      functionKind == Function::DefinitionKind::GeneratorInnerArrow;
   auto compileFunc = [this,
                       newFunc,
                       functionNode,
                       legacyClsCtx = curFunction()->legacyClassContext,
                       capturedState,
-                      parentScope] {
+                      parentScope,
+                      isGeneratorInnerFunction] {
     FunctionContext newFunctionContext{
         this, newFunc, functionNode->getSemInfo()};
     newFunctionContext.legacyClassContext = legacyClsCtx;
@@ -268,12 +270,44 @@ NormalFunction *ESTreeIRGen::genCapturingFunction(
     // Propagate captured "this", "new.target" and "arguments" from parents.
     curFunction()->capturedState = capturedState;
 
-    emitFunctionPrologue(
-        functionNode,
-        Builder.createBasicBlock(newFunc),
-        InitES5CaptureState::No,
-        DoEmitDeclarations::Yes,
-        parentScope);
+    if (isGeneratorInnerFunction && !hasSimpleParams(functionNode)) {
+      // This inner generator with non simple params will be stepped once by the
+      // outer generator to initialize params, before being then available to
+      // user code. Note that since we are in a more locked down use case (an
+      // async arrow function, compared to a regular generator function), we
+      // know that the generator can only be invoked with .next(), not
+      // .return(). Generator arrow functions are not in the language.
+      auto *prologueBB = Builder.createBasicBlock(newFunc);
+      auto *entryPointBB = Builder.createBasicBlock(newFunc);
+      // Initialize parameters.
+      Builder.setInsertionBlock(prologueBB);
+      emitFunctionPrologue(
+          functionNode,
+          prologueBB,
+          InitES5CaptureState::No,
+          DoEmitDeclarations::Yes,
+          parentScope);
+      // Then on the next stepping of the generator, branch to the actual
+      // function body code.
+      Builder.createSaveAndYieldInst(
+          Builder.getLiteralUndefined(),
+          Builder.getLiteralBool(false),
+          entryPointBB);
+      // Actual entry point of function from the caller's perspective.
+      Builder.setInsertionBlock(entryPointBB);
+      genResumeGenerator(
+          GenFinally::No,
+          Builder.createAllocStackInst(
+              genAnonymousLabelName("isReturn_entry"), Type::createBoolean()),
+          Builder.createBasicBlock(newFunc));
+    } else {
+      emitFunctionPrologue(
+          functionNode,
+          Builder.createBasicBlock(newFunc),
+          InitES5CaptureState::No,
+          DoEmitDeclarations::Yes,
+          parentScope);
+    }
 
     auto *body = ESTree::getBlockStatement(functionNode);
     assert(body && "empty function body");
