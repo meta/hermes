@@ -118,6 +118,41 @@ static std::string flatten(const CodePointSet &cps) {
   return result;
 }
 
+#ifdef HERMES_ENABLE_UNICODE_REGEXP_PROPERTY_ESCAPES
+TEST(UnicodeTest, PropertyRangeEndpoints) {
+  auto property = [](std::string_view name, bool inverted) {
+    CodePointSet result;
+    addRangeArrayPoolToBracket(
+        &result, unicodePropertyRanges(name, ""), inverted);
+    return result;
+  };
+
+  // Exercise a short range and the complete Unicode range, including its
+  // inclusive upper endpoint. The latter needs the overflow representation.
+  EXPECT_EQ("0-127", flatten(property("ASCII", false)));
+  EXPECT_EQ("0-1114111", flatten(property("Any", false)));
+  EXPECT_TRUE(property("Any", true).empty());
+  auto nonAscii = property("ASCII", true);
+  EXPECT_FALSE(nonAscii.contains(127));
+  EXPECT_TRUE(nonAscii.contains(128));
+
+  // Private-use ranges exercise long deltas and supplementary-plane starts.
+  auto privateUse = property("Co", false);
+  EXPECT_EQ(
+      "57344-63743, 983040-1048573, 1048576-1114109", flatten(privateUse));
+  auto nonPrivateUse = property("Co", true);
+  for (uint32_t cp :
+       {0xE000u, 0xF8FFu, 0xF0000u, 0xFFFFDu, 0x100000u, 0x10FFFDu}) {
+    EXPECT_TRUE(privateUse.contains(cp));
+    EXPECT_FALSE(nonPrivateUse.contains(cp));
+  }
+  for (uint32_t cp : {0xDFFFu, 0xF900u, 0xEFFFFu, 0xFFFFEu, 0x10FFFEu}) {
+    EXPECT_FALSE(privateUse.contains(cp));
+    EXPECT_TRUE(nonPrivateUse.contains(cp));
+  }
+}
+#endif
+
 TEST(UnicodeTest, CodePointSet) {
   EXPECT_EQ(flatten(CodePointSet{}), flatten(CodePointSet{}));
 

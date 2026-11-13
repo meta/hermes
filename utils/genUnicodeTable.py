@@ -11,10 +11,9 @@
 #
 # Usage: genUnicodeTable.py
 #
-# To generate a new UnicodeData.inc file, the output of this script should be
-# passed through clang-format, and then redirected:
-#
-# hermes/utils/genUnicodeTable.py | clang-format > hermes/lib/Platform/Unicode/UnicodeData.inc
+# For regeneration commands, input provenance and focused validation, see
+# lib/Platform/Unicode/README.md. Generate to a temporary file before replacing
+# UnicodeData.inc so a failed download does not truncate the checked-in data.
 
 import argparse
 import datetime
@@ -137,6 +136,12 @@ GENERAL_CATEGORY_FIELD = 2
 DECOMPOSITION_FIELD = 5
 UPPERCASE_FIELD = 12
 LOWERCASE_FIELD = 13
+
+
+# Low bits encode the inclusive endpoint delta; the all-ones value refers to
+# a full range in the overflow table. The high bits encode a start or index.
+RANGE_DELTA_BITS = 11
+RANGE_DELTA_MASK = (1 << RANGE_DELTA_BITS) - 1
 
 
 def print_template(s, **kwargs):
@@ -322,9 +327,9 @@ def run_property_select(unicode_data_lines, args):
     print_template(
         """
 // static constexpr uint32_t ${name}_SIZE = $interval_count;
-static constexpr std::array<UnicodeRange, ${interval_count}> ${name} = {
+static constexpr std::array<UnicodeRange, ${interval_count}> ${name} = {{
 ${intervals}
-};
+}};
     """,
         name=name,
         interval_count=len(intervals),
@@ -1721,11 +1726,98 @@ range_array_pool_size_bits: {self._metrics["range_array_pool_size"].bit_length()
 
 static constexpr std::string_view UNICODE_DATA_STRING_POOL = "${string_pool}";
 
-// clang-format off
-static constexpr UnicodeRange UNICODE_RANGE_POOL[] = {
-${range_pool}
+/// Low bits hold an inclusive endpoint delta, or the overflow sentinel.
+/// High bits hold the starting code point, or the overflow-table index.
+static constexpr uint32_t UNICODE_RANGE_POOL_DELTA_BITS = ${range_delta_bits};
+static constexpr uint32_t UNICODE_RANGE_POOL_DELTA_MASK = ${range_delta_mask};
+
+/// Check that every input is an ordered range of Unicode code points.
+template <size_t N>
+constexpr bool isValidUnicodeRangePool(const UnicodeRange (&ranges)[N]) {
+  for (const auto &range : ranges)
+    if (range.first > range.second || range.second > 0x10FFFF)
+      return false;
+  return true;
+}
+
+/// Count ranges whose endpoint delta needs the overflow representation.
+template <size_t N>
+constexpr size_t countUnicodeRangeOverflow(const UnicodeRange (&ranges)[N]) {
+  size_t count = 0;
+  for (const auto &range : ranges)
+    count += range.second - range.first >= UNICODE_RANGE_POOL_DELTA_MASK;
+  return count;
+}
+
+/// Compact property ranges and the endpoints of ranges too long to inline.
+template <size_t N, size_t OverflowCount>
+struct PackedUnicodeRangePool {
+  /// Encoded ranges in the original property-pool order.
+  std::array<uint32_t, N> ranges{};
+  /// Full endpoints indexed by entries with the sentinel delta.
+  std::array<UnicodeRange, OverflowCount> overflow{};
 };
+
+/// Encode the readable inputs during constant evaluation.
+template <size_t OverflowCount, size_t N>
+constexpr auto packUnicodeRanges(const UnicodeRange (&ranges)[N]) {
+  static_assert(N <= (1u << (32 - UNICODE_RANGE_POOL_DELTA_BITS)),
+                "Overflow indices must fit in the packed field");
+  PackedUnicodeRangePool<N, OverflowCount> result{};
+  size_t overflowIndex = 0;
+  for (size_t i = 0; i < N; ++i) {
+    const auto range = ranges[i];
+    const auto delta = range.second - range.first;
+    if (delta < UNICODE_RANGE_POOL_DELTA_MASK) {
+      result.ranges[i] = (range.first << UNICODE_RANGE_POOL_DELTA_BITS) | delta;
+    } else {
+      result.ranges[i] =
+          (overflowIndex << UNICODE_RANGE_POOL_DELTA_BITS) |
+          UNICODE_RANGE_POOL_DELTA_MASK;
+      result.overflow[overflowIndex++] = range;
+    }
+  }
+  return result;
+}
+
+/// Check the encoded result independently, including every overflow index.
+template <size_t N, size_t OverflowCount>
+constexpr bool packedUnicodeRangesMatch(
+    const UnicodeRange (&ranges)[N],
+    const PackedUnicodeRangePool<N, OverflowCount> &packed) {
+  size_t overflowCount = 0;
+  for (size_t i = 0; i < N; ++i) {
+    const auto word = packed.ranges[i];
+    const auto delta = word & UNICODE_RANGE_POOL_DELTA_MASK;
+    const auto startOrIndex = word >> UNICODE_RANGE_POOL_DELTA_BITS;
+    UnicodeRange decoded{startOrIndex, startOrIndex + delta};
+    if (delta == UNICODE_RANGE_POOL_DELTA_MASK) {
+      if (startOrIndex != overflowCount || startOrIndex >= OverflowCount)
+        return false;
+      decoded = packed.overflow[startOrIndex];
+      ++overflowCount;
+    }
+    if (decoded.first != ranges[i].first || decoded.second != ranges[i].second)
+      return false;
+  }
+  return overflowCount == OverflowCount;
+}
+
+// The readable source ranges are used only during constant evaluation.
+static constexpr auto UNICODE_RANGE_POOL = [] {
+// clang-format off
+  constexpr UnicodeRange ranges[] = {
+${range_pool}
+  };
 // clang-format on
+  static_assert(isValidUnicodeRangePool(ranges), "Invalid Unicode range");
+  constexpr auto packed =
+      packUnicodeRanges<countUnicodeRangeOverflow(ranges)>(ranges);
+  static_assert(
+      packedUnicodeRangesMatch(ranges, packed),
+      "Unicode range packing must preserve every endpoint and overflow entry");
+  return packed;
+}();
 
 static constexpr UnicodeRangePoolRef UNICODE_RANGE_ARRAY_POOL[] {
 ${range_array_pool}
@@ -1763,6 +1855,8 @@ ${range_map_script_extensions_property}
     """,
             string_pool=string_pool,
             range_pool=indent("\n".join(_range_pool()), "    "),
+            range_delta_bits=RANGE_DELTA_BITS,
+            range_delta_mask=RANGE_DELTA_MASK,
             range_array_pool="\n".join(_range_array_pool()),
             name_map_general_category="\n".join(
                 _build_name_map(self.general_category_pool)
