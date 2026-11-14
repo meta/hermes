@@ -3078,6 +3078,11 @@ bool HermesRuntimeImpl::isHostFunction(const jsi::Function &func) const {
 
 jsi::Array HermesRuntimeImpl::getPropertyNames(const jsi::Object &obj) {
   ExecutionScopeRAII scopeRAII(mutatorScope);
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::JSArray> ret;
+  } lv;
+  vm::LocalsRAII lraii(runtime_, &lv);
+
   vm::GCScope gcScope(runtime_);
   uint32_t beginIndex;
   uint32_t endIndex;
@@ -3087,35 +3092,39 @@ jsi::Array HermesRuntimeImpl::getPropertyNames(const jsi::Object &obj) {
   vm::Handle<vm::ArrayStorageSmall> arr = *cr;
   size_t length = endIndex - beginIndex;
 
-  auto ret = createArray(length);
+  // Fill the new array directly, as the interpreter does for array literals.
+  // Setting each element through jsi::Array::setValueAtIndex would create a
+  // jsi::Value and go through a generic property put for every name.
+  auto arrRes = vm::JSArray::create(runtime_, length, length);
+  checkStatus(arrRes.getStatus());
+  lv.ret = std::move(*arrRes);
+  checkStatus(vm::JSArray::setStorageEndIndex(lv.ret, runtime_, length));
+
   for (size_t i = 0; i < length; ++i) {
     vm::SmallHermesValue name = arr->at(beginIndex + i);
+    vm::StringPrimitive *str;
     if (name.isString()) {
-      ret.setValueAtIndex(
-          *this,
-          i,
-          valueFromHermesValue(
-              vm::HermesValue::encodeStringValue(name.getString(runtime_))));
+      str = name.getString(runtime_);
     } else if (name.isSymbol()) {
       // May allocate. 'name' must not be used afterwards.
-      vm::StringPrimitive *str =
-          runtime_.getStringPrimFromSymbolID(name.getSymbol());
-      ret.setValueAtIndex(
-          *this,
-          i,
-          valueFromHermesValue(vm::HermesValue::encodeStringValue(str)));
+      str = runtime_.getStringPrimFromSymbolID(name.getSymbol());
     } else if (name.isNumber()) {
-      std::string s;
-      llvh::raw_string_ostream os(s);
-      os << static_cast<size_t>(name.getNumber(runtime_));
-      ret.setValueAtIndex(
-          *this, i, jsi::String::createFromAscii(*this, os.str()));
+      // May allocate. 'name' must not be used afterwards.
+      auto strRes =
+          vm::numberToStringPrimitive(runtime_, name.getNumber(runtime_));
+      checkStatus(strRes.getStatus());
+      str = strRes->get();
     } else {
       llvm_unreachable("property name is not String or Number");
     }
+    vm::JSArray::unsafeSetExistingElementAt(
+        *lv.ret,
+        runtime_,
+        i,
+        vm::SmallHermesValue::encodeStringValue(str, runtime_));
   }
 
-  return ret;
+  return add<jsi::Array>(lv.ret.getHermesValue());
 }
 
 jsi::WeakObject HermesRuntimeImpl::createWeakObject(const jsi::Object &obj) {
