@@ -169,10 +169,28 @@ void FixedSizeHeapSegment::setEffectiveEnd(char *effectiveEnd) {
       "Must be valid end for segment.");
   assert(level() <= effectiveEnd && "Must not set effective end below level");
   effectiveEnd_ = effectiveEnd;
+  externalMemoryCharge_ = 0;
 }
 
-void FixedSizeHeapSegment::clearExternalMemoryCharge() {
+void FixedSizeHeapSegment::resetEffectiveEnd() {
   setEffectiveEnd(end());
+}
+
+void FixedSizeHeapSegment::chargeExternalMemory(size_t size) {
+  const size_t charge = std::min(size, available());
+  effectiveEnd_ -= charge;
+  externalMemoryCharge_ += charge;
+  assert(level() <= effectiveEnd_ && "Charged below the level of the segment");
+}
+
+void FixedSizeHeapSegment::capExternalMemoryCharge(size_t remainingSize) {
+  // A credit that found less room than it asked for decreased the effective
+  // end by less than its size, so the charge can be smaller than the external
+  // memory still credited; it is never allowed to be larger.
+  const size_t charge = std::min(externalMemoryCharge_, remainingSize);
+  effectiveEnd_ += externalMemoryCharge_ - charge;
+  externalMemoryCharge_ = charge;
+  assert(effectiveEnd_ <= end() && "Gave back more room than was charged");
 }
 
 #ifndef NDEBUG

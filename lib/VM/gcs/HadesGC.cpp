@@ -2048,8 +2048,7 @@ void HadesGC::creditExternalMemory(GCCell *cell, uint32_t sz) {
   if (inYoungGen(cell)) {
     size_t newYGExtBytes = getYoungGenExternalBytes() + sz;
     setYoungGenExternalBytes(newYGExtBytes);
-    auto adj = std::min<size_t>(sz, youngGen_.available());
-    youngGen_.setEffectiveEnd(youngGen_.effectiveEnd() - adj);
+    youngGen_.chargeExternalMemory(sz);
   } else {
     std::lock_guard<Mutex> lk{gcMutex_};
     oldGen_.creditExternalMemory(sz);
@@ -2064,10 +2063,14 @@ void HadesGC::debitExternalMemory(GCCell *cell, uint32_t sz) {
     size_t oldYGExtBytes = getYoungGenExternalBytes();
     assert(
         oldYGExtBytes >= sz && "Debiting more native memory than was credited");
-    setYoungGenExternalBytes(oldYGExtBytes - sz);
-    // Don't modify the effective end here. creditExternalMemory is in charge
-    // of tracking this. We don't expect many debits to not be from finalizers
-    // anyway.
+    size_t newYGExtBytes = oldYGExtBytes - sz;
+    setYoungGenExternalBytes(newYGExtBytes);
+    // Give back the room that the YG's remaining external memory no longer
+    // accounts for, so that memory released before the next YG collection
+    // doesn't bring that collection forward. A debit from a finalizer runs
+    // during a YG collection or finalizeAll, each of which sets the effective
+    // end afterwards.
+    youngGen_.capExternalMemoryCharge(newYGExtBytes);
   } else {
     std::lock_guard<Mutex> lk{gcMutex_};
     oldGen_.debitExternalMemory(sz);
@@ -2356,7 +2359,7 @@ void *HadesGC::allocSlow(uint32_t sz) {
 
   // Still fails after YG collection, perhaps the alloc size is large, try
   // growing the YG to full size.
-  youngGen().clearExternalMemoryCharge();
+  youngGen().resetEffectiveEnd();
   res = youngGen().alloc(sz);
   assert(
       res.success &&
@@ -2939,7 +2942,7 @@ void HadesGC::checkTripwireAndSubmitStats() {
 void HadesGC::transferExternalMemoryToOldGen() {
   oldGen_.creditExternalMemory(getYoungGenExternalBytes());
   setYoungGenExternalBytes(0);
-  youngGen_.clearExternalMemoryCharge();
+  youngGen_.resetEffectiveEnd();
 }
 
 void HadesGC::updateYoungGenSizeFactor() {

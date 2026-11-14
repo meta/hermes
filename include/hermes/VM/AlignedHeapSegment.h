@@ -644,10 +644,16 @@ class JumboHeapSegment : public AlignedHeapSegment {
 class FixedSizeHeapSegment : public AlignedHeapSegment {
   friend struct RuntimeOffsets;
 
-  /// The upper limit of the space that we can currently allocated into;
-  /// this may be decreased when externally allocated memory is credited to
-  /// the generation owning this space.
+  /// The upper limit of the space currently open to allocation. The generation
+  /// owning this space sets it (setEffectiveEnd and resetEffectiveEnd);
+  /// external memory credited to the generation lowers it, and a debit raises
+  /// it by the part of the charge the remaining external memory no longer
+  /// accounts for (chargeExternalMemory and capExternalMemoryCharge).
   char *effectiveEnd_{end()};
+
+  /// The number of bytes by which external memory credited to the generation
+  /// owning this space has decreased effectiveEnd_ since it was last set.
+  size_t externalMemoryCharge_{0};
 
  public:
   /// @name Constants and utility functions for the aligned storage of \c
@@ -705,8 +711,9 @@ class FixedSizeHeapSegment : public AlignedHeapSegment {
   FixedSizeHeapSegment() = default;
   /// \c FixedSizeHeapSegment is movable and assignable, but not copyable.
   /// Default to the base type move constructor and assignment operator. All
-  /// fields that need to be invalidated are handled in them and the only
-  /// field in this class (effectiveEnd_) doesn't need to be invalidated.
+  /// fields that need to be invalidated are handled in them and the fields in
+  /// this class (effectiveEnd_ and externalMemoryCharge_) don't need to be
+  /// invalidated.
   FixedSizeHeapSegment(FixedSizeHeapSegment &&) = default;
   FixedSizeHeapSegment &operator=(FixedSizeHeapSegment &&) = default;
   FixedSizeHeapSegment(const FixedSizeHeapSegment &) = delete;
@@ -777,19 +784,34 @@ class FixedSizeHeapSegment : public AlignedHeapSegment {
   }
 
   /// Returns the first address after the region in which allocations can occur,
-  /// taking external memory credits into a account (they decrease the effective
-  /// end).
+  /// taking external memory into account: credits decrease the effective end,
+  /// and a debit can increase it again.
   inline char *effectiveEnd() const;
 
-  /// The external memory charge of the generation owning this segment may have
-  /// changed; set the effective end of the segment to the given \p
-  /// effectiveEnd, which is required to be a valid effective end for the
-  /// segment.
+  /// Set the effective end of the segment to the given \p effectiveEnd, which
+  /// is required to be a valid effective end for the segment, and reset
+  /// externalMemoryCharge_, so capExternalMemoryCharge gives back none of the
+  /// room taken before the call. External memory credited to or debited from
+  /// the generation owning this segment goes through chargeExternalMemory and
+  /// capExternalMemoryCharge instead.
   void setEffectiveEnd(char *effectiveEnd);
 
-  /// Clear any external memory charge for this segment.  This has the effect of
-  /// equating the effective end to the real end.
-  void clearExternalMemoryCharge();
+  /// Set the effective end to the real end, which resets externalMemoryCharge_
+  /// along with any other limit setEffectiveEnd was given.
+  ///
+  /// \post this->effectiveEnd() == this->end();
+  void resetEffectiveEnd();
+
+  /// \p size bytes of external memory have been credited to the generation
+  /// owning this segment: decrease the effective end by as much of it as the
+  /// segment has room for.
+  void chargeExternalMemory(size_t size);
+
+  /// External memory has been debited from the generation owning this segment,
+  /// which still has \p remainingSize bytes credited: cap the charge at
+  /// \p remainingSize, increasing the effective end by the part of the charge
+  /// that the remaining external memory no longer accounts for.
+  void capExternalMemoryCharge(size_t remainingSize);
 
   /// Returns the first address after the region in which allocations may occur,
   /// ignoring external memory credits.

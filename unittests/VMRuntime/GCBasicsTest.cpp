@@ -927,4 +927,86 @@ TEST(GCDirtyCardScanTest, OGCollectionCompletesWhileMarking) {
 }
 #endif
 
+/// These tests count YG collections, which only Hades has, and Handle-SAN
+/// collects on allocation, which would add to the counts.
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES == 0
+/// The YG takes a whole segment until its first collection, so crediting a
+/// segment's worth of external memory to a young cell leaves it no room.
+class GCBasicsTestExternalMemory : public ::testing::Test {
+ protected:
+  /// The size of the heap, which the OG's target size leaves a segment of.
+  static constexpr uint32_t kHeapBytes =
+      4 * FixedSizeHeapSegment::storageSize();
+  /// The size of a segment's allocation region.
+  static constexpr uint32_t kSegmentBytes = FixedSizeHeapSegment::maxSize();
+
+  /// Owns the runtime, whose heap is kHeapBytes.
+  std::shared_ptr<DummyRuntime> runtime{
+      DummyRuntime::create(TestGCConfigFixedSize(kHeapBytes))};
+  /// The runtime the tests allocate in.
+  DummyRuntime &rt{*runtime};
+};
+
+/// A young cell's debit gives back the room its credit took in the YG.
+TEST_F(GCBasicsTestExternalMemory, YoungGenDebitGivesBackRoom) {
+  auto &gc = rt.getHeap();
+  struct : Locals {
+    PinnedValue<DummyObject> cell;
+  } lv;
+  DummyLocalsRAII lraii{rt, &lv};
+
+  const unsigned before = gc.getNumYGGCs();
+  for (int i = 0; i < 16; ++i) {
+    lv.cell = DummyObject::create(gc, rt);
+    lv.cell->acquireExtMem(gc, kSegmentBytes);
+    lv.cell->releaseExtMem(gc);
+  }
+  EXPECT_EQ(before, gc.getNumYGGCs());
+}
+
+/// A debit gives back only the room the external memory still credited in the
+/// YG no longer takes.
+TEST_F(GCBasicsTestExternalMemory, YoungGenDebitKeepsRoomOfRemainingCredit) {
+  auto &gc = rt.getHeap();
+  struct : Locals {
+    PinnedValue<DummyObject> released;
+    PinnedValue<DummyObject> kept;
+  } lv;
+  DummyLocalsRAII lraii{rt, &lv};
+
+  lv.released = DummyObject::create(gc, rt);
+  lv.kept = DummyObject::create(gc, rt);
+  lv.released->acquireExtMem(gc, kSegmentBytes);
+  lv.kept->acquireExtMem(gc, kSegmentBytes);
+  lv.released->releaseExtMem(gc);
+
+  // The external memory still credited fills the YG.
+  const unsigned before = gc.getNumYGGCs();
+  DummyObject::create(gc, rt);
+  EXPECT_EQ(before + 1, gc.getNumYGGCs());
+}
+
+/// Once the OG asks the next YG allocation to collect, a young debit gives back
+/// no room.
+TEST_F(GCBasicsTestExternalMemory, YoungGenDebitKeepsOldGenRequest) {
+  auto &gc = rt.getHeap();
+  struct : Locals {
+    PinnedValue<DummyObject> young;
+    PinnedValue<DummyObject> old;
+  } lv;
+  DummyLocalsRAII lraii{rt, &lv};
+
+  lv.young = DummyObject::create(gc, rt);
+  lv.old = DummyObject::createLongLived(gc);
+  lv.young->acquireExtMem(gc, kSegmentBytes / 2);
+  // More than the OG's target size, which is the heap less a segment.
+  lv.old->acquireExtMem(gc, kHeapBytes);
+  lv.young->releaseExtMem(gc);
+
+  const unsigned before = gc.getNumYGGCs();
+  DummyObject::create(gc, rt);
+  EXPECT_EQ(before + 1, gc.getNumYGGCs());
+}
+#endif
+
 } // namespace
