@@ -459,6 +459,18 @@ void Runtime::deleteProperty(const Object& object, const Value& name) {
   }
 }
 
+std::vector<PropNameID> Runtime::getPropertyNameIDs(const Object& object) {
+  Array names = getPropertyNames(object);
+  size_t count = names.size(*this);
+  std::vector<PropNameID> result;
+  result.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    result.push_back(PropNameID::forString(
+        *this, names.getValueAtIndex(*this, i).getString(*this)));
+  }
+  return result;
+}
+
 size_t Runtime::push(const Array& arr, const Value* elements, size_t count) {
   size_t newSize = size(arr);
   for (size_t i = 0; i < count; i++) {

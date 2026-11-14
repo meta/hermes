@@ -2222,6 +2222,47 @@ TEST_P(JSITest, GetStringDataTest) {
   EXPECT_EQ(buf, str.utf16(rd));
 }
 
+TEST_P(JSITest, GetPropertyNameIDsTest) {
+  // This Runtime Decorator is used to test the default getPropertyNameIDs
+  // implementation for VMs that do not provide their own implementation
+  class RD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit RD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    std::vector<PropNameID> getPropertyNameIDs(const Object& object) override {
+      return Runtime::getPropertyNameIDs(object);
+    }
+  };
+  RD rd(rt);
+
+  for (const char* source :
+       {"({title: 1, 7: 2, '\\u00e9t\\u00e9': 3, [Symbol('s')]: 4, x: null})",
+        "[10, 20, 30]",
+        "(function() {"
+        "  var o = Object.create({inherited: 1});"
+        "  o.own = 2;"
+        "  Object.defineProperty(o, 'getter', {"
+        "    get: function() { return 3; }, enumerable: true});"
+        "  Object.defineProperty(o, 'hidden', {value: 4, enumerable: false});"
+        "  return o;"
+        "})()",
+        "({})"}) {
+    Object obj = eval(source).getObject(rt);
+    Array names = obj.getPropertyNames(rt);
+    for (Runtime* runtime : {static_cast<Runtime*>(&rt), static_cast<Runtime*>(&rd)}) {
+      std::vector<PropNameID> ids = obj.getPropertyNameIDs(*runtime);
+      ASSERT_EQ(ids.size(), names.size(rt)) << source;
+      for (size_t i = 0; i < ids.size(); ++i) {
+        String name = names.getValueAtIndex(rt, i).getString(rt);
+        EXPECT_EQ(ids[i].utf8(rt), name.utf8(rt)) << source;
+        EXPECT_TRUE(Value::strictEquals(
+            rt, obj.getProperty(rt, ids[i]), obj.getProperty(rt, name)))
+            << source;
+      }
+    }
+  }
+}
+
 TEST_P(JSITest, ObjectSetPrototype) {
   // This Runtime Decorator is used to test the default implementation of
   // Object.setPrototypeOf
