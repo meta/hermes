@@ -67,6 +67,15 @@ parse("-");
 //CHECK-NEXT: SyntaxError: JSON Parse error: No digits after minus sign in JSON number
 parse("[-]");
 //CHECK-NEXT: SyntaxError: JSON Parse error: No digits after minus sign in JSON number
+parse("1.");
+//CHECK-NEXT: SyntaxError: JSON Parse error: No digits after decimal point in JSON number
+parse("[1.e5]");
+//CHECK-NEXT: SyntaxError: JSON Parse error: No digits after decimal point in JSON number
+// Non-ASCII text goes through the UTF-16 lexer.
+parse('["\u0100", 1.]');
+//CHECK-NEXT: SyntaxError: JSON Parse error: No digits after decimal point in JSON number
+print(JSON.parse("[0.0, -0.5e1, 1.5E+2]"));
+//CHECK-NEXT: 0,-5,150
 parse("[5,]");
 //CHECK-NEXT: SyntaxError: JSON Parse error: Unexpected character: ]
 parse("[0x5]");

@@ -2318,7 +2318,6 @@
     "test262/test/staging/sm/lexical-environment/for-loop.js",
     "test262/test/staging/sm/Map/getter-name.js",
     "test262/test/staging/sm/JSON/parse-syntax-errors-02.js",
-    "test262/test/staging/sm/JSON/parse-number-syntax.js",
     "test262/test/staging/sm/object/property-descriptor-order.js",
     "test262/test/staging/sm/object/toLocaleString-01.js",
     "test262/test/staging/sm/object/defineGetter-defineSetter.js",

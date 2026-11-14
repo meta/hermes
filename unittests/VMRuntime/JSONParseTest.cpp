@@ -177,4 +177,19 @@ TEST_F(RuntimeJSONUtilsTest, LongUTF8StringValWithConversions) {
   }
 }
 
+TEST_F(RuntimeJSONUtilsTest, UTF8NumberWithEmptyFraction) {
+  auto parse = [this](const std::string &src) {
+    auto srcRef = llvh::ArrayRef<uint8_t>(
+        reinterpret_cast<const uint8_t *>(src.data()), src.size());
+    return runtimeJSONParseRef(runtime, hermes::UTF16Stream{srcRef});
+  };
+  for (const char *src : {"1.", "[1.e5]"}) {
+    EXPECT_EQ(ExecutionStatus::EXCEPTION, parse(src).getStatus()) << src;
+    runtime.clearThrownValue();
+  }
+  auto res = parse("1.5");
+  ASSERT_RETURNED(res.getStatus());
+  EXPECT_EQ(1.5, res->getNumber());
+}
+
 } // namespace

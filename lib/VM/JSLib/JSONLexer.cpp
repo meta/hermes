@@ -205,7 +205,15 @@ ExecutionStatus JSONLexer<Kind>::scanNumber() {
         isTrivialInteger = false;
       }
       integer = integer * 10 + (ch - '0');
-    } else if (ch == '-' || ch == '+' || ch == '.' || (ch | 32) == 'e') {
+    } else if (ch == '.') {
+      isTrivialInteger = false;
+      ++iter_.cur;
+      // fastStrToDouble accepts "1." and "1.e5", but a JSON fraction must
+      // have at least one digit.
+      if (LLVM_UNLIKELY(!hasChar() || *iter_.cur < '0' || *iter_.cur > '9')) {
+        return error("No digits after decimal point in JSON number");
+      }
+    } else if (ch == '-' || ch == '+' || (ch | 32) == 'e') {
       isTrivialInteger = false;
     } else {
       break;
