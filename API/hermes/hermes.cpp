@@ -3828,7 +3828,7 @@ void HermesRuntimeImpl::throwJSErrorWithMessage(Args &&...args) {
   LOG_EXCEPTION_CAUSE("JSError: %s", os.str().c_str());
   // Raise an error with this message in the Runtime and rethrow it with
   // throwPendingError.
-  (void)runtime_.raiseError(vm::TwineChar16(s));
+  (void)runtime_.raiseError(vm::TwineChar16(os.str()));
   throwPendingError();
 }
 

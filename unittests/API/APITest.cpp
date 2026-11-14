@@ -1587,6 +1587,33 @@ TEST_P(HermesRuntimeTest, ArrayTest) {
   EXPECT_EQ(jsiArray.getValueAtIndex(*rt, 1).asNumber(), 0);
 }
 
+TEST_P(HermesRuntimeTest, InvalidJSICallErrorMessages) {
+  // HermesSandboxRuntime checks these arguments itself and throws
+  // JSINativeExceptions with messages of its own.
+  if (dynamic_cast<HermesSandboxRuntime *>(rt.get()))
+    return;
+
+  auto errorMessage = [](auto &&call) -> std::string {
+    try {
+      call();
+    } catch (const JSError &e) {
+      return e.getMessage();
+    }
+    return "<no JSError>";
+  };
+
+  Array array(*rt, 1);
+  const std::vector<std::string> messages{
+      errorMessage([&] { array.getValueAtIndex(*rt, 5); }),
+      errorMessage([&] { array.setValueAtIndex(*rt, 5, 0); }),
+      errorMessage([&] { BigInt::fromUint64(*rt, 1).toString(*rt, 1); })};
+  const std::vector<std::string> expected{
+      "getValueAtIndex: index 5 is out of bounds [0, 1)",
+      "setValueAtIndex: index 5 is out of bounds [0, 1)",
+      "Invalid radix 1 to BigInt.toString"};
+  EXPECT_EQ(messages, expected);
+}
+
 TEST_P(HermesRuntimeTest, HasComputedTest) {
   // The only use of JSObject::hasComputed() is in HermesRuntimeImpl,
   // so we test its Proxy support here, instead of from JS.
