@@ -1590,7 +1590,7 @@ void Runtime::initCharacterStrings() {
   charStrings_.reserve(256);
   for (char16_t ch = 0; ch < 256; ++ch) {
     gc.flushToMarker(marker);
-    charStrings_.push_back(allocateCharacterString(ch).getHermesValue());
+    charStrings_.emplace_back(allocateCharacterString(ch).getHermesValue());
   }
 }
 
