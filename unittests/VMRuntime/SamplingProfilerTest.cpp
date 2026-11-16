@@ -12,6 +12,7 @@
 #include "TestHelpers1.h"
 #include "hermes/VM/Runtime.h"
 
+#include "llvh/ADT/ScopeExit.h"
 #include "llvh/Support/raw_ostream.h"
 
 #include <gtest/gtest.h>
@@ -108,6 +109,46 @@ TEST(SamplingProfilerTest, RegisterIdenticalThread) {
   rt->samplingProfiler->setRuntimeThread();
   EXPECT_TRUE(rt->samplingProfiler->belongsToCurrentThread());
 }
+
+#if defined(HERMESVM_SAMPLING_PROFILER_POSIX)
+TEST(SamplingProfilerTest, RegistrationDuringThreadTeardownIsRejected) {
+  auto rt = makeRuntime(withSamplingProfilerEnabled);
+  auto workerRt = makeRuntime(withSamplingProfilerEnabled);
+  std::unique_ptr<SamplingProfiler> lateProfiler;
+  bool lateCallbackRan = false;
+
+  std::thread([&] {
+    // Constructed before the worker's guard, this callback runs after it.
+    thread_local auto lateRegistration = llvh::make_scope_exit(
+        [runtime = rt.get(),
+         profiler = rt->samplingProfiler.get(),
+         workerProfiler = workerRt->samplingProfiler.get(),
+         &lateProfiler,
+         &lateCallbackRan] {
+          EXPECT_FALSE(workerProfiler->belongsToCurrentThread());
+
+          profiler->setRuntimeThread();
+          EXPECT_FALSE(profiler->belongsToCurrentThread());
+          workerProfiler->setRuntimeThread();
+          EXPECT_FALSE(workerProfiler->belongsToCurrentThread());
+
+          lateProfiler = SamplingProfiler::create(*runtime);
+          EXPECT_FALSE(lateProfiler->belongsToCurrentThread());
+          lateCallbackRan = true;
+        });
+    (void)lateRegistration;
+    workerRt->samplingProfiler->setRuntimeThread();
+    EXPECT_TRUE(workerRt->samplingProfiler->belongsToCurrentThread());
+  }).join();
+
+  EXPECT_TRUE(lateCallbackRan);
+  ASSERT_NE(lateProfiler, nullptr);
+  // Failed migration must also clear the previous, still-live thread identity.
+  EXPECT_FALSE(rt->samplingProfiler->belongsToCurrentThread());
+  EXPECT_FALSE(workerRt->samplingProfiler->belongsToCurrentThread());
+  EXPECT_FALSE(lateProfiler->belongsToCurrentThread());
+}
+#endif
 
 // Regression test for https://github.com/facebook/hermes/issues/1853 and
 // https://github.com/getsentry/sentry-react-native/issues/5441: if a thread
