@@ -130,18 +130,14 @@ struct Sampler {
   /// \return the singleton profiler instance.
   static Sampler *get();
 
-  /// Called by the platform's thread-death infrastructure (e.g. a pthread
-  /// TLS destructor on POSIX) when a thread that registered \p profiler is
-  /// exiting. If \p profiler is still registered to the calling thread,
-  /// invalidates the registered thread so subsequent sample attempts skip
-  /// \p profiler instead of signalling a dead thread. No-op on platforms
-  /// where no thread-death synchronization is required (e.g. Windows).
+  /// Called by the platform's thread-death infrastructure when the thread
+  /// currently hosting \p profiler is exiting. Invalidates the registration
+  /// so subsequent sample attempts skip \p profiler instead of signalling a
+  /// dead thread. No-op on platforms where no thread-death synchronization
+  /// is required (e.g. Windows).
   ///
-  /// Caller contract: must be invoked on the dying thread itself. The
-  /// implementation uses pthread_self() (or the platform equivalent) to
-  /// identify which registration to invalidate, so calling from any other
-  /// thread would either be a no-op (wrong identity) or unsafe (if the
-  /// dying thread is no longer in the thread list).
+  /// Caller holds profilerLock_ and invokes this only for current members of
+  /// the calling thread's guard. Acquires runtimeDataLock_ second.
   static void onRegisteredThreadExit(SamplingProfiler *profiler);
 
  protected:

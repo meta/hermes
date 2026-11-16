@@ -43,18 +43,7 @@ namespace {
 /// Name of the semaphore.
 constexpr char kSamplingDoneSemaphoreName[] = "/samplingDoneSem";
 
-struct SamplingProfilerPosix;
-
-/// Shared state between a SamplingProfilerPosix and any per-thread guards
-/// that reference it. Outlives whichever of the two is destroyed first, so
-/// thread-death handlers can safely observe "profiler is gone" without a
-/// use-after-free.
-struct ProfilerHandle {
-  std::mutex mu;
-  /// Back-pointer to the owning profiler. Cleared by the profiler's
-  /// destructor, at which point thread-death handlers skip this entry.
-  SamplingProfilerPosix *profiler{nullptr};
-};
+class ThreadDeathGuard;
 
 struct SamplingProfilerPosix : SamplingProfiler {
   SamplingProfilerPosix(Runtime &rt);
@@ -65,10 +54,9 @@ struct SamplingProfilerPosix : SamplingProfiler {
   /// Must only be accessed while holding the runtimeDataLock_.
   pthread_t currentThread_{0};
 
-  /// Shared state with per-thread death guards referencing this profiler.
-  /// Set once at construction, never reassigned. The underlying object
-  /// outlives this profiler if any thread guard still references it.
-  std::shared_ptr<ProfilerHandle> handle_;
+  /// Current thread membership, protected by Sampler::profilerLock_.
+  /// Non-owning: the guard lives until its thread's TLS teardown.
+  ThreadDeathGuard *guard_{nullptr};
 };
 
 struct SamplerPosix : Sampler {
@@ -101,17 +89,16 @@ struct SamplerPosix : Sampler {
   static void profilingSignalHandler(int signo);
 };
 
-/// Per-thread set of profiler handles registered to this thread. On thread
-/// exit, the destructor iterates the handles and invalidates each
-/// profiler's registered thread identity (if it still matches) before the
-/// pthread_t becomes invalid and bionic's pthread_kill would abort.
+/// Current registrations on this thread. Membership and guard lifetime
+/// transitions are synchronized by Sampler::profilerLock_.
 class ThreadDeathGuard {
  public:
   /// Invalidate registrations before the owning thread finishes exiting.
   ~ThreadDeathGuard();
 
-  /// Handles attached to this thread, including earlier registrations.
-  std::vector<std::shared_ptr<ProfilerHandle>> handles;
+  /// Non-owning pointers, removed before the profilers can be destroyed.
+  /// Every access requires Sampler::profilerLock_.
+  std::vector<SamplingProfilerPosix *> profilers;
 };
 
 /// Later TLS or static destructors must not reuse the destroyed guard.
@@ -119,63 +106,39 @@ thread_local bool threadDeathGuardDestroyed = false;
 
 ThreadDeathGuard::~ThreadDeathGuard() {
   threadDeathGuardDestroyed = true;
-  // For each handle, take handle->mu first (serializes with profiler
-  // destruction), then invoke the Sampler-internal hook which takes
-  // runtimeDataLock_. Lock order handle->mu -> runtimeDataLock_ does not
-  // overlap with the sampler path (profilerLock_ -> runtimeDataLock_), so
-  // there is no deadlock risk.
-  for (auto &h : handles) {
-    std::lock_guard<std::mutex> lock(h->mu);
-    if (h->profiler) {
-      Sampler::onRegisteredThreadExit(h->profiler);
-    }
+  std::lock_guard<std::mutex> lock(Sampler::get()->profilerLock_);
+  for (auto *profiler : profilers) {
+    assert(profiler->guard_ == this && "Inconsistent thread membership");
+    Sampler::onRegisteredThreadExit(profiler);
   }
 }
 
-/// Attach \p handle to the calling thread's death guard. Must be called on
-/// the thread that will host the profiler. Return false after guard teardown.
-bool attachHandleToCurrentThread(std::shared_ptr<ProfilerHandle> handle) {
+/// Return this thread's guard, or nullptr after TLS teardown. Caller holds
+/// Sampler::profilerLock_.
+ThreadDeathGuard *getCurrentThreadGuard() {
   if (threadDeathGuardDestroyed) {
-    return false;
+    return nullptr;
   }
   thread_local ThreadDeathGuard guard;
-  // Before adding the new handle, drop entries this thread's death guard no
-  // longer needs to keep around:
-  //  - handles whose profiler has been destroyed (its back-pointer was
-  //    cleared under handle->mu by ~SamplingProfilerPosix), and
-  //  - an existing entry for the same profiler, which happens when a profiler
-  //    is moved back onto this thread via setRuntimeThread().
-  // Without this, a thread that hosts many profilers over its lifetime -- or
-  // a single profiler that repeatedly moves onto it -- would accumulate
-  // entries until the thread exits.
-  auto &handles = guard.handles;
-  ProfilerHandle *incoming = handle.get();
-  handles.erase(
-      std::remove_if(
-          handles.begin(),
-          handles.end(),
-          [incoming](const std::shared_ptr<ProfilerHandle> &h) {
-            if (h.get() == incoming) {
-              return true;
-            }
-            std::lock_guard<std::mutex> lock(h->mu);
-            return h->profiler == nullptr;
-          }),
-      handles.end());
-  handles.push_back(std::move(handle));
-  return true;
+  return &guard;
+}
+
+/// Remove the profiler's membership. Caller holds Sampler::profilerLock_.
+void removeThreadMembership(SamplingProfilerPosix *profiler) {
+  auto *guard = profiler->guard_;
+  if (!guard) {
+    return;
+  }
+  auto &profilers = guard->profilers;
+  auto it = std::find(profilers.begin(), profilers.end(), profiler);
+  assert(it != profilers.end() && "Missing thread membership");
+  profilers.erase(it);
+  profiler->guard_ = nullptr;
 }
 } // namespace
 
 SamplingProfilerPosix::SamplingProfilerPosix(Runtime &rt)
-    : SamplingProfiler(rt), handle_{std::make_shared<ProfilerHandle>()} {
-  // Set the back-pointer before publishing to any other thread. No lock
-  // needed: this profiler is not reachable from any other thread yet.
-  handle_->profiler = this;
-  if (attachHandleToCurrentThread(handle_)) {
-    currentThread_ = pthread_self();
-  }
-
+    : SamplingProfiler(rt) {
   // Note that we cannot register this in the base class constructor, because
   // all fields must be initialized before we register with the profiling
   // thread.
@@ -186,12 +149,6 @@ SamplingProfilerPosix::~SamplingProfilerPosix() {
   // TODO(T125910634): re-introduce the requirement for destroying the sampling
   // profiler on the same thread in which it was created.
   Sampler::get()->unregisterRuntime(this);
-  // After unregisterRuntime returns, profilerLock_ has been taken and
-  // released, which guarantees no sampler iteration is in-flight for this
-  // profiler. Clear the back-pointer so any thread-death handler still
-  // holding a shared_ptr to handle_ observes profiler==nullptr and skips.
-  std::lock_guard<std::mutex> lock(handle_->mu);
-  handle_->profiler = nullptr;
 }
 
 std::atomic<SamplerPosix *> SamplerPosix::instance_{nullptr};
@@ -304,9 +261,29 @@ bool Sampler::platformDisable() {
   return true;
 }
 
-void Sampler::platformRegisterRuntime(SamplingProfiler *profiler) {}
+void Sampler::platformRegisterRuntime(SamplingProfiler *profiler) {
+  auto *posix = static_cast<SamplingProfilerPosix *>(profiler);
+  std::lock_guard<std::mutex> lock(posix->runtimeDataLock_);
+  auto *guard = getCurrentThreadGuard();
+  if (posix->guard_ != guard) {
+    removeThreadMembership(posix);
+    posix->currentThread_ = 0;
+    if (guard) {
+      guard->profilers.push_back(posix);
+      posix->guard_ = guard;
+      posix->currentThread_ = pthread_self();
+    }
+  }
+  posix->threadID_ = oscompat::global_thread_id();
+  posix->threadNames_[posix->threadID_] = oscompat::thread_name();
+}
 
-void Sampler::platformUnregisterRuntime(SamplingProfiler *profiler) {}
+void Sampler::platformUnregisterRuntime(SamplingProfiler *profiler) {
+  auto *posix = static_cast<SamplingProfilerPosix *>(profiler);
+  std::lock_guard<std::mutex> lock(posix->runtimeDataLock_);
+  removeThreadMembership(posix);
+  posix->currentThread_ = 0;
+}
 
 void Sampler::platformPostSampleStack(SamplingProfiler *localProfiler) {}
 
@@ -316,11 +293,8 @@ SampleResult Sampler::platformSuspendVMAndWalkStack(
   auto *posixProfiler = static_cast<SamplingProfilerPosix *>(profiler);
 
   // If the registered thread has exited, skip this sample. The caller
-  // holds runtimeDataLock_, which serializes with the thread-death handler
-  // (see Sampler::onRegisteredThreadExit), so currentThread_ will not be
-  // concurrently invalidated between this check and the pthread_kill
-  // below. This prevents bionic's pthread_kill from aborting on a recycled
-  // pthread_t after a registered JS thread has exited.
+  // holds profilerLock_ and runtimeDataLock_, so the thread-death callback
+  // cannot finish before an in-flight sample completes.
   if (posixProfiler->currentThread_ == 0) {
     return SampleResult::ThreadExited;
   }
@@ -370,29 +344,15 @@ bool SamplingProfiler::belongsToCurrentThread() {
 }
 
 void SamplingProfiler::setRuntimeThread() {
-  auto profiler = static_cast<sampling_profiler::SamplingProfilerPosix *>(this);
-  // Attachment takes handle mutexes, before runtimeDataLock_.
-  bool attached =
-      sampling_profiler::attachHandleToCurrentThread(profiler->handle_);
-  std::lock_guard<std::mutex> lock(profiler->runtimeDataLock_);
-  profiler->currentThread_ = attached ? pthread_self() : 0;
-  threadID_ = oscompat::global_thread_id();
-  threadNames_[threadID_] = oscompat::thread_name();
+  sampling_profiler::Sampler::get()->registerRuntime(this);
 }
 
 namespace sampling_profiler {
 void Sampler::onRegisteredThreadExit(SamplingProfiler *profiler) {
   auto *posix = static_cast<SamplingProfilerPosix *>(profiler);
   std::lock_guard<std::mutex> lock(posix->runtimeDataLock_);
-  // Only invalidate if currentThread_ still points at the caller. This
-  // correctly handles the setRuntimeThread() case where the profiler has
-  // moved to a different thread before the original thread exits. The
-  // explicit zero check avoids invoking pthread_equal with an invalid
-  // thread ID, which POSIX leaves implementation-defined.
-  if (posix->currentThread_ != 0 &&
-      pthread_equal(posix->currentThread_, pthread_self())) {
-    posix->currentThread_ = 0;
-  }
+  posix->guard_ = nullptr;
+  posix->currentThread_ = 0;
 }
 } // namespace sampling_profiler
 

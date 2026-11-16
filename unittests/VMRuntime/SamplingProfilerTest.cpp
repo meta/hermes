@@ -19,6 +19,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <future>
 #include <string>
 #include <thread>
 
@@ -111,6 +112,105 @@ TEST(SamplingProfilerTest, RegisterIdenticalThread) {
 }
 
 #if defined(HERMESVM_SAMPLING_PROFILER_POSIX)
+TEST(
+    SamplingProfilerTest,
+    MigrationBeforePreviousThreadExitPreservesOwnership) {
+  auto rt = makeRuntime(withSamplingProfilerEnabled);
+  auto siblingRt = makeRuntime(withSamplingProfilerEnabled);
+
+  // Sample during migration, so setRuntimeThread() and thread exit contend
+  // with the timer loop for profilerLock_.
+  ASSERT_TRUE(SamplingProfiler::enable(1000));
+  for (unsigned i = 0; i < 8; ++i) {
+    std::promise<void> registered;
+    auto registeredFuture = registered.get_future();
+    std::promise<void> migratedBack;
+    auto migratedBackFuture = migratedBack.get_future();
+    std::thread worker([&] {
+      siblingRt->samplingProfiler->setRuntimeThread();
+      for (unsigned j = 0; j < 3; ++j) {
+        rt->samplingProfiler->setRuntimeThread();
+        EXPECT_TRUE(rt->samplingProfiler->belongsToCurrentThread());
+        EXPECT_TRUE(siblingRt->samplingProfiler->belongsToCurrentThread());
+      }
+      registered.set_value();
+
+      migratedBackFuture.wait();
+      EXPECT_FALSE(rt->samplingProfiler->belongsToCurrentThread());
+      EXPECT_TRUE(siblingRt->samplingProfiler->belongsToCurrentThread());
+    });
+
+    registeredFuture.wait();
+    for (unsigned j = 0; j < 3; ++j) {
+      rt->samplingProfiler->setRuntimeThread();
+      EXPECT_TRUE(rt->samplingProfiler->belongsToCurrentThread());
+    }
+    migratedBack.set_value();
+    worker.join();
+
+    EXPECT_TRUE(rt->samplingProfiler->belongsToCurrentThread());
+    EXPECT_FALSE(siblingRt->samplingProfiler->belongsToCurrentThread());
+  }
+  EXPECT_TRUE(SamplingProfiler::disable());
+}
+
+TEST(SamplingProfilerTest, RemoteDestructionAllowsThreadGuardReuse) {
+  auto rt = makeRuntime(withSamplingProfilerDisabled);
+  std::unique_ptr<SamplingProfiler> profiler;
+  std::promise<void> registered;
+  auto registeredFuture = registered.get_future();
+  std::promise<void> destroyed;
+  auto destroyedFuture = destroyed.get_future();
+  std::thread worker([&] {
+    profiler = SamplingProfiler::create(*rt);
+    EXPECT_TRUE(profiler->belongsToCurrentThread());
+    registered.set_value();
+
+    destroyedFuture.wait();
+    profiler = SamplingProfiler::create(*rt);
+    EXPECT_TRUE(profiler->belongsToCurrentThread());
+    profiler->setRuntimeThread();
+    EXPECT_TRUE(profiler->belongsToCurrentThread());
+  });
+
+  registeredFuture.wait();
+  profiler.reset();
+  destroyed.set_value();
+  worker.join();
+
+  ASSERT_NE(profiler, nullptr);
+  EXPECT_FALSE(profiler->belongsToCurrentThread());
+  profiler->setRuntimeThread();
+  EXPECT_TRUE(profiler->belongsToCurrentThread());
+}
+
+TEST(SamplingProfilerTest, ProfilerDestructionCanRaceWithThreadExit) {
+  auto rt = makeRuntime(withSamplingProfilerDisabled);
+
+  // Sample during the race, so thread exit contends with the timer loop for
+  // profilerLock_ while the timer loop may be signalling the exiting thread.
+  ASSERT_TRUE(SamplingProfiler::enable(1000));
+  for (unsigned i = 0; i < 32; ++i) {
+    std::unique_ptr<SamplingProfiler> profiler;
+    std::promise<void> registered;
+    auto registeredFuture = registered.get_future();
+    std::promise<void> exit;
+    auto exitFuture = exit.get_future();
+    std::thread worker([&] {
+      profiler = SamplingProfiler::create(*rt);
+      EXPECT_TRUE(profiler->belongsToCurrentThread());
+      registered.set_value();
+      exitFuture.wait();
+    });
+
+    registeredFuture.wait();
+    exit.set_value();
+    profiler.reset();
+    worker.join();
+  }
+  EXPECT_TRUE(SamplingProfiler::disable());
+}
+
 TEST(SamplingProfilerTest, RegistrationDuringThreadTeardownIsRejected) {
   auto rt = makeRuntime(withSamplingProfilerEnabled);
   auto workerRt = makeRuntime(withSamplingProfilerEnabled);
