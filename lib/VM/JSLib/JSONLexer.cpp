@@ -229,19 +229,25 @@ ExecutionStatus JSONLexer<Kind>::scanNumber() {
     numRef = iter_.cur.endCapture();
   }
 
-  // Check for illegal leading 0.
-  size_t len = numRef.size();
-  assert(len > 0 && "scanNumber must be called on a number-looking char");
-  if (LLVM_UNLIKELY(
-          numRef[0] == '0' && len > 1 && numRef[1] >= '0' &&
-          numRef[1] <= '9')) {
-    // The integer part cannot start with 0, unless it's 0.
-    return errorWithChar(u"Unexpected character in number: ", numRef[1]);
-  }
-
+  // The integer part, which follows the optional minus sign, cannot start
+  // with 0 unless it's 0.
+  size_t intStart = multiplier < 0;
+  CharT first = numRef[intStart];
   if (isTrivialInteger) {
+    // All digits, so a second character is a second digit.
+    if (LLVM_UNLIKELY(first == '0' && (numRef.size() - intStart > 1))) {
+      return errorWithChar(
+          u"Unexpected character in number: ", numRef[intStart + 1]);
+    }
     token_.setNumber((double)integer * multiplier);
     return ExecutionStatus::RETURNED;
+  }
+
+  // The first digit is followed by '.', 'e', a sign or more digits, so the
+  // second character exists.
+  CharT second = numRef[intStart + 1];
+  if (LLVM_UNLIKELY(first == '0' && second >= '0' && second <= '9')) {
+    return errorWithChar(u"Unexpected character in number: ", second);
   }
 
   StrToDoubleParseResult<CharT> parseRes = fastStrToDouble(numRef);
