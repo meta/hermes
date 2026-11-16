@@ -20,6 +20,20 @@
 namespace hermes {
 namespace vm {
 namespace sampling_profiler {
+
+/// Outcome of attempting to sample a single profiler's stack. Distinguishes a
+/// per-profiler skip (which should not stop the sampling thread) from a fatal
+/// error (which should).
+enum class SampleResult {
+  /// The stack was walked successfully; the caller should record the sample.
+  Success,
+  /// The profiler's registered thread has exited, so it could not be sampled.
+  /// The caller should skip this profiler but keep sampling the others.
+  ThreadExited,
+  /// An unrecoverable error occurred; the timer loop thread should stop.
+  Failed,
+};
+
 /// Sampler manages the SamplingProfiler's sampling thread, and abstracts
 /// away platform-specific code for suspending the VM thread and performing the
 /// JS stack walk.
@@ -116,6 +130,20 @@ struct Sampler {
   /// \return the singleton profiler instance.
   static Sampler *get();
 
+  /// Called by the platform's thread-death infrastructure (e.g. a pthread
+  /// TLS destructor on POSIX) when a thread that registered \p profiler is
+  /// exiting. If \p profiler is still registered to the calling thread,
+  /// invalidates the registered thread so subsequent sample attempts skip
+  /// \p profiler instead of signalling a dead thread. No-op on platforms
+  /// where no thread-death synchronization is required (e.g. Windows).
+  ///
+  /// Caller contract: must be invoked on the dying thread itself. The
+  /// implementation uses pthread_self() (or the platform equivalent) to
+  /// identify which registration to invalidate, so calling from any other
+  /// thread would either be a no-op (wrong identity) or unsafe (if the
+  /// dying thread is no longer in the thread list).
+  static void onRegisteredThreadExit(SamplingProfiler *profiler);
+
  protected:
   Sampler();
 
@@ -125,7 +153,11 @@ struct Sampler {
 
  private:
   /// Sample stack for a profiler.
-  bool sampleStack(SamplingProfiler *localProfiler);
+  /// \return SampleResult::ThreadExited if \p localProfiler's registered thread
+  /// has exited (skip it but keep sampling others), SampleResult::Failed on an
+  /// unrecoverable error (stop the timer loop), and SampleResult::Success
+  /// otherwise.
+  SampleResult sampleStack(SamplingProfiler *localProfiler);
 
   // Platform-specific hooks.
 
@@ -158,7 +190,11 @@ struct Sampler {
   /// Platform-specific hook invoked to suspend the VM thread and perform stack
   /// sampling. Note that this method is invoked with both this->profilerLock_
   /// and \p profiler->runtimeDataLock_ locks held.
-  bool platformSuspendVMAndWalkStack(SamplingProfiler *profiler);
+  /// \return SampleResult::ThreadExited if the profiler's registered thread has
+  /// exited (the platform should skip it), SampleResult::Failed on an
+  /// unrecoverable error, and SampleResult::Success once the stack has been
+  /// walked.
+  SampleResult platformSuspendVMAndWalkStack(SamplingProfiler *profiler);
 };
 } // namespace sampling_profiler
 } // namespace vm
