@@ -144,6 +144,37 @@ RANGE_DELTA_BITS = 11
 RANGE_DELTA_MASK = (1 << RANGE_DELTA_BITS) - 1
 
 
+def pack_unicode_ranges(ranges):
+    """Pack inclusive ranges and verify every decoded endpoint before emitting."""
+    ranges = list(ranges)
+    packed = []
+    overflow = []
+    for start, end in ranges:
+        if not 0 <= start <= end <= 0x10FFFF:
+            raise ValueError("Range endpoints must be ordered Unicode code points")
+        delta = end - start
+        if delta < RANGE_DELTA_MASK:
+            word = (start << RANGE_DELTA_BITS) | delta
+        else:
+            if len(overflow) >= 1 << (32 - RANGE_DELTA_BITS):
+                raise ValueError("Range overflow index exceeds its packed field")
+            word = (len(overflow) << RANGE_DELTA_BITS) | RANGE_DELTA_MASK
+            overflow.append((start, end))
+        packed.append(word)
+
+    # Check the representation independently of the encoding branches above.
+    for word, expected in zip(packed, ranges):
+        delta = word & RANGE_DELTA_MASK
+        start_or_index = word >> RANGE_DELTA_BITS
+        if delta == RANGE_DELTA_MASK:
+            decoded = overflow[start_or_index]
+        else:
+            decoded = (start_or_index, start_or_index + delta)
+        if decoded != expected:
+            raise ValueError("Unicode range packing must preserve every endpoint")
+    return packed, overflow
+
+
 def print_template(s, **kwargs):
     """Substitute in the keyword arguments to the template string
     (or direct template) s, and print the result, followed by a
@@ -1617,31 +1648,30 @@ range_array_pool_size_bits: {self._metrics["range_array_pool_size"].bit_length()
             assert offset + size < 0xFFFF, "String pool offset+size exceeds uint16_t"
             return f"{{ {offset}, {size} }}"
 
+        source_ranges = [
+            pair
+            for _, ranges, _ in self._range_pool.values()
+            for pair in (ranges or [])
+        ]
+        packed_ranges, overflow_ranges = pack_unicode_ranges(source_ranges)
+
         def _range_pool():
-            """
-            Using the range pool, generate the UnicodeRange entries for the C++
-            code, that reference the shared range pool.
-
-            Example output:
-
-                static constexpr UnicodeRange UNICODE_RANGE_POOL[] = {
-                    // General_Category: Cc
-                    {0x0000, 0x001F},
-                    {0x007F, 0x009F},
-                };
-            """
-            for (cat, name), (offset, ranges, range_size) in self._range_pool.items():
+            """Emit packed words in the same order as the source range pool."""
+            index = 0
+            for (cat, name), (_, ranges, _) in self._range_pool.items():
                 if self.INCLUDE_COMMENTS:
                     yield f"// {cat}: {name}"
                 if ranges:
-                    # Manually batch the ranges into 3 per line, because
-                    # clang-format wants to format them to a single item per
-                    # line.
-                    for batch in batched(ranges, 3):
-                        yield "".join(
-                            f"{{{as_hex(start)}, {as_hex(end)}}},".ljust(20)
-                            for start, end in batch
-                        ).strip()
+                    for batch in batched(packed_ranges[index : index + len(ranges)], 6):
+                        yield " ".join(f"0x{word:08X}," for word in batch)
+                    index += len(ranges)
+
+        def _overflow_pool():
+            """Emit full endpoints for ranges using the overflow sentinel."""
+            for batch in batched(overflow_ranges, 3):
+                yield " ".join(
+                    f"{{{as_hex(start)}, {as_hex(end)}}}," for start, end in batch
+                )
 
         def _range_array_pool():
             """
@@ -1731,93 +1761,20 @@ static constexpr std::string_view UNICODE_DATA_STRING_POOL = "${string_pool}";
 static constexpr uint32_t UNICODE_RANGE_POOL_DELTA_BITS = ${range_delta_bits};
 static constexpr uint32_t UNICODE_RANGE_POOL_DELTA_MASK = ${range_delta_mask};
 
-/// Check that every input is an ordered range of Unicode code points.
-template <size_t N>
-constexpr bool isValidUnicodeRangePool(const UnicodeRange (&ranges)[N]) {
-  for (const auto &range : ranges)
-    if (range.first > range.second || range.second > 0x10FFFF)
-      return false;
-  return true;
-}
-
-/// Count ranges whose endpoint delta needs the overflow representation.
-template <size_t N>
-constexpr size_t countUnicodeRangeOverflow(const UnicodeRange (&ranges)[N]) {
-  size_t count = 0;
-  for (const auto &range : ranges)
-    count += range.second - range.first >= UNICODE_RANGE_POOL_DELTA_MASK;
-  return count;
-}
-
-/// Compact property ranges and the endpoints of ranges too long to inline.
-template <size_t N, size_t OverflowCount>
-struct PackedUnicodeRangePool {
-  /// Encoded ranges in the original property-pool order.
-  std::array<uint32_t, N> ranges{};
-  /// Full endpoints indexed by entries with the sentinel delta.
-  std::array<UnicodeRange, OverflowCount> overflow{};
-};
-
-/// Encode the readable inputs during constant evaluation.
-template <size_t OverflowCount, size_t N>
-constexpr auto packUnicodeRanges(const UnicodeRange (&ranges)[N]) {
-  static_assert(N <= (1u << (32 - UNICODE_RANGE_POOL_DELTA_BITS)),
-                "Overflow indices must fit in the packed field");
-  PackedUnicodeRangePool<N, OverflowCount> result{};
-  size_t overflowIndex = 0;
-  for (size_t i = 0; i < N; ++i) {
-    const auto range = ranges[i];
-    const auto delta = range.second - range.first;
-    if (delta < UNICODE_RANGE_POOL_DELTA_MASK) {
-      result.ranges[i] = (range.first << UNICODE_RANGE_POOL_DELTA_BITS) | delta;
-    } else {
-      result.ranges[i] =
-          (overflowIndex << UNICODE_RANGE_POOL_DELTA_BITS) |
-          UNICODE_RANGE_POOL_DELTA_MASK;
-      result.overflow[overflowIndex++] = range;
-    }
-  }
-  return result;
-}
-
-/// Check the encoded result independently, including every overflow index.
-template <size_t N, size_t OverflowCount>
-constexpr bool packedUnicodeRangesMatch(
-    const UnicodeRange (&ranges)[N],
-    const PackedUnicodeRangePool<N, OverflowCount> &packed) {
-  size_t overflowCount = 0;
-  for (size_t i = 0; i < N; ++i) {
-    const auto word = packed.ranges[i];
-    const auto delta = word & UNICODE_RANGE_POOL_DELTA_MASK;
-    const auto startOrIndex = word >> UNICODE_RANGE_POOL_DELTA_BITS;
-    UnicodeRange decoded{startOrIndex, startOrIndex + delta};
-    if (delta == UNICODE_RANGE_POOL_DELTA_MASK) {
-      if (startOrIndex != overflowCount || startOrIndex >= OverflowCount)
-        return false;
-      decoded = packed.overflow[startOrIndex];
-      ++overflowCount;
-    }
-    if (decoded.first != ranges[i].first || decoded.second != ranges[i].second)
-      return false;
-  }
-  return overflowCount == OverflowCount;
-}
-
-// The readable source ranges are used only during constant evaluation.
-static constexpr auto UNICODE_RANGE_POOL = [] {
+// Keep both tables together so decoding can share their base address.
+static constexpr struct {
+  std::array<uint32_t, ${range_count}> ranges;
+  std::array<UnicodeRange, ${overflow_count}> overflow;
+} UNICODE_RANGE_POOL = {
 // clang-format off
-  constexpr UnicodeRange ranges[] = {
+  {{
 ${range_pool}
-  };
+  }},
+  {{
+${overflow_pool}
+  }},
 // clang-format on
-  static_assert(isValidUnicodeRangePool(ranges), "Invalid Unicode range");
-  constexpr auto packed =
-      packUnicodeRanges<countUnicodeRangeOverflow(ranges)>(ranges);
-  static_assert(
-      packedUnicodeRangesMatch(ranges, packed),
-      "Unicode range packing must preserve every endpoint and overflow entry");
-  return packed;
-}();
+};
 
 static constexpr UnicodeRangePoolRef UNICODE_RANGE_ARRAY_POOL[] {
 ${range_array_pool}
@@ -1855,6 +1812,9 @@ ${range_map_script_extensions_property}
     """,
             string_pool=string_pool,
             range_pool=indent("\n".join(_range_pool()), "    "),
+            range_count=len(packed_ranges),
+            overflow_pool=indent("\n".join(_overflow_pool()), "    "),
+            overflow_count=len(overflow_ranges),
             range_delta_bits=RANGE_DELTA_BITS,
             range_delta_mask=RANGE_DELTA_MASK,
             range_array_pool="\n".join(_range_array_pool()),

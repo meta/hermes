@@ -40,13 +40,17 @@ not change unless the inputs or generator changed. No manual brace repair or
 other postprocessing is needed: the generator emits the outer `std::array`
 aggregate braces as well as the individual range braces.
 
-The property pool keeps readable inclusive endpoint pairs. C++ constant
-evaluation packs them into 32-bit words, choosing the overflow table for long
-ranges automatically. Do not calculate packed words or overflow indices by
-hand. Static assertions validate the source ranges and compare every decoded
-range with its original endpoints. If changing the encoding, update the
-generator template and `decodeUnicodeRange` in `CharacterProperties.cpp`
-together.
+The generator packs inclusive endpoint pairs into 32-bit words and emits a
+separate overflow table for long ranges. It validates the source endpoints and
+checks that decoding every packed word reproduces its original range before
+emitting either table. Do not calculate packed words or overflow indices by
+hand. C++ only decodes the generated data. If changing the encoding, update
+`pack_unicode_ranges` and `decodeUnicodeRange` in `CharacterProperties.cpp`
+together. Run the generator's boundary and invalid-input tests without downloads:
+
+```sh
+python3 utils/test_genUnicodeTable.py
+```
 
 Build and run the focused tests with property escapes enabled:
 
