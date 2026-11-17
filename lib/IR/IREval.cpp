@@ -482,7 +482,10 @@ Literal *hermes::evalBinaryOperator(
 
       if (leftNull) {
         if (rightLiteralNum) {
-          return rhs;
+          // `null` coerces to +0, and +0 + -0 is +0, not -0, so the operand
+          // cannot be returned unchanged. Adding +0 is correct for every
+          // other value too. (NaN operands are already handled above.)
+          return builder.getLiteralNumber(0 + rightLiteralNum->getValue());
         } else if (rightStr) {
           SmallString<256> result =
               buildString("null", ctx.toString(rightStr->getValue()));
@@ -492,7 +495,8 @@ Literal *hermes::evalBinaryOperator(
 
       if (rightNull) {
         if (leftLiteralNum) {
-          return lhs;
+          // Same signed-zero reason as the `leftNull` case above.
+          return builder.getLiteralNumber(leftLiteralNum->getValue() + 0);
         } else if (leftStr) {
           SmallString<256> result =
               buildString(ctx.toString(leftStr->getValue()), "null");
