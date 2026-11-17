@@ -426,20 +426,33 @@ CreateFunctionInst *ESTreeIRGen::genTypedImplicitConstructor(
           }
         }
 
-        // Forward the super constructor's parameters, if any.
+        // Declare the super constructor's parameters, if any, typed as
+        // emitParameters() types them. A rest parameter, always the last
+        // one, gets no JSDynamicParam.
         CallInst::ArgumentList args;
+        bool hasRest = false;
         if (superCtorTypeInfo) {
-          auto params = superCtorTypeInfo->getParams();
-          for (const flow::TypedFunctionType::Param &param : params) {
+          for (const flow::TypedFunctionType::Param &param :
+               superCtorTypeInfo->getParams()) {
+            if (param.rest) {
+              hasRest = true;
+              break;
+            }
             auto *jsParam = Builder.createJSDynamicParam(func, param.name);
-            jsParam->setType(flowTypeToIRType(param.type));
+            Type irType = flowTypeToIRType(param.type);
+            // Optional parameters can receive undefined when omitted.
+            if (param.optional)
+              irType =
+                  getTypeContext().unionTy(irType, Type::createUndefined());
+            jsParam->setType(irType);
             auto *loadParam = Builder.createLoadParamInst(jsParam);
             curFunction()->jsParams.push_back(loadParam);
             args.push_back(loadParam);
           }
-          // +1 for 'this'.
-          func->setExpectedParamCountIncludingThis(params.size() + 1);
         }
+        // Like a default derived constructor, which behaves like
+        // constructor(...args) { super(...args); }, this one has length 0.
+        func->setExpectedParamCountIncludingThis(1);
 
         // Load the super class callee and call it.
         Value *callee = genExpression(superClassNode);
@@ -447,14 +460,27 @@ CreateFunctionInst *ESTreeIRGen::genTypedImplicitConstructor(
         Value *newTarget =
             Builder.createGetNewTargetInst(func->getNewTargetParam());
 
-        Builder.createCallInst(
-            callee,
-            /* target */ Builder.getEmptySentinel(),
-            /* calleeIsAlwaysClosure */ true,
-            Builder.getEmptySentinel(),
-            newTarget,
-            thisVal,
-            args);
+        if (hasRest) {
+          // The rest parameter takes a variable number of arguments, so
+          // forward all of them, like super(...arguments). Not
+          // applyArguments: FuncSigOpts recognizes only copyRestArgs as
+          // reading all arguments, and would zero a known caller's extras.
+          Value *allArgs = genBuiltinCall(
+              BuiltinMethod::HermesBuiltin_copyRestArgs,
+              Builder.getLiteralNumber(0));
+          genBuiltinCall(
+              BuiltinMethod::HermesBuiltin_applyWithNewTarget,
+              {callee, allArgs, thisVal, newTarget});
+        } else {
+          Builder.createCallInst(
+              callee,
+              /* target */ Builder.getEmptySentinel(),
+              /* calleeIsAlwaysClosure */ true,
+              Builder.getEmptySentinel(),
+              newTarget,
+              thisVal,
+              args);
+        }
       }
 
       emitTypedFieldInitCall(curFunction()->typedClassContext.type);

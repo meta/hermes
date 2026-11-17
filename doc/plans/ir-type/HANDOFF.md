@@ -381,6 +381,11 @@ Fixed after the review, following `typed-mode-bugs-plan.md`:
   Array<T>()". Instances of `Array<T>` and of classes deriving from it are
   fast arrays; the FlowChecker rejects such classes with stored instance
   fields.
+- `01a1cea0-0d4c` (the implicit constructor of a typed class forwarded an
+  inherited rest parameter as one argument, and typed forwarded optional
+  parameters without `undefined`): fixed by "Fix implicit typed ctor param
+  forwarding". With a rest parameter, all arguments are copied into an
+  array and applied to the super constructor.
 
 The redundant double narrow of an object rest binding whose type equals a
 recursive alias is fixed: FlowChecker records the rest type on the
