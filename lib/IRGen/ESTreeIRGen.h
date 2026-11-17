@@ -14,6 +14,7 @@
 #include "hermes/Sema/FlowContext.h"
 #include "hermes/Sema/SemContext.h"
 
+#include "llvh/ADT/Optional.h"
 #include "llvh/ADT/StringRef.h"
 #include "llvh/Support/Debug.h"
 
@@ -39,6 +40,19 @@ inline Identifier getNameFieldFromID(const ESTree::Node *ID) {
 
 /// \returns true if \p node is known to be a constant expression.
 bool isConstantExpr(ESTree::Node *node);
+
+/// DenseMap traits that identify Flow types by Flow's structural equality
+/// (TypeInfo::equals, which is co-inductive and so terminates on recursive
+/// types) instead of by pointer. Flow accepts assignments between such types
+/// without any conversion, so they must lower to one IR type.
+struct FlowTypeStructuralInfo : llvh::DenseMapInfo<const flow::TypeInfo *> {
+  /// \return a hash of \p t consistent with TypeInfo::equals. It reads only
+  ///   \p t and its immediate children, so it terminates on recursive types.
+  static unsigned getHashValue(const flow::TypeInfo *t);
+  /// \return whether \p a and \p b are the same key: identical pointers, or
+  ///   two real types that Flow considers equal.
+  static bool isEqual(const flow::TypeInfo *a, const flow::TypeInfo *b);
+};
 
 //===----------------------------------------------------------------------===//
 // FunctionContext
@@ -622,6 +636,24 @@ class ESTreeIRGen {
   /// resolve without infinite recursion.
   llvh::DenseMap<const flow::ClassType *, Type> loweredClassTypes_;
 
+  /// Structural Flow types (Array<T> class specializations and typed function
+  /// signatures) whose lowering to an IR type has started but not finished.
+  /// The value is NoType until lowering reaches the same type again (or a
+  /// type Flow considers equal to it), which means the type is recursive;
+  /// then it is the IR entry reserved to break the cycle, which is filled
+  /// when the outermost lowering finishes.
+  llvh::DenseMap<const flow::TypeInfo *, Type, FlowTypeStructuralInfo>
+      loweringInProgress_;
+
+  /// Finished lowerings of structural Flow types (see loweringInProgress_).
+  /// Keyed by Flow's structural equality, so that every Flow type equal to a
+  /// lowered one yields the same IR Type. Recursive IR types are not interned
+  /// by TypeContext, so without this, two Flow-equal recursive types (e.g. an
+  /// alias `type F = (x: number) => F` and a function declared as
+  /// `(x: number): F`) would get unrelated IR ids.
+  llvh::DenseMap<const flow::TypeInfo *, Type, FlowTypeStructuralInfo>
+      loweredStructuralTypes_;
+
   /// Handles any methods that were not overridden on typed classes.
   /// This includes @Hermes.final annotated methods, as well as methods that
   /// simply have no known overrides.
@@ -921,9 +953,38 @@ class ESTreeIRGen {
   /// Convert a Flow type into an IR type. Non-static because it needs the
   /// Module's TypeContext to construct unions.
   Type flowTypeToIRType(flow::TypeInfo *flowType);
-  Type flowTypeToIRType(flow::Type *flowType) {
-    return flowTypeToIRType(flowType->info);
-  }
+  Type flowTypeToIRType(flow::Type *flowType);
+
+  /// Lower a Flow typed-function signature to an IR Function type: interned,
+  /// unless the signature is recursive. Used for both TypedFunction values and
+  /// class constructors.
+  Type lowerTypedFunction(flow::TypedFunctionType *ft);
+
+  /// Lower the Array<T> class specialization \p arrayClass to an IR Array
+  /// type: interned, unless the element type refers back to the array.
+  /// \pre flowContext_.isArrayClassType(arrayClass).
+  Type lowerArrayClassType(flow::ClassType *arrayClass);
+
+  /// Start lowering the structural Flow type \p key (see loweringInProgress_).
+  /// \return the IR Type to use for \p key if it is already known: the
+  ///   finished lowering of a type equal to \p key, or, if a type equal to
+  ///   \p key is being lowered (a cycle), the entry reserved for that type,
+  ///   reserving one with \p reserve the first time.
+  ///   Otherwise, mark \p key in progress and return llvh::None; the caller
+  ///   must lower the children and call finishStructuralLowering.
+  llvh::Optional<Type> beginStructuralLowering(
+      const flow::TypeInfo *key,
+      Type (TypeContext::*reserve)());
+
+  /// End the lowering of \p key started by beginStructuralLowering.
+  /// \return the entry reserved for \p key because lowering its children
+  ///   reached it (or a type equal to it) again, or NoType if they did not. The
+  ///   caller must fill the reserved entry, or create an interned one if
+  ///   NoType, and record the result with recordStructuralLowering.
+  Type finishStructuralLowering(const flow::TypeInfo *key);
+
+  /// Record \p result as the finished lowering of \p key and return it.
+  Type recordStructuralLowering(const flow::TypeInfo *key, Type result);
 
   /// @}
 
@@ -1413,6 +1474,14 @@ class ESTreeIRGen {
       ESTree::ArrowFunctionExpressionNode *AF,
       Identifier nameHint,
       ESTree::Node *parentNode = nullptr);
+
+  /// If the Flow type of \p functionNode is a typed function, set its lowered
+  /// IR type as the type of the closures of \p F (Function::setFunctionType).
+  /// Call it for the function that user code receives as a closure, before
+  /// any CreateFunctionInst of \p F is created.
+  void setFunctionTypeFromFlow(
+      Function *F,
+      ESTree::FunctionLikeNode *functionNode);
 
   /// Generate IR for a function which inherits the current captured state
   /// (this, arguments etc.), which may be lazy.

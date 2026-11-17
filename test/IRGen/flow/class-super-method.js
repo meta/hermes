@@ -58,24 +58,24 @@ class B extends A {
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: any, [%VS1.exports]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.A]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.B]: any
-// CHECK-NEXT:  %6 = CreateFunctionInst (:object) %1: environment, %VS1: any, %A(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.A]: any
-// CHECK-NEXT:  %8 = CreateFunctionInst (:object) %1: environment, %VS1: any, %f(): functionCode
-// CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null, "f": string, %8: object
+// CHECK-NEXT:  %6 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %A(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %6: function(undefined), [%VS1.A]: any
+// CHECK-NEXT:  %8 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %f(): functionCode
+// CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null, "f": string, %8: function(number)
 // CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %10: classInstance(), [%VS1.?A.prototype]: classInstance()
-// CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %6: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %6: function(undefined), "prototype": string
 // CHECK-NEXT:  %13 = LoadFrameInst (:any) %1: environment, [%VS1.A]: any
-// CHECK-NEXT:  %14 = CheckedTypeCastInst (:object) %13: any, type(object)
-// CHECK-NEXT:  %15 = CreateFunctionInst (:object) %1: environment, %VS1: any, %B(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %15: object, [%VS1.B]: any
+// CHECK-NEXT:  %14 = CheckedTypeCastInst (:function(undefined)) %13: any, type(function(undefined))
+// CHECK-NEXT:  %15 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %B(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %15: function(undefined), [%VS1.B]: any
 // CHECK-NEXT:  %17 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?A.prototype]: classInstance()
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:object) %17: classInstance()
-// CHECK-NEXT:  %19 = CreateFunctionInst (:object) %1: environment, %VS1: any, %"f 1#"(): functionCode
-// CHECK-NEXT:  %20 = AllocTypedNonEnumObjectInst (:object) %18: object, "f": string, %19: object
+// CHECK-NEXT:  %19 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %"f 1#"(): functionCode
+// CHECK-NEXT:  %20 = AllocTypedNonEnumObjectInst (:object) %18: object, "f": string, %19: function(number)
 // CHECK-NEXT:  %21 = UnionNarrowTrustedInst (:classInstance()) %20: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %21: classInstance(), [%VS1.?B.prototype]: classInstance()
-// CHECK-NEXT:        StorePropertyStrictInst %21: classInstance(), %15: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %21: classInstance(), %15: function(undefined), "prototype": string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -117,11 +117,11 @@ class B extends A {
 // CHECK-NEXT:  %3 = LoadParamInst (:number) %x: number
 // CHECK-NEXT:       StoreFrameInst %2: environment, %3: number, [%VS4.x]: any
 // CHECK-NEXT:  %5 = LoadFrameInst (:any) %1: environment, [%VS1.A]: any
-// CHECK-NEXT:  %6 = CheckedTypeCastInst (:object) %5: any, type(object)
+// CHECK-NEXT:  %6 = CheckedTypeCastInst (:function(undefined)) %5: any, type(function(undefined))
 // CHECK-NEXT:  %7 = GetNewTargetInst (:object) %new.target: object
 // CHECK-NEXT:  %8 = LoadFrameInst (:any) %2: environment, [%VS4.x]: any
 // CHECK-NEXT:  %9 = CheckedTypeCastInst (:number) %8: any, type(number)
-// CHECK-NEXT:  %10 = CallInst [njsf] (:undefined) %6: object, empty: any, false: boolean, empty: any, %7: object, %0: classInstance(B), %9: number
+// CHECK-NEXT:  %10 = CallInst [njsf] (:undefined) %6: function(undefined), empty: any, false: boolean, empty: any, %7: object, %0: classInstance(B), %9: number
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -133,8 +133,8 @@ class B extends A {
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS5: any, %1: environment
 // CHECK-NEXT:  %3 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?A.prototype]: classInstance()
-// CHECK-NEXT:  %4 = PrLoadInst (:object) %3: classInstance(), 0: number, "f": string
-// CHECK-NEXT:  %5 = CallInst [njsf] (:number) %4: object, empty: any, false: boolean, empty: any, undefined: undefined, %0: classInstance(B)
+// CHECK-NEXT:  %4 = PrLoadInst (:function(number)) %3: classInstance(), 0: number, "f": string
+// CHECK-NEXT:  %5 = CallInst [njsf] (:number) %4: function(number), empty: any, false: boolean, empty: any, undefined: undefined, %0: classInstance(B)
 // CHECK-NEXT:  %6 = BinaryAddInst (:any) %5: number, 23: number
 // CHECK-NEXT:  %7 = CheckedTypeCastInst (:number) %6: any, type(number)
 // CHECK-NEXT:       ReturnInst %7: number

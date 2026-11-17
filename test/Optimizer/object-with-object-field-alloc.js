@@ -48,8 +48,8 @@ new Foo();
 // CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %11: object, "prototype": string
 // CHECK-NEXT:  %13 = LIRAllocTypedNonEnumObjectFromBufferInst (:object) %0: null
 // CHECK-NEXT:  %14 = UnionNarrowTrustedInst (:classInstance()) %13: object
-// CHECK-NEXT:  %15 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
-// CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %15: object, "prototype": string
+// CHECK-NEXT:  %15 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %Symbol(): functionCode
+// CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %15: function(undefined), "prototype": string
 // CHECK-NEXT:  %17 = LIRAllocTypedNonEnumObjectFromBufferInst (:object) %0: null
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
 // CHECK-NEXT:  %19 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
@@ -58,12 +58,12 @@ new Foo();
 // CHECK-NEXT:  %22 = LIRAllocTypedNonEnumObjectFromBufferInst (:object) %0: null
 // CHECK-NEXT:  %23 = UnionNarrowTrustedInst (:classInstance()) %22: object
 // CHECK-NEXT:        StoreFrameInst %21: environment, %23: classInstance(), [%VS0.?O.prototype]: classInstance()
-// CHECK-NEXT:  %25 = CreateFunctionInst (:object) empty: any, empty: any, %O(): functionCode
-// CHECK-NEXT:        StorePropertyStrictInst %23: classInstance(), %25: object, "prototype": string
+// CHECK-NEXT:  %25 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %O(): functionCode
+// CHECK-NEXT:        StorePropertyStrictInst %23: classInstance(), %25: function(undefined), "prototype": string
 // CHECK-NEXT:  %27 = LIRAllocTypedNonEnumObjectFromBufferInst (:object) %0: null
 // CHECK-NEXT:  %28 = UnionNarrowTrustedInst (:classInstance()) %27: object
-// CHECK-NEXT:  %29 = CreateFunctionInst (:object) %21: environment, %VS0: any, %Foo(): functionCode
-// CHECK-NEXT:        StorePropertyStrictInst %28: classInstance(), %29: object, "prototype": string
+// CHECK-NEXT:  %29 = CreateFunctionInst (:function(undefined)) %21: environment, %VS0: any, %Foo(): functionCode
+// CHECK-NEXT:        StorePropertyStrictInst %28: classInstance(), %29: function(undefined), "prototype": string
 // CHECK-NEXT:  %31 = LIRAllocTypedObjectFromBufferInst (:object) %28: classInstance(), "o0": string, uninit: uninit, "o1": string, uninit: uninit, "o2": string, uninit: uninit
 // CHECK-NEXT:  %32 = UnionNarrowTrustedInst (:classInstance(Foo)) %31: object
 // CHECK-NEXT:  %33 = LIRAllocTypedObjectFromBufferInst (:object) %23: classInstance(), "i": string, 0: number

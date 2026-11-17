@@ -6,6 +6,7 @@
  */
 
 #include "ESTreeIRGen.h"
+#include "llvh/ADT/Hashing.h"
 #include "llvh/ADT/ScopeExit.h"
 
 namespace hermes {
@@ -607,7 +608,7 @@ Value *ESTreeIRGen::getDefaultInitValue(flow::Type *type) {
     case flow::TypeKind::Union: {
       for (auto *arm : llvh::cast<flow::UnionType>(type->info)->getTypes()) {
         // Try to find a type that is not IDZ.
-        if (!getTypeContext().isIDZType(flowTypeToIRType(arm->info)))
+        if (!getTypeContext().isIDZType(flowTypeToIRType(arm)))
           return getDefaultInitValue(arm);
       }
       return Builder.getLiteralPositiveZero();
@@ -636,6 +637,122 @@ std::pair<Value *, Type> ESTreeIRGen::getClassMemberVarInit(flow::Type *type) {
   if (tc.isIDZType(irType))
     return {Builder.getLiteralEmpty(), tc.unionTy(irType, Type::createEmpty())};
   return {getDefaultInitValue(type), irType};
+}
+
+unsigned FlowTypeStructuralInfo::getHashValue(const flow::TypeInfo *t) {
+  // TypeInfo::hash reads only t's own node, so every function signature of
+  // one arity hashes alike. Mix in the children's hashes to spread them.
+  unsigned h = t->hash();
+  if (auto *ft = llvh::dyn_cast<flow::TypedFunctionType>(t)) {
+    h = (unsigned)llvh::hash_combine(h, ft->getReturnType()->info->hash());
+    if (ft->getThisParam())
+      h = (unsigned)llvh::hash_combine(h, ft->getThisParam()->info->hash());
+    for (const flow::TypedFunctionType::Param &p : ft->getParams())
+      h = (unsigned)llvh::hash_combine(h, p.type->info->hash());
+  }
+  return h;
+}
+
+bool FlowTypeStructuralInfo::isEqual(
+    const flow::TypeInfo *a,
+    const flow::TypeInfo *b) {
+  if (a == b)
+    return true;
+  if (a == getEmptyKey() || a == getTombstoneKey() || b == getEmptyKey() ||
+      b == getTombstoneKey())
+    return false;
+  return a->equals(b);
+}
+
+llvh::Optional<Type> ESTreeIRGen::beginStructuralLowering(
+    const flow::TypeInfo *key,
+    Type (TypeContext::*reserve)()) {
+  auto done = loweredStructuralTypes_.find(key);
+  if (done != loweredStructuralTypes_.end())
+    return done->second;
+  auto [it, inserted] =
+      loweringInProgress_.try_emplace(key, Type::createNoType());
+  if (inserted)
+    return llvh::None;
+  // Reached again while lowering the children of key (or of a type equal to
+  // it): the type is recursive. Reserve an entry for it, to be filled when its
+  // lowering finishes. Only the kind and the id of the reserved entry are
+  // valid until then, which is all the type algebra reads from an Array or
+  // Function entry.
+  if (it->second == Type::createNoType())
+    it->second = (getTypeContext().*reserve)();
+  return it->second;
+}
+
+Type ESTreeIRGen::finishStructuralLowering(const flow::TypeInfo *key) {
+  auto it = loweringInProgress_.find(key);
+  assert(it != loweringInProgress_.end() && "structural lowering not begun");
+  Type reserved = it->second;
+  loweringInProgress_.erase(it);
+  return reserved;
+}
+
+Type ESTreeIRGen::recordStructuralLowering(
+    const flow::TypeInfo *key,
+    Type result) {
+  bool inserted = loweredStructuralTypes_.insert({key, result}).second;
+  (void)inserted;
+  assert(inserted && "structural type lowered twice");
+  return result;
+}
+
+Type ESTreeIRGen::lowerTypedFunction(flow::TypedFunctionType *ft) {
+  if (llvh::Optional<Type> known =
+          beginStructuralLowering(ft, &TypeContext::reserveFunction))
+    return *known;
+
+  TypeContext &tc = getTypeContext();
+  Type ret = flowTypeToIRType(ft->getReturnType());
+  Type thisTy = ft->getThisParam() ? flowTypeToIRType(ft->getThisParam())
+                                   : Type::createNoType();
+  Type restTy = Type::createNoType();
+  llvh::SmallVector<FunctionParam, 4> params;
+  for (const flow::TypedFunctionType::Param &p : ft->getParams()) {
+    Type pty = flowTypeToIRType(p.type);
+    if (p.rest) {
+      restTy = pty;
+      continue;
+    }
+    params.push_back(FunctionParam{pty.getRawId(), p.optional});
+  }
+
+  Type reserved = finishStructuralLowering(ft);
+  if (reserved == Type::createNoType()) {
+    return recordStructuralLowering(
+        ft,
+        tc.createFunction(
+            ret, thisTy, restTy, params, ft->isAsync(), ft->isGenerator()));
+  }
+  tc.fillFunction(
+      reserved, ret, thisTy, restTy, params, ft->isAsync(), ft->isGenerator());
+  return recordStructuralLowering(ft, reserved);
+}
+
+Type ESTreeIRGen::lowerArrayClassType(flow::ClassType *arrayClass) {
+  // The Array ClassType is canonical per element type: Flow caches generic
+  // specializations by their type arguments.
+  const flow::TypeInfo *key = arrayClass;
+  if (llvh::Optional<Type> known =
+          beginStructuralLowering(key, &TypeContext::reserveArray))
+    return *known;
+
+  Type elem = flowTypeToIRType(flowContext_.getArrayElementType(arrayClass));
+
+  TypeContext &tc = getTypeContext();
+  Type reserved = finishStructuralLowering(key);
+  if (reserved == Type::createNoType())
+    return recordStructuralLowering(key, tc.createArray(elem));
+  tc.fillArray(reserved, elem);
+  return recordStructuralLowering(key, reserved);
+}
+
+Type ESTreeIRGen::flowTypeToIRType(flow::Type *flowType) {
+  return flowTypeToIRType(flowType->info);
 }
 
 Type ESTreeIRGen::flowTypeToIRType(flow::TypeInfo *flowType) {
@@ -674,10 +791,15 @@ Type ESTreeIRGen::flowTypeToIRType(flow::TypeInfo *flowType) {
     case flow::TypeKind::NativeFunction:
       return Type::createNumber();
     case flow::TypeKind::TypedFunction:
+      return lowerTypedFunction(llvh::cast<flow::TypedFunctionType>(flowType));
     case flow::TypeKind::UntypedFunction:
       return Type::createObject();
     case flow::TypeKind::Class: {
       auto *classType = llvh::cast<flow::ClassType>(flowType);
+      // Surface arrays (T[], Array<T>) are specializations of the builtin
+      // Array class. Lower them to an IR Array, which keeps the element type.
+      if (flowContext_.isArrayClassType(classType))
+        return lowerArrayClassType(classType);
       // Identity cache: return the reserved/finished entry if present.
       auto it = loweredClassTypes_.find(classType);
       if (it != loweredClassTypes_.end())
@@ -717,8 +839,17 @@ Type ESTreeIRGen::flowTypeToIRType(flow::TypeInfo *flowType) {
       tc.fillClassInstance(t, classType->getClassName(), fields);
       return t;
     }
-    case flow::TypeKind::ClassConstructor:
-      return Type::createObject();
+    case flow::TypeKind::ClassConstructor: {
+      auto *cc = llvh::cast<flow::ClassConstructorType>(flowType);
+      flow::ClassType *ct = cc->getClassTypeInfo();
+      // No explicit constructor -> no signature; keep Object. (getConstructor
+      // TypeInfo() would null-deref constructorType_ here.)
+      if (!ct->getConstructorType())
+        return Type::createObject();
+      // A constructor's Flow type is always a TypedFunctionType: FlowChecker
+      // parses it with a default return type.
+      return lowerTypedFunction(ct->getConstructorTypeInfo());
+    }
     case flow::TypeKind::Tuple:
     case flow::TypeKind::ExactObject:
       return Type::createObject();

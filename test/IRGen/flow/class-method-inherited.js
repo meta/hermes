@@ -52,31 +52,31 @@ new D().inherited();
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.D]: any
 // CHECK-NEXT:  %6 = CreateFunctionInst (:object) %1: environment, %VS1: any, %C(): functionCode
 // CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.C]: any
-// CHECK-NEXT:  %8 = CreateFunctionInst (:object) %1: environment, %VS1: any, %inherited(): functionCode
-// CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null, "inherited": string, %8: object
+// CHECK-NEXT:  %8 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %inherited(): functionCode
+// CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null, "inherited": string, %8: function(number)
 // CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %10: classInstance(), [%VS1.?C.prototype]: classInstance()
 // CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %6: object, "prototype": string
 // CHECK-NEXT:  %13 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
 // CHECK-NEXT:  %14 = CheckedTypeCastInst (:object) %13: any, type(object)
-// CHECK-NEXT:  %15 = CreateFunctionInst (:object) %1: environment, %VS1: any, %D(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %15: object, [%VS1.D]: any
+// CHECK-NEXT:  %15 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %D(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %15: function(undefined), [%VS1.D]: any
 // CHECK-NEXT:  %17 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?C.prototype]: classInstance()
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:object) %17: classInstance()
-// CHECK-NEXT:  %19 = PrLoadInst (:object) %18: object, 0: number, "inherited": string
-// CHECK-NEXT:  %20 = AllocTypedNonEnumObjectInst (:object) %18: object, "inherited": string, %19: object
+// CHECK-NEXT:  %19 = PrLoadInst (:function(number)) %18: object, 0: number, "inherited": string
+// CHECK-NEXT:  %20 = AllocTypedNonEnumObjectInst (:object) %18: object, "inherited": string, %19: function(number)
 // CHECK-NEXT:  %21 = UnionNarrowTrustedInst (:classInstance()) %20: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %21: classInstance(), [%VS1.?D.prototype]: classInstance()
-// CHECK-NEXT:        StorePropertyStrictInst %21: classInstance(), %15: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %21: classInstance(), %15: function(undefined), "prototype": string
 // CHECK-NEXT:  %24 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
-// CHECK-NEXT:  %25 = CheckedTypeCastInst (:object) %24: any, type(object)
+// CHECK-NEXT:  %25 = CheckedTypeCastInst (:function(undefined)) %24: any, type(function(undefined))
 // CHECK-NEXT:  %26 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?D.prototype]: classInstance()
 // CHECK-NEXT:  %27 = AllocTypedObjectInst (:object) %26: classInstance()
 // CHECK-NEXT:  %28 = UnionNarrowTrustedInst (:classInstance(D)) %27: object
-// CHECK-NEXT:  %29 = CallInst (:any) %25: object, %D(): functionCode, true: boolean, empty: any, %25: object, %28: classInstance(D)
+// CHECK-NEXT:  %29 = CallInst (:any) %25: function(undefined), %D(): functionCode, true: boolean, empty: any, %25: function(undefined), %28: classInstance(D)
 // CHECK-NEXT:  %30 = TypedLoadParentInst (:object) %28: classInstance(D)
-// CHECK-NEXT:  %31 = PrLoadInst (:object) %30: object, 0: number, "inherited": string
-// CHECK-NEXT:  %32 = CallInst [njsf] (:number) %31: object, %inherited(): functionCode, true: boolean, empty: any, undefined: undefined, %28: classInstance(D)
+// CHECK-NEXT:  %31 = PrLoadInst (:function(number)) %30: object, 0: number, "inherited": string
+// CHECK-NEXT:  %32 = CallInst [njsf] (:number) %31: function(number), %inherited(): functionCode, true: boolean, empty: any, undefined: undefined, %28: classInstance(D)
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

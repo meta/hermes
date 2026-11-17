@@ -39,10 +39,10 @@ sink(main);
 // CHECK-NEXT:  %15 = UnionNarrowTrustedInst (:classInstance()) %14: object
 // CHECK-NEXT:        StoreFrameInst %0: environment, %15: classInstance(), [%VS0.?Array.prototype]: classInstance()
 // CHECK-NEXT:        StorePropertyStrictInst %15: classInstance(), %13: object, "prototype": string
-// CHECK-NEXT:  %18 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
+// CHECK-NEXT:  %18 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %Symbol(): functionCode
 // CHECK-NEXT:  %19 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %20 = UnionNarrowTrustedInst (:classInstance()) %19: object
-// CHECK-NEXT:        StorePropertyStrictInst %20: classInstance(), %18: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %20: classInstance(), %18: function(undefined), "prototype": string
 // CHECK-NEXT:  %22 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
 // CHECK-NEXT:  %23 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %24 = UnionNarrowTrustedInst (:classInstance()) %23: object
@@ -92,11 +92,11 @@ sink(main);
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
 // CHECK-NEXT:  %1 = LoadFrameInst (:classInstance()) %0: environment, [%VS0.?Array.prototype]: classInstance()
 // CHECK-NEXT:  %2 = AllocFastArrayInst (:object) 3: number, %1: classInstance()
-// CHECK-NEXT:       FastArrayPushInst 1: number, %2: object
-// CHECK-NEXT:       FastArrayPushInst 2: number, %2: object
-// CHECK-NEXT:       FastArrayPushInst 3: number, %2: object
-// CHECK-NEXT:  %6 = CheckedTypeCastInst (:classInstance(Array)) %2: object, type(classInstance(Array))
-// CHECK-NEXT:  %7 = FastArrayLoadInst (:number) %6: classInstance(Array), 0: number
+// CHECK-NEXT:  %3 = UnionNarrowTrustedInst (:array(number)) %2: object
+// CHECK-NEXT:       FastArrayPushInst 1: number, %3: array(number)
+// CHECK-NEXT:       FastArrayPushInst 2: number, %3: array(number)
+// CHECK-NEXT:       FastArrayPushInst 3: number, %3: array(number)
+// CHECK-NEXT:  %7 = FastArrayLoadInst (:number) %3: array(number), 0: number
 // CHECK-NEXT:  %8 = FAddInst (:number) %7: number, 1: number
 // CHECK-NEXT:       ReturnInst %8: number
 // CHECK-NEXT:function_end

@@ -42,16 +42,16 @@ id<string>('a');
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS1: any, %0: environment
 // CHECK-NEXT:  %2 = LoadParamInst (:any) %exports: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: any, [%VS1.exports]: any
-// CHECK-NEXT:  %4 = CreateFunctionInst (:object) %1: environment, %VS1: any, %id(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %4: object, [%VS1.id]: any
-// CHECK-NEXT:  %6 = CreateFunctionInst (:object) %1: environment, %VS1: any, %"id 1#"(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.id#1]: any
+// CHECK-NEXT:  %4 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %id(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %4: function(number), [%VS1.id]: any
+// CHECK-NEXT:  %6 = CreateFunctionInst (:function(string)) %1: environment, %VS1: any, %"id 1#"(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %6: function(string), [%VS1.id#1]: any
 // CHECK-NEXT:  %8 = LoadFrameInst (:any) %1: environment, [%VS1.id]: any
-// CHECK-NEXT:  %9 = CheckedTypeCastInst (:object) %8: any, type(object)
-// CHECK-NEXT:  %10 = CallInst [njsf] (:number) %9: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 1: number
+// CHECK-NEXT:  %9 = CheckedTypeCastInst (:function(number)) %8: any, type(function(number))
+// CHECK-NEXT:  %10 = CallInst [njsf] (:number) %9: function(number), empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 1: number
 // CHECK-NEXT:  %11 = LoadFrameInst (:any) %1: environment, [%VS1.id#1]: any
-// CHECK-NEXT:  %12 = CheckedTypeCastInst (:object) %11: any, type(object)
-// CHECK-NEXT:  %13 = CallInst [njsf] (:string) %12: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, "a": string
+// CHECK-NEXT:  %12 = CheckedTypeCastInst (:function(string)) %11: any, type(function(string))
+// CHECK-NEXT:  %13 = CallInst [njsf] (:string) %12: function(string), empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, "a": string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

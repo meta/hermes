@@ -15,19 +15,19 @@ return function foo(x: string, y: string): string[] {
 
 // CHECK:scope %VS0 [?Array.prototype: classInstance()]
 
-// CHECK:function foo(x: string, y: string): classInstance(Array) [typed]
+// CHECK:function foo(x: string, y: string): array(string) [typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
 // CHECK-NEXT:  %1 = LoadParamInst (:string) %x: string
 // CHECK-NEXT:  %2 = LoadParamInst (:string) %y: string
 // CHECK-NEXT:  %3 = LoadFrameInst (:classInstance()) %0: environment, [%VS0.?Array.prototype]: classInstance()
 // CHECK-NEXT:  %4 = AllocFastArrayInst (:object) 3: number, %3: classInstance()
-// CHECK-NEXT:  %5 = StringConcatInst (:string) %1: string, %2: string
-// CHECK-NEXT:       FastArrayPushInst %5: string, %4: object
-// CHECK-NEXT:  %7 = StringConcatInst (:string) %1: string, "abc": string
-// CHECK-NEXT:       FastArrayPushInst %7: string, %4: object
-// CHECK-NEXT:  %9 = StringConcatInst (:string) %1: string, %2: string, "abcdef": string, %2: string
-// CHECK-NEXT:        FastArrayPushInst %9: string, %4: object
-// CHECK-NEXT:  %11 = CheckedTypeCastInst (:classInstance(Array)) %4: object, type(classInstance(Array))
-// CHECK-NEXT:        ReturnInst %11: classInstance(Array)
+// CHECK-NEXT:  %5 = UnionNarrowTrustedInst (:array(string)) %4: object
+// CHECK-NEXT:  %6 = StringConcatInst (:string) %1: string, %2: string
+// CHECK-NEXT:       FastArrayPushInst %6: string, %5: array(string)
+// CHECK-NEXT:  %8 = StringConcatInst (:string) %1: string, "abc": string
+// CHECK-NEXT:       FastArrayPushInst %8: string, %5: array(string)
+// CHECK-NEXT:  %10 = StringConcatInst (:string) %1: string, %2: string, "abcdef": string, %2: string
+// CHECK-NEXT:        FastArrayPushInst %10: string, %5: array(string)
+// CHECK-NEXT:        ReturnInst %5: array(string)
 // CHECK-NEXT:function_end

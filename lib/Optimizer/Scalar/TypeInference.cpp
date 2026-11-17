@@ -723,7 +723,9 @@ class TypeInferenceImpl {
   }
 
   Type inferCreateFunctionInst(CreateFunctionInst *inst) {
-    return *inst->getInherentType();
+    // The closure's type is the function's own type (object if untyped), so it
+    // survives inference instead of being reset to the generic object inherent.
+    return inst->getFunctionCode()->getFunctionType();
   }
   Type inferCreateGeneratorInst(CreateGeneratorInst *inst) {
     return *inst->getInherentType();

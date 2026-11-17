@@ -32,6 +32,14 @@ Value *ESTreeIRGen::narrowToFlowType(
     return value;
 
   if (!tc.isSubsetOf(targetIRType, valueType)) {
+    // Refined object types (e.g. function types) use shallow, identity-based
+    // subtyping, so structurally compatible ones that the FlowChecker accepted
+    // can be neither a subset nor a superset of each other. No cast can
+    // express the relation, so leave the value as is.
+    if (!tc.areDisjoint(targetIRType, valueType) &&
+        tc.isSubsetOf(
+            tc.subtractTy(valueType, targetIRType), Type::createObject()))
+      return value;
     Mod->getContext().getSourceErrorManager().error(
         loc->getSourceRange(),
         "Internal error: Flow expr type is not a subset of value type");
@@ -461,16 +469,15 @@ Value *ESTreeIRGen::genFastArrayFromElements(
   // of push and append.
 
   // Load Array<T>.prototype from the home object variable for the type.
-  // The Array<T> home object now carries its refined classInstance type, but
-  // AllocFastArrayInst's prototype operand is typed as plain object. Narrow
-  // (trusted) back to object for compatibility; this can be relaxed once
-  // AllocFastArrayInst accepts refined object kinds.
-  Value *prototype = Builder.createUnionNarrowTrustedInst(
-      emitLoadTypedHomeObject(llvh::cast<flow::ClassType>(arrayType->info)),
-      Type::createObject());
+  Value *prototype =
+      emitLoadTypedHomeObject(llvh::cast<flow::ClassType>(arrayType->info));
 
-  auto *array = Builder.createAllocFastArrayInst(
-      Builder.getLiteralNumber(list.size()), prototype);
+  // The allocation is typed as plain object; narrow it to the lowered
+  // array(T) so that it matches typed slots without a runtime cast.
+  Value *array = Builder.createUnionNarrowTrustedInst(
+      Builder.createAllocFastArrayInst(
+          Builder.getLiteralNumber(list.size()), prototype),
+      flowTypeToIRType(arrayType));
   for (auto &node : list)
     genFastArrayPush(array, node);
   return array;
@@ -867,7 +874,8 @@ Value *ESTreeIRGen::genSHBuiltinObjectProps(
       emitLoadTypedHomeObject(llvh::cast<flow::ClassType>(arrayType->info));
   Value *res = genBuiltinCall(builtin, {obj, prototype});
   res->setType(Type::createObject());
-  return res;
+  // The builtin always returns a new FastArray of the checked element type.
+  return Builder.createUnionNarrowTrustedInst(res, flowTypeToIRType(arrayType));
 }
 
 Value *ESTreeIRGen::genTypedFunctionPrototypeCall(

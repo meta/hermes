@@ -32,12 +32,12 @@ class C {
 // CHECK-NEXT:  %2 = LoadParamInst (:number) %x: number
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: number, [%VS1.x]: any
 // CHECK-NEXT:  %4 = LoadFrameInst (:any) %0: environment, [%VS0.C]: any
-// CHECK-NEXT:  %5 = CheckedTypeCastInst (:object) %4: any, type(object)
+// CHECK-NEXT:  %5 = CheckedTypeCastInst (:function(undefined)) %4: any, type(function(undefined))
 // CHECK-NEXT:  %6 = LoadFrameInst (:classInstance()) %0: environment, [%VS0.?C.prototype]: classInstance()
 // CHECK-NEXT:  %7 = AllocTypedObjectInst (:object) %6: classInstance(), "x": string, 0: number
 // CHECK-NEXT:  %8 = UnionNarrowTrustedInst (:classInstance(C)) %7: object
 // CHECK-NEXT:  %9 = LoadFrameInst (:any) %1: environment, [%VS1.x]: any
 // CHECK-NEXT:  %10 = CheckedTypeCastInst (:number) %9: any, type(number)
-// CHECK-NEXT:  %11 = CallInst (:any) %5: object, %C(): functionCode, true: boolean, empty: any, %5: object, %8: classInstance(C), %10: number
+// CHECK-NEXT:  %11 = CallInst (:any) %5: function(undefined), %C(): functionCode, true: boolean, empty: any, %5: function(undefined), %8: classInstance(C), %10: number
 // CHECK-NEXT:        ReturnInst %8: classInstance(C)
 // CHECK-NEXT:function_end

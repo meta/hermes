@@ -35,21 +35,21 @@ exports.next = next
 // CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
 // CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %8: object, "prototype": string
-// CHECK-NEXT:  %12 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
+// CHECK-NEXT:  %12 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %Symbol(): functionCode
 // CHECK-NEXT:  %13 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %14 = UnionNarrowTrustedInst (:classInstance()) %13: object
-// CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %12: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %12: function(undefined), "prototype": string
 // CHECK-NEXT:  %16 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
 // CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
 // CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %16: object, "prototype": string
 // CHECK-NEXT:  %20 = AllocObjectLiteralInst (:object) empty: any
-// CHECK-NEXT:  %21 = CreateFunctionInst (:object) empty: any, empty: any, %next(): functionCode
+// CHECK-NEXT:  %21 = CreateFunctionInst (:function(classInstance(Cls))) empty: any, empty: any, %next(): functionCode
 // CHECK-NEXT:  %22 = CreateFunctionInst (:object) empty: any, empty: any, %Cls(): functionCode
 // CHECK-NEXT:  %23 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %24 = UnionNarrowTrustedInst (:classInstance()) %23: object
 // CHECK-NEXT:        StorePropertyStrictInst %24: classInstance(), %22: object, "prototype": string
-// CHECK-NEXT:        StorePropertyStrictInst %21: object, %20: object, "next": string
+// CHECK-NEXT:        StorePropertyStrictInst %21: function(classInstance(Cls)), %20: object, "next": string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

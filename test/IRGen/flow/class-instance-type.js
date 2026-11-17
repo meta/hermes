@@ -44,22 +44,22 @@ function make(): Dog {
 // CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
 // CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %8: object, "prototype": string
-// CHECK-NEXT:  %12 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
+// CHECK-NEXT:  %12 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %Symbol(): functionCode
 // CHECK-NEXT:  %13 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %14 = UnionNarrowTrustedInst (:classInstance()) %13: object
-// CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %12: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %12: function(undefined), "prototype": string
 // CHECK-NEXT:  %16 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
 // CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
 // CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %16: object, "prototype": string
-// CHECK-NEXT:  %20 = CreateFunctionInst (:object) empty: any, empty: any, %Animal(): functionCode
+// CHECK-NEXT:  %20 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %Animal(): functionCode
 // CHECK-NEXT:  %21 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %22 = UnionNarrowTrustedInst (:classInstance()) %21: object
-// CHECK-NEXT:        StorePropertyStrictInst %22: classInstance(), %20: object, "prototype": string
-// CHECK-NEXT:  %24 = CreateFunctionInst (:object) empty: any, empty: any, %Dog(): functionCode
+// CHECK-NEXT:        StorePropertyStrictInst %22: classInstance(), %20: function(undefined), "prototype": string
+// CHECK-NEXT:  %24 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %Dog(): functionCode
 // CHECK-NEXT:  %25 = AllocTypedNonEnumObjectInst (:object) %22: classInstance()
 // CHECK-NEXT:  %26 = UnionNarrowTrustedInst (:classInstance()) %25: object
-// CHECK-NEXT:        StorePropertyStrictInst %26: classInstance(), %24: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %26: classInstance(), %24: function(undefined), "prototype": string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

@@ -80,30 +80,30 @@ function f(i: number): number {
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.B]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.C0]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.C1]: any
-// CHECK-NEXT:  %8 = CreateFunctionInst (:object) %1: environment, %VS1: any, %f(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %8: object, [%VS1.f]: any
+// CHECK-NEXT:  %8 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %f(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %8: function(number), [%VS1.f]: any
 // CHECK-NEXT:  %10 = CreateFunctionInst (:object) %1: environment, %VS1: any, %<instance_members_initializer:A>(): functionCode
 // CHECK-NEXT:        StoreFrameInst %1: environment, %10: object, [%VS1.<fieldInitFuncVar:A>]: object
-// CHECK-NEXT:  %12 = CreateFunctionInst (:object) %1: environment, %VS1: any, %A(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %12: object, [%VS1.A]: any
+// CHECK-NEXT:  %12 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %A(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %12: function(undefined), [%VS1.A]: any
 // CHECK-NEXT:  %14 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %15 = UnionNarrowTrustedInst (:classInstance()) %14: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %15: classInstance(), [%VS1.?A.prototype]: classInstance()
-// CHECK-NEXT:        StorePropertyStrictInst %15: classInstance(), %12: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %15: classInstance(), %12: function(undefined), "prototype": string
 // CHECK-NEXT:  %18 = CreateFunctionInst (:object) %1: environment, %VS1: any, %<instance_members_initializer:B>(): functionCode
 // CHECK-NEXT:        StoreFrameInst %1: environment, %18: object, [%VS1.<fieldInitFuncVar:B>]: object
-// CHECK-NEXT:  %20 = CreateFunctionInst (:object) %1: environment, %VS1: any, %B(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %20: object, [%VS1.B]: any
+// CHECK-NEXT:  %20 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %B(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %20: function(undefined), [%VS1.B]: any
 // CHECK-NEXT:  %22 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %23 = UnionNarrowTrustedInst (:classInstance()) %22: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %23: classInstance(), [%VS1.?B.prototype]: classInstance()
-// CHECK-NEXT:        StorePropertyStrictInst %23: classInstance(), %20: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %23: classInstance(), %20: function(undefined), "prototype": string
 // CHECK-NEXT:  %26 = CreateFunctionInst (:object) %1: environment, %VS1: any, %<instance_members_initializer:C0>(): functionCode
 // CHECK-NEXT:        StoreFrameInst %1: environment, %26: object, [%VS1.<fieldInitFuncVar:C0>]: object
 // CHECK-NEXT:  %28 = CreateFunctionInst (:object) %1: environment, %VS1: any, %C0(): functionCode
 // CHECK-NEXT:        StoreFrameInst %1: environment, %28: object, [%VS1.C0]: any
-// CHECK-NEXT:  %30 = CreateFunctionInst (:object) %1: environment, %VS1: any, %m(): functionCode
-// CHECK-NEXT:  %31 = AllocTypedNonEnumObjectInst (:object) null: null, "m": string, %30: object
+// CHECK-NEXT:  %30 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %m(): functionCode
+// CHECK-NEXT:  %31 = AllocTypedNonEnumObjectInst (:object) null: null, "m": string, %30: function(number)
 // CHECK-NEXT:  %32 = UnionNarrowTrustedInst (:classInstance()) %31: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %32: classInstance(), [%VS1.?C0.prototype]: classInstance()
 // CHECK-NEXT:        StorePropertyStrictInst %32: classInstance(), %28: object, "prototype": string
@@ -111,15 +111,15 @@ function f(i: number): number {
 // CHECK-NEXT:  %36 = CheckedTypeCastInst (:object) %35: any, type(object)
 // CHECK-NEXT:  %37 = CreateFunctionInst (:object) %1: environment, %VS1: any, %<instance_members_initializer:C1>(): functionCode
 // CHECK-NEXT:        StoreFrameInst %1: environment, %37: object, [%VS1.<fieldInitFuncVar:C1>]: object
-// CHECK-NEXT:  %39 = CreateFunctionInst (:object) %1: environment, %VS1: any, %C1(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %39: object, [%VS1.C1]: any
+// CHECK-NEXT:  %39 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %C1(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %39: function(undefined), [%VS1.C1]: any
 // CHECK-NEXT:  %41 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?C0.prototype]: classInstance()
 // CHECK-NEXT:  %42 = UnionNarrowTrustedInst (:object) %41: classInstance()
-// CHECK-NEXT:  %43 = PrLoadInst (:object) %42: object, 0: number, "m": string
-// CHECK-NEXT:  %44 = AllocTypedNonEnumObjectInst (:object) %42: object, "m": string, %43: object
+// CHECK-NEXT:  %43 = PrLoadInst (:function(number)) %42: object, 0: number, "m": string
+// CHECK-NEXT:  %44 = AllocTypedNonEnumObjectInst (:object) %42: object, "m": string, %43: function(number)
 // CHECK-NEXT:  %45 = UnionNarrowTrustedInst (:classInstance()) %44: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %45: classInstance(), [%VS1.?C1.prototype]: classInstance()
-// CHECK-NEXT:        StorePropertyStrictInst %45: classInstance(), %39: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %45: classInstance(), %39: function(undefined), "prototype": string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -135,18 +135,18 @@ function f(i: number): number {
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS2.a]: any
 // CHECK-NEXT:  %6 = CreateFunctionInst (:object) %1: environment, %VS2: any, %"<instance_members_initializer:A> 1#"(): functionCode
 // CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS2.<fieldInitFuncVar:A>]: object
-// CHECK-NEXT:  %8 = CreateFunctionInst (:object) %1: environment, %VS2: any, %"A 1#"(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %8: object, [%VS2.A]: any
+// CHECK-NEXT:  %8 = CreateFunctionInst (:function(undefined)) %1: environment, %VS2: any, %"A 1#"(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %8: function(undefined), [%VS2.A]: any
 // CHECK-NEXT:  %10 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %11 = UnionNarrowTrustedInst (:classInstance()) %10: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %11: classInstance(), [%VS2.?A.prototype]: classInstance()
-// CHECK-NEXT:        StorePropertyStrictInst %11: classInstance(), %8: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %11: classInstance(), %8: function(undefined), "prototype": string
 // CHECK-NEXT:  %14 = LoadFrameInst (:any) %1: environment, [%VS2.A]: any
-// CHECK-NEXT:  %15 = CheckedTypeCastInst (:object) %14: any, type(object)
+// CHECK-NEXT:  %15 = CheckedTypeCastInst (:function(undefined)) %14: any, type(function(undefined))
 // CHECK-NEXT:  %16 = LoadFrameInst (:classInstance()) %1: environment, [%VS2.?A.prototype]: classInstance()
 // CHECK-NEXT:  %17 = AllocTypedObjectInst (:object) %16: classInstance(), "x": string, undefined: undefined
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance(A)) %17: object
-// CHECK-NEXT:  %19 = CallInst (:any) %15: object, %"A 1#"(): functionCode, true: boolean, empty: any, %15: object, %18: classInstance(A)
+// CHECK-NEXT:  %19 = CallInst (:any) %15: function(undefined), %"A 1#"(): functionCode, true: boolean, empty: any, %15: function(undefined), %18: classInstance(A)
 // CHECK-NEXT:        StoreFrameInst %1: environment, %18: classInstance(A), [%VS2.a]: any
 // CHECK-NEXT:  %21 = LoadFrameInst (:any) %1: environment, [%VS2.a]: any
 // CHECK-NEXT:  %22 = CheckedTypeCastInst (:classInstance(A)) %21: any, type(classInstance(A))
@@ -253,8 +253,8 @@ function f(i: number): number {
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS10: any, %1: environment
 // CHECK-NEXT:  %3 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?C0.prototype]: classInstance()
-// CHECK-NEXT:  %4 = PrLoadInst (:object) %3: classInstance(), 0: number, "m": string
-// CHECK-NEXT:  %5 = CallInst [njsf] (:number) %4: object, empty: any, false: boolean, empty: any, undefined: undefined, %0: classInstance(C1)
+// CHECK-NEXT:  %4 = PrLoadInst (:function(number)) %3: classInstance(), 0: number, "m": string
+// CHECK-NEXT:  %5 = CallInst [njsf] (:number) %4: function(number), empty: any, false: boolean, empty: any, undefined: undefined, %0: classInstance(C1)
 // CHECK-NEXT:  %6 = BinaryAddInst (:any) %5: number, 1: number
 // CHECK-NEXT:  %7 = CheckedTypeCastInst (:number) %6: any, type(number)
 // CHECK-NEXT:       PrStoreInst %7: number, %0: classInstance(C1), 1: number, "y": string, false: boolean

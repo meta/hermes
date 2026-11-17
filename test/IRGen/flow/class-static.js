@@ -53,14 +53,14 @@ class A {
 // CHECK-NEXT:       StoreFrameInst %1: environment, empty: empty, [%VS1.foo]: empty|object
 // CHECK-NEXT:       StoreFrameInst %1: environment, empty: empty, [%VS1.viaThis]: empty|object
 // CHECK-NEXT:       StoreFrameInst %1: environment, 1: number, [%VS1.before]: any
-// CHECK-NEXT:  %10 = CreateFunctionInst (:object) %1: environment, %VS1: any, %foo(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %10: object, [%VS1.foo]: empty|object
-// CHECK-NEXT:  %12 = CreateFunctionInst (:object) %1: environment, %VS1: any, %viaThis(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %12: object, [%VS1.viaThis]: empty|object
+// CHECK-NEXT:  %10 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %foo(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %10: function(number), [%VS1.foo]: empty|object
+// CHECK-NEXT:  %12 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %viaThis(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %12: function(number), [%VS1.viaThis]: empty|object
 // CHECK-NEXT:  %14 = CreateFunctionInst (:object) %1: environment, %VS1: any, %A(): functionCode
 // CHECK-NEXT:        StoreFrameInst %1: environment, %14: object, [%VS1.A]: any
-// CHECK-NEXT:  %16 = CreateFunctionInst (:object) %1: environment, %VS1: any, %bar(): functionCode
-// CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null, "bar": string, %16: object
+// CHECK-NEXT:  %16 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %bar(): functionCode
+// CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null, "bar": string, %16: function(number)
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %18: classInstance(), [%VS1.?A.prototype]: classInstance()
 // CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %14: object, "prototype": string

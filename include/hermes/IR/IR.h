@@ -1569,6 +1569,15 @@ class Function : public llvh::ilist_node_with_parent<Function, Module>,
 
   Type returnType_ = Type::createAnyType();
 
+  /// The IR type of this function as a callable value (a TypeKind::Function
+  /// type: interned, unless the signature is recursive), or the generic object
+  /// type if the function is untyped. Set during IRGen for typed functions:
+  /// for a typed generator or async function it is set on the outer function,
+  /// whose closure user code receives, and not on the inner function, which
+  /// CreateGeneratorInst creates and which is never a closure. Used as the
+  /// type of CreateFunctionInst closures so they carry their real signature.
+  Type functionType_{Type::createObject()};
+
   /// A name derived from \c originalOrInferredName_, but unique in the Module.
   /// Used only for printing and diagnostic.
   Identifier internalName_;
@@ -1706,6 +1715,20 @@ class Function : public llvh::ilist_node_with_parent<Function, Module>,
   }
   void setReturnType(Type returnType) {
     returnType_ = returnType;
+  }
+
+  /// \return the IR type of this function as a callable value: a Function
+  /// type (interned, unless the signature is recursive), or object if the
+  /// function is untyped. This is distinct
+  /// from getType(), which is always functionCode.
+  Type getFunctionType() const {
+    return functionType_;
+  }
+  /// Set the IR type of this function as a callable value. Must be called
+  /// before any CreateFunctionInst of this function is created, because its
+  /// constructor copies the type into the closure.
+  void setFunctionType(Type functionType) {
+    functionType_ = functionType;
   }
 
   /// \return the new.target parameter.

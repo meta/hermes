@@ -45,8 +45,8 @@ return new C().method();
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.C]: any
 // CHECK-NEXT:  %5 = CreateFunctionInst (:object) %1: environment, %VS1: any, %C(): functionCode
 // CHECK-NEXT:       StoreFrameInst %1: environment, %5: object, [%VS1.C]: any
-// CHECK-NEXT:  %7 = CreateFunctionInst (:object) %1: environment, %VS1: any, %method(): functionCode
-// CHECK-NEXT:  %8 = AllocTypedNonEnumObjectInst (:object) null: null, "method": string, %7: object
+// CHECK-NEXT:  %7 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %method(): functionCode
+// CHECK-NEXT:  %8 = AllocTypedNonEnumObjectInst (:object) null: null, "method": string, %7: function(number)
 // CHECK-NEXT:  %9 = UnionNarrowTrustedInst (:classInstance()) %8: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %9: classInstance(), [%VS1.?C.prototype]: classInstance()
 // CHECK-NEXT:        StorePropertyStrictInst %9: classInstance(), %5: object, "prototype": string
@@ -56,8 +56,8 @@ return new C().method();
 // CHECK-NEXT:  %15 = AllocTypedObjectInst (:object) %14: classInstance()
 // CHECK-NEXT:  %16 = UnionNarrowTrustedInst (:classInstance(C)) %15: object
 // CHECK-NEXT:  %17 = TypedLoadParentInst (:object) %16: classInstance(C)
-// CHECK-NEXT:  %18 = PrLoadInst (:object) %17: object, 0: number, "method": string
-// CHECK-NEXT:  %19 = CallInst [njsf] (:number) %18: object, %method(): functionCode, true: boolean, empty: any, undefined: undefined, %16: classInstance(C)
+// CHECK-NEXT:  %18 = PrLoadInst (:function(number)) %17: object, 0: number, "method": string
+// CHECK-NEXT:  %19 = CallInst [njsf] (:number) %18: function(number), %method(): functionCode, true: boolean, empty: any, undefined: undefined, %16: classInstance(C)
 // CHECK-NEXT:        ReturnInst %19: number
 // CHECK-NEXT:function_end
 

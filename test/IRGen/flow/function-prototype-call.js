@@ -32,17 +32,17 @@ noThis.call(undefined, 1, "hi");
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS1: any, %0: environment
 // CHECK-NEXT:  %2 = LoadParamInst (:any) %exports: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: any, [%VS1.exports]: any
-// CHECK-NEXT:  %4 = CreateFunctionInst (:object) %1: environment, %VS1: any, %withThis(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %4: object, [%VS1.withThis]: any
-// CHECK-NEXT:  %6 = CreateFunctionInst (:object) %1: environment, %VS1: any, %noThis(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.noThis]: any
+// CHECK-NEXT:  %4 = CreateFunctionInst (:function(number)) %1: environment, %VS1: any, %withThis(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %4: function(number), [%VS1.withThis]: any
+// CHECK-NEXT:  %6 = CreateFunctionInst (:function(boolean)) %1: environment, %VS1: any, %noThis(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %6: function(boolean), [%VS1.noThis]: any
 // CHECK-NEXT:  %8 = LoadFrameInst (:any) %1: environment, [%VS1.withThis]: any
-// CHECK-NEXT:  %9 = CheckedTypeCastInst (:object) %8: any, type(object)
-// CHECK-NEXT:  %10 = CallInst (:any) %9: object, empty: any, false: boolean, empty: any, undefined: undefined, 10: number, 5: number
+// CHECK-NEXT:  %9 = CheckedTypeCastInst (:function(number)) %8: any, type(function(number))
+// CHECK-NEXT:  %10 = CallInst (:any) %9: function(number), empty: any, false: boolean, empty: any, undefined: undefined, 10: number, 5: number
 // CHECK-NEXT:  %11 = CheckedTypeCastInst (:number) %10: any, type(number)
 // CHECK-NEXT:  %12 = LoadFrameInst (:any) %1: environment, [%VS1.noThis]: any
-// CHECK-NEXT:  %13 = CheckedTypeCastInst (:object) %12: any, type(object)
-// CHECK-NEXT:  %14 = CallInst (:any) %13: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 1: number, "hi": string
+// CHECK-NEXT:  %13 = CheckedTypeCastInst (:function(boolean)) %12: any, type(function(boolean))
+// CHECK-NEXT:  %14 = CallInst (:any) %13: function(boolean), empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 1: number, "hi": string
 // CHECK-NEXT:  %15 = CheckedTypeCastInst (:boolean) %14: any, type(boolean)
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end

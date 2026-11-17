@@ -21,12 +21,12 @@ return foo;
 
 // Auto-generated content below. Please do not modify manually.
 
-// CHECK:scope %VS0 [length: empty|object]
+// CHECK:scope %VS0 [length: empty|function(number)]
 
-// CHECK:function global(): object
+// CHECK:function global(): function(undefined)
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = CreateScopeInst (:environment) %VS0: any, empty: any
-// CHECK-NEXT:       StoreFrameInst %0: environment, empty: empty, [%VS0.length]: empty|object
+// CHECK-NEXT:       StoreFrameInst %0: environment, empty: empty, [%VS0.length]: empty|function(number)
 // CHECK-NEXT:  %2 = CreateFunctionInst (:object) empty: any, empty: any, %Array(): functionCode
 // CHECK-NEXT:  %3 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %4 = UnionNarrowTrustedInst (:classInstance()) %3: object
@@ -39,22 +39,22 @@ return foo;
 // CHECK-NEXT:  %11 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %12 = UnionNarrowTrustedInst (:classInstance()) %11: object
 // CHECK-NEXT:        StorePropertyStrictInst %12: classInstance(), %10: object, "prototype": string
-// CHECK-NEXT:  %14 = CreateFunctionInst (:object) empty: any, empty: any, %"length 3#"(): functionCode
-// CHECK-NEXT:        StoreFrameInst %0: environment, %14: object, [%VS0.length]: empty|object
+// CHECK-NEXT:  %14 = CreateFunctionInst (:function(number)) empty: any, empty: any, %"length 3#"(): functionCode
+// CHECK-NEXT:        StoreFrameInst %0: environment, %14: function(number), [%VS0.length]: empty|function(number)
 // CHECK-NEXT:  %16 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 3#"(): functionCode
 // CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
 // CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %16: object, "prototype": string
-// CHECK-NEXT:  %20 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
+// CHECK-NEXT:  %20 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %Symbol(): functionCode
 // CHECK-NEXT:  %21 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %22 = UnionNarrowTrustedInst (:classInstance()) %21: object
-// CHECK-NEXT:        StorePropertyStrictInst %22: classInstance(), %20: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %22: classInstance(), %20: function(undefined), "prototype": string
 // CHECK-NEXT:  %24 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
 // CHECK-NEXT:  %25 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %26 = UnionNarrowTrustedInst (:classInstance()) %25: object
 // CHECK-NEXT:        StorePropertyStrictInst %26: classInstance(), %24: object, "prototype": string
-// CHECK-NEXT:  %28 = CreateFunctionInst (:object) %0: environment, %VS0: any, %foo(): functionCode
-// CHECK-NEXT:        ReturnInst %28: object
+// CHECK-NEXT:  %28 = CreateFunctionInst (:function(undefined)) %0: environment, %VS0: any, %foo(): functionCode
+// CHECK-NEXT:        ReturnInst %28: function(undefined)
 // CHECK-NEXT:function_end
 
 // CHECK:function Array(): undefined
@@ -96,25 +96,25 @@ return foo;
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
-// CHECK:function foo(x: classInstance(Array), sink: any): undefined [typed]
+// CHECK:function foo(x: array(number), sink: any): undefined [typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
-// CHECK-NEXT:  %1 = LoadParamInst (:classInstance(Array)) %x: classInstance(Array)
+// CHECK-NEXT:  %1 = LoadParamInst (:array(number)) %x: array(number)
 // CHECK-NEXT:  %2 = LoadParamInst (:any) %sink: any
-// CHECK-NEXT:  %3 = FastArrayLoadInst (:number) %1: classInstance(Array), 0: number
+// CHECK-NEXT:  %3 = FastArrayLoadInst (:number) %1: array(number), 0: number
 // CHECK-NEXT:  %4 = CallInst (:any) %2: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %3: number
-// CHECK-NEXT:       FastArrayPushInst 3.14: number, %1: classInstance(Array)
-// CHECK-NEXT:  %6 = FastArrayLengthInst (:number) %1: classInstance(Array)
+// CHECK-NEXT:       FastArrayPushInst 3.14: number, %1: array(number)
+// CHECK-NEXT:  %6 = FastArrayLengthInst (:number) %1: array(number)
 // CHECK-NEXT:  %7 = CallInst (:any) %2: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %6: number
-// CHECK-NEXT:       FastArrayStoreInst 42: number, %1: classInstance(Array), 3: number
-// CHECK-NEXT:  %9 = LoadFrameInst (:empty|object) %0: environment, [%VS0.length]: empty|object
-// CHECK-NEXT:  %10 = ThrowIfInst (:object) %9: empty|object, type(empty)
-// CHECK-NEXT:  %11 = FastArrayLengthInst (:number) %1: classInstance(Array)
+// CHECK-NEXT:       FastArrayStoreInst 42: number, %1: array(number), 3: number
+// CHECK-NEXT:  %9 = LoadFrameInst (:empty|function(number)) %0: environment, [%VS0.length]: empty|function(number)
+// CHECK-NEXT:  %10 = ThrowIfInst (:function(number)) %9: empty|function(number), type(empty)
+// CHECK-NEXT:  %11 = FastArrayLengthInst (:number) %1: array(number)
 // CHECK-NEXT:  %12 = FLessThanInst (:boolean) 0: number, %11: number
 // CHECK-NEXT:        CondBranchInst %12: boolean, %BB1, %BB2
 // CHECK-NEXT:%BB1:
 // CHECK-NEXT:  %14 = PhiInst (:number) 0: number, %BB0, %17: number, %BB1
-// CHECK-NEXT:  %15 = FastArrayLoadInst (:number) %1: classInstance(Array), %14: number
+// CHECK-NEXT:  %15 = FastArrayLoadInst (:number) %1: array(number), %14: number
 // CHECK-NEXT:  %16 = CallInst (:any) %2: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %15: number
 // CHECK-NEXT:  %17 = FAddInst (:number) %14: number, 1: number
 // CHECK-NEXT:  %18 = FLessThanInst (:boolean) %17: number, %11: number

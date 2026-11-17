@@ -319,6 +319,135 @@ llvh::ArrayRef<ExactObjectField> TypeContext::getClassFields(Type t) const {
       fieldArrays_.data() + ci.fieldOffset, ci.fieldCount);
 }
 
+Type TypeContext::reserveArray() {
+  uint32_t id = entries_.size();
+  TypeEntry e{}; // primMask defaults to kNotMaskable
+  e.kind = TypeKind::Array;
+  e.array.elemTypeId = kNoTypeId;
+  entries_.push_back(e);
+  return Type{id};
+}
+
+void TypeContext::fillArray(Type t, Type elem) {
+  assert(t.id_ < entries_.size() && "Type ID out of range");
+  TypeEntry &e = entries_[t.id_];
+  assert(e.kind == TypeKind::Array && "not an Array entry");
+  e.array.elemTypeId = elem.id_;
+}
+
+Type TypeContext::createArray(Type elem) {
+  auto it = arrayInternTable_.find(elem.id_);
+  if (it != arrayInternTable_.end())
+    return Type{it->second};
+  Type t = reserveArray();
+  fillArray(t, elem);
+  arrayInternTable_[elem.id_] = t.id_;
+  return t;
+}
+
+Type TypeContext::getArrayElementType(Type t) const {
+  assert(getKind(t) == TypeKind::Array && "not an Array");
+  return Type{entries_[t.id_].array.elemTypeId};
+}
+
+Type TypeContext::reserveFunction() {
+  uint32_t id = entries_.size();
+  TypeEntry e{}; // primMask defaults to kNotMaskable
+  e.kind = TypeKind::Function;
+  e.function.returnTypeId = kNoTypeId;
+  e.function.thisTypeId = kNoTypeId;
+  e.function.restTypeId = kNoTypeId;
+  e.function.paramOffset = 0;
+  e.function.paramCount = 0;
+  e.function.isAsync = false;
+  e.function.isGenerator = false;
+  entries_.push_back(e);
+  return Type{id};
+}
+
+void TypeContext::fillFunction(
+    Type t,
+    Type ret,
+    Type thisTy,
+    Type restTy,
+    llvh::ArrayRef<FunctionParam> params,
+    bool isAsync,
+    bool isGenerator) {
+  assert(t.id_ < entries_.size() && "Type ID out of range");
+  TypeEntry &e = entries_[t.id_];
+  assert(e.kind == TypeKind::Function && "not a Function entry");
+  // Copy first: params may point into paramArrays_, which the append below
+  // can reallocate.
+  llvh::SmallVector<FunctionParam, 8> copy(params.begin(), params.end());
+  e.function.returnTypeId = ret.id_;
+  e.function.thisTypeId = thisTy.id_;
+  e.function.restTypeId = restTy.id_;
+  e.function.paramOffset = safePossiblyNarrowingCast<uint32_t>(
+      paramArrays_.size(), "param array offset overflow");
+  e.function.paramCount =
+      safePossiblyNarrowingCast<uint16_t>(copy.size(), "too many params");
+  e.function.isAsync = isAsync;
+  e.function.isGenerator = isGenerator;
+  paramArrays_.insert(paramArrays_.end(), copy.begin(), copy.end());
+}
+
+Type TypeContext::createFunction(
+    Type ret,
+    Type thisTy,
+    Type restTy,
+    llvh::ArrayRef<FunctionParam> params,
+    bool isAsync,
+    bool isGenerator) {
+  FunctionInternKey key;
+  key.returnTypeId = ret.id_;
+  key.thisTypeId = thisTy.id_;
+  key.restTypeId = restTy.id_;
+  key.isAsync = isAsync;
+  key.isGenerator = isGenerator;
+  key.params.assign(params.begin(), params.end());
+
+  auto it = functionInternTable_.find(key);
+  if (it != functionInternTable_.end())
+    return Type{it->second};
+
+  Type t = reserveFunction();
+  fillFunction(t, ret, thisTy, restTy, params, isAsync, isGenerator);
+  functionInternTable_[std::move(key)] = t.id_;
+  return t;
+}
+
+Type TypeContext::getFunctionReturn(Type t) const {
+  assert(getKind(t) == TypeKind::Function && "not a Function");
+  return Type{entries_[t.id_].function.returnTypeId};
+}
+
+Type TypeContext::getFunctionThis(Type t) const {
+  assert(getKind(t) == TypeKind::Function && "not a Function");
+  return Type{entries_[t.id_].function.thisTypeId};
+}
+
+Type TypeContext::getFunctionRest(Type t) const {
+  assert(getKind(t) == TypeKind::Function && "not a Function");
+  return Type{entries_[t.id_].function.restTypeId};
+}
+
+llvh::ArrayRef<FunctionParam> TypeContext::getFunctionParams(Type t) const {
+  assert(getKind(t) == TypeKind::Function && "not a Function");
+  const auto &fn = entries_[t.id_].function;
+  return llvh::ArrayRef<FunctionParam>(
+      paramArrays_.data() + fn.paramOffset, fn.paramCount);
+}
+
+bool TypeContext::getFunctionIsAsync(Type t) const {
+  assert(getKind(t) == TypeKind::Function && "not a Function");
+  return entries_[t.id_].function.isAsync;
+}
+
+bool TypeContext::getFunctionIsGenerator(Type t) const {
+  assert(getKind(t) == TypeKind::Function && "not a Function");
+  return entries_[t.id_].function.isGenerator;
+}
+
 bool TypeContext::isSubclass(Type a, Type b) const {
   assert(getKind(a) == TypeKind::ClassInstance && "a is not a class");
   assert(getKind(b) == TypeKind::ClassInstance && "b is not a class");
@@ -433,7 +562,10 @@ TypeKind TypeContext::getFirstKind(Type t) const {
   return entries_[arms[0].id_].kind;
 }
 
-void TypeContext::printLeaf(llvh::raw_ostream &OS, uint32_t id) const {
+void TypeContext::printLeaf(
+    llvh::raw_ostream &OS,
+    uint32_t id,
+    llvh::SmallVectorImpl<uint32_t> &enclosing) const {
   TypeKind k = entries_[id].kind;
   if (k == TypeKind::ClassInstance) {
     OS << "classInstance(";
@@ -443,12 +575,36 @@ void TypeContext::printLeaf(llvh::raw_ostream &OS, uint32_t id) const {
     OS << ')';
     return;
   }
+  if (k == TypeKind::Array || k == TypeKind::Function) {
+    // A type already being printed closes a cycle: print a back-reference to
+    // it, counting enclosing arrays and functions from the innermost one.
+    auto it = std::find(enclosing.rbegin(), enclosing.rend(), id);
+    if (it != enclosing.rend()) {
+      OS << '^' << (it - enclosing.rbegin()) + 1;
+      return;
+    }
+    enclosing.push_back(id);
+    if (k == TypeKind::Array) {
+      OS << "array(";
+      printType(OS, entries_[id].array.elemTypeId, enclosing);
+    } else {
+      OS << "function(";
+      printType(OS, entries_[id].function.returnTypeId, enclosing);
+    }
+    OS << ')';
+    enclosing.pop_back();
+    return;
+  }
   OS << kindName(k);
 }
 
-void TypeContext::print(llvh::raw_ostream &OS, Type t) const {
-  assert(t.id_ < entries_.size() && "Type ID out of range");
-  const auto &entry = entries_[t.id_];
+void TypeContext::printType(
+    llvh::raw_ostream &OS,
+    uint32_t id,
+    llvh::SmallVectorImpl<uint32_t> &enclosing) const {
+  assert(id < entries_.size() && "Type ID out of range");
+  Type t{id};
+  const auto &entry = entries_[id];
 
   if (entry.kind == TypeKind::NoType) {
     OS << "notype";
@@ -456,7 +612,7 @@ void TypeContext::print(llvh::raw_ostream &OS, Type t) const {
   }
 
   if (entry.kind != TypeKind::Union) {
-    printLeaf(OS, t.id_);
+    printLeaf(OS, id, enclosing);
     return;
   }
 
@@ -470,7 +626,7 @@ void TypeContext::print(llvh::raw_ostream &OS, Type t) const {
       if (isSubsetOf(arm, Type{kAnyTypeId}))
         continue;
       OS << '|';
-      printLeaf(OS, arm.id_);
+      printLeaf(OS, arm.id_, enclosing);
     }
     return;
   }
@@ -480,8 +636,13 @@ void TypeContext::print(llvh::raw_ostream &OS, Type t) const {
   for (size_t i = 0; i < arms.size(); ++i) {
     if (i != 0)
       OS << '|';
-    printLeaf(OS, arms[i].id_);
+    printLeaf(OS, arms[i].id_, enclosing);
   }
+}
+
+void TypeContext::print(llvh::raw_ostream &OS, Type t) const {
+  llvh::SmallVector<uint32_t, 8> enclosing;
+  printType(OS, t.id_, enclosing);
 }
 
 bool TypeContext::isKnownPrimitiveType(Type t) const {

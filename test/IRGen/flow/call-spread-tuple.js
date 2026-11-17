@@ -55,16 +55,16 @@ function emptyTuple(t: [number, string]): void {
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS1: any, %0: environment
 // CHECK-NEXT:  %2 = LoadParamInst (:any) %exports: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: any, [%VS1.exports]: any
-// CHECK-NEXT:  %4 = CreateFunctionInst (:object) %1: environment, %VS1: any, %f(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %4: object, [%VS1.f]: any
-// CHECK-NEXT:  %6 = CreateFunctionInst (:object) %1: environment, %VS1: any, %spread(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.spread]: any
-// CHECK-NEXT:  %8 = CreateFunctionInst (:object) %1: environment, %VS1: any, %mixed(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %8: object, [%VS1.mixed]: any
-// CHECK-NEXT:  %10 = CreateFunctionInst (:object) %1: environment, %VS1: any, %mk(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %10: object, [%VS1.mk]: any
-// CHECK-NEXT:  %12 = CreateFunctionInst (:object) %1: environment, %VS1: any, %emptyTuple(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %12: object, [%VS1.emptyTuple]: any
+// CHECK-NEXT:  %4 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %f(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %4: function(undefined), [%VS1.f]: any
+// CHECK-NEXT:  %6 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %spread(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %6: function(undefined), [%VS1.spread]: any
+// CHECK-NEXT:  %8 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %mixed(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %8: function(undefined), [%VS1.mixed]: any
+// CHECK-NEXT:  %10 = CreateFunctionInst (:function(object)) %1: environment, %VS1: any, %mk(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %10: function(object), [%VS1.mk]: any
+// CHECK-NEXT:  %12 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %emptyTuple(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %12: function(undefined), [%VS1.emptyTuple]: any
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -90,12 +90,12 @@ function emptyTuple(t: [number, string]): void {
 // CHECK-NEXT:  %2 = LoadParamInst (:object) %t: object
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: object, [%VS3.t]: any
 // CHECK-NEXT:  %4 = LoadFrameInst (:any) %0: environment, [%VS1.f]: any
-// CHECK-NEXT:  %5 = CheckedTypeCastInst (:object) %4: any, type(object)
+// CHECK-NEXT:  %5 = CheckedTypeCastInst (:function(undefined)) %4: any, type(function(undefined))
 // CHECK-NEXT:  %6 = LoadFrameInst (:any) %1: environment, [%VS3.t]: any
 // CHECK-NEXT:  %7 = CheckedTypeCastInst (:object) %6: any, type(object)
 // CHECK-NEXT:  %8 = PrLoadInst (:number) %7: object, 0: number, "0": string
 // CHECK-NEXT:  %9 = PrLoadInst (:string) %7: object, 1: number, "1": string
-// CHECK-NEXT:  %10 = CallInst [njsf] (:undefined) %5: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %8: number, %9: string
+// CHECK-NEXT:  %10 = CallInst [njsf] (:undefined) %5: function(undefined), empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %8: number, %9: string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -108,11 +108,11 @@ function emptyTuple(t: [number, string]): void {
 // CHECK-NEXT:  %2 = LoadParamInst (:object) %t: object
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: object, [%VS4.t]: any
 // CHECK-NEXT:  %4 = LoadFrameInst (:any) %0: environment, [%VS1.f]: any
-// CHECK-NEXT:  %5 = CheckedTypeCastInst (:object) %4: any, type(object)
+// CHECK-NEXT:  %5 = CheckedTypeCastInst (:function(undefined)) %4: any, type(function(undefined))
 // CHECK-NEXT:  %6 = LoadFrameInst (:any) %1: environment, [%VS4.t]: any
 // CHECK-NEXT:  %7 = CheckedTypeCastInst (:object) %6: any, type(object)
 // CHECK-NEXT:  %8 = PrLoadInst (:string) %7: object, 0: number, "0": string
-// CHECK-NEXT:  %9 = CallInst [njsf] (:undefined) %5: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 1: number, %8: string
+// CHECK-NEXT:  %9 = CallInst [njsf] (:undefined) %5: function(undefined), empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 1: number, %8: string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -135,14 +135,14 @@ function emptyTuple(t: [number, string]): void {
 // CHECK-NEXT:  %2 = LoadParamInst (:object) %t: object
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: object, [%VS6.t]: any
 // CHECK-NEXT:  %4 = LoadFrameInst (:any) %0: environment, [%VS1.f]: any
-// CHECK-NEXT:  %5 = CheckedTypeCastInst (:object) %4: any, type(object)
+// CHECK-NEXT:  %5 = CheckedTypeCastInst (:function(undefined)) %4: any, type(function(undefined))
 // CHECK-NEXT:  %6 = LoadFrameInst (:any) %1: environment, [%VS6.t]: any
 // CHECK-NEXT:  %7 = CheckedTypeCastInst (:object) %6: any, type(object)
 // CHECK-NEXT:  %8 = PrLoadInst (:number) %7: object, 0: number, "0": string
 // CHECK-NEXT:  %9 = PrLoadInst (:string) %7: object, 1: number, "1": string
 // CHECK-NEXT:  %10 = LoadFrameInst (:any) %0: environment, [%VS1.mk]: any
-// CHECK-NEXT:  %11 = CheckedTypeCastInst (:object) %10: any, type(object)
-// CHECK-NEXT:  %12 = CallInst [njsf] (:object) %11: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined
-// CHECK-NEXT:  %13 = CallInst [njsf] (:undefined) %5: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %8: number, %9: string
+// CHECK-NEXT:  %11 = CheckedTypeCastInst (:function(object)) %10: any, type(function(object))
+// CHECK-NEXT:  %12 = CallInst [njsf] (:object) %11: function(object), empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined
+// CHECK-NEXT:  %13 = CallInst [njsf] (:undefined) %5: function(undefined), empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %8: number, %9: string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end

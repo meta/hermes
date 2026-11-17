@@ -17,24 +17,24 @@ return function main(x: number[]): string {
 
 // Auto-generated content below. Please do not modify manually.
 
-// CHECK:scope %VS0 [join: empty|object, length: empty|object]
+// CHECK:scope %VS0 [join: empty|function(string), length: empty|function(number)]
 
-// CHECK:function main(x: classInstance(Array)): string [typed]
+// CHECK:function main(x: array(number)): string [typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
-// CHECK-NEXT:  %1 = LoadParamInst (:classInstance(Array)) %x: classInstance(Array)
-// CHECK-NEXT:  %2 = LoadFrameInst (:empty|object) %0: environment, [%VS0.join]: empty|object
-// CHECK-NEXT:  %3 = ThrowIfInst (:object) %2: empty|object, type(empty)
-// CHECK-NEXT:  %4 = LoadFrameInst (:empty|object) %0: environment, [%VS0.length]: empty|object
-// CHECK-NEXT:  %5 = ThrowIfInst (:object) %4: empty|object, type(empty)
-// CHECK-NEXT:  %6 = FastArrayLengthInst (:number) %1: classInstance(Array)
+// CHECK-NEXT:  %1 = LoadParamInst (:array(number)) %x: array(number)
+// CHECK-NEXT:  %2 = LoadFrameInst (:empty|function(string)) %0: environment, [%VS0.join]: empty|function(string)
+// CHECK-NEXT:  %3 = ThrowIfInst (:function(string)) %2: empty|function(string), type(empty)
+// CHECK-NEXT:  %4 = LoadFrameInst (:empty|function(number)) %0: environment, [%VS0.length]: empty|function(number)
+// CHECK-NEXT:  %5 = ThrowIfInst (:function(number)) %4: empty|function(number), type(empty)
+// CHECK-NEXT:  %6 = FastArrayLengthInst (:number) %1: array(number)
 // CHECK-NEXT:  %7 = FEqualInst (:boolean) %6: number, 0: number
 // CHECK-NEXT:       CondBranchInst %7: boolean, %BB1, %BB2
 // CHECK-NEXT:%BB1:
 // CHECK-NEXT:  %9 = PhiInst (:string) %21: string, %BB6, "": string, %BB0
 // CHECK-NEXT:        ReturnInst %9: string
 // CHECK-NEXT:%BB2:
-// CHECK-NEXT:  %11 = FastArrayLoadInst (:number) %1: classInstance(Array), 0: number
+// CHECK-NEXT:  %11 = FastArrayLoadInst (:number) %1: array(number), 0: number
 // CHECK-NEXT:  %12 = TypeOfIsInst (:boolean) %11: number, typeOfIs(Object,Null)
 // CHECK-NEXT:        CondBranchInst %12: boolean, %BB12, %BB3
 // CHECK-NEXT:%BB3:
@@ -53,7 +53,7 @@ return function main(x: number[]): string {
 // CHECK-NEXT:%BB7:
 // CHECK-NEXT:  %23 = PhiInst (:number) 1: number, %BB5, %34: number, %BB10
 // CHECK-NEXT:  %24 = PhiInst (:string) %18: string, %BB5, %33: string, %BB10
-// CHECK-NEXT:  %25 = FastArrayLoadInst (:number) %1: classInstance(Array), %23: number
+// CHECK-NEXT:  %25 = FastArrayLoadInst (:number) %1: array(number), %23: number
 // CHECK-NEXT:  %26 = TypeOfIsInst (:boolean) %25: number, typeOfIs(Object,Null)
 // CHECK-NEXT:        CondBranchInst %26: boolean, %BB11, %BB8
 // CHECK-NEXT:%BB8:

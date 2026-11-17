@@ -305,6 +305,59 @@ struct UnionInternKeyInfo {
   }
 };
 
+/// Hashable key for interning function types. Captures the whole shallow
+/// signature: return/this/rest ids, the ordered params (id + optional), and
+/// the async/generator flags.
+struct FunctionInternKey {
+  uint32_t returnTypeId;
+  uint32_t thisTypeId;
+  uint32_t restTypeId;
+  bool isAsync;
+  bool isGenerator;
+  llvh::SmallVector<FunctionParam, 4> params;
+};
+
+/// DenseMap info for FunctionInternKey.
+struct FunctionInternKeyInfo {
+  static FunctionInternKey getEmptyKey() {
+    FunctionInternKey k;
+    k.returnTypeId = UINT32_MAX;
+    k.thisTypeId = 0;
+    k.restTypeId = 0;
+    k.isAsync = false;
+    k.isGenerator = false;
+    return k;
+  }
+  static FunctionInternKey getTombstoneKey() {
+    FunctionInternKey k;
+    k.returnTypeId = UINT32_MAX - 1;
+    k.thisTypeId = 0;
+    k.restTypeId = 0;
+    k.isAsync = false;
+    k.isGenerator = false;
+    return k;
+  }
+  static unsigned getHashValue(const FunctionInternKey &k) {
+    llvh::hash_code h = llvh::hash_combine(
+        k.returnTypeId, k.thisTypeId, k.restTypeId, k.isAsync, k.isGenerator);
+    for (const FunctionParam &p : k.params)
+      h = llvh::hash_combine(h, p.typeId, p.isOptional);
+    return (unsigned)h;
+  }
+  static bool isEqual(const FunctionInternKey &a, const FunctionInternKey &b) {
+    if (a.returnTypeId != b.returnTypeId || a.thisTypeId != b.thisTypeId ||
+        a.restTypeId != b.restTypeId || a.isAsync != b.isAsync ||
+        a.isGenerator != b.isGenerator || a.params.size() != b.params.size())
+      return false;
+    for (size_t i = 0, e = a.params.size(); i < e; ++i) {
+      if (a.params[i].typeId != b.params[i].typeId ||
+          a.params[i].isOptional != b.params[i].isOptional)
+        return false;
+    }
+    return true;
+  }
+};
+
 class TypeContext;
 class TypeContextTest;
 
@@ -457,6 +510,12 @@ class Type {
     return id_ == kFunctionCodeId;
   }
   /// @}
+
+  /// \return the raw type id. Used by lowering to populate side-array entries
+  /// that store raw ids (e.g. FunctionParam.typeId).
+  uint32_t getRawId() const {
+    return id_;
+  }
 
   /// Diagnostic placeholder used by streams that have no TypeContext
   /// available; prints `type#<id>`. For pretty names use
@@ -612,6 +671,71 @@ class TypeContext {
   /// Both must be ClassInstance types.
   bool isSubclass(Type a, Type b) const;
 
+  /// Create an Array type with element type \p elem. Interned: two calls with
+  /// the same element type return the same Type. Allocates an entry only on a
+  /// cache miss.
+  Type createArray(Type elem);
+
+  /// Reserve an empty Array entry and return its Type. Used with fillArray to
+  /// break cycles when lowering a recursive array type. The entry is NOT
+  /// interned. Its kind and id are valid immediately, so it may be passed to
+  /// the type algebra (unionTy, isSubsetOf, areDisjoint, ...) before it is
+  /// filled: the algebra reads only the kind and the id of an Array entry. Its
+  /// payload (the element type) is valid only after fillArray, so accessors
+  /// and printing must not be applied to it before then.
+  Type reserveArray();
+
+  /// Fill a previously reserved Array entry. \p t must come from reserveArray.
+  void fillArray(Type t, Type elem);
+
+  /// \return the element type of Array \p t.
+  Type getArrayElementType(Type t) const;
+
+  /// Create a Function type. Interned: two calls with an identical signature
+  /// return the same Type. Allocates an entry only on a cache miss. \p thisTy
+  /// and \p restTy may be NoType when absent.
+  Type createFunction(
+      Type ret,
+      Type thisTy,
+      Type restTy,
+      llvh::ArrayRef<FunctionParam> params,
+      bool isAsync,
+      bool isGenerator);
+
+  /// Reserve an empty Function entry. Used with fillFunction to break cycles
+  /// when lowering a recursive function type. The entry is NOT interned. Its
+  /// kind and id are valid immediately, so it may be passed to the type
+  /// algebra (unionTy, isSubsetOf, areDisjoint, ...) before it is filled: the
+  /// algebra reads only the kind and the id of a Function entry. Its payload
+  /// (the signature) is valid only after fillFunction, so accessors and
+  /// printing must not be applied to it before then.
+  Type reserveFunction();
+
+  /// Fill a previously reserved Function entry. \p t must come from
+  /// reserveFunction. \p params may point into this context (e.g. come from
+  /// getFunctionParams).
+  void fillFunction(
+      Type t,
+      Type ret,
+      Type thisTy,
+      Type restTy,
+      llvh::ArrayRef<FunctionParam> params,
+      bool isAsync,
+      bool isGenerator);
+
+  /// \return the return type of Function \p t.
+  Type getFunctionReturn(Type t) const;
+  /// \return the "this" param type of Function \p t (NoType if absent).
+  Type getFunctionThis(Type t) const;
+  /// \return the rest param type of Function \p t (NoType if absent).
+  Type getFunctionRest(Type t) const;
+  /// \return the params of Function \p t, in order.
+  llvh::ArrayRef<FunctionParam> getFunctionParams(Type t) const;
+  /// \return whether Function \p t is async.
+  bool getFunctionIsAsync(Type t) const;
+  /// \return whether Function \p t is a generator.
+  bool getFunctionIsGenerator(Type t) const;
+
   /// \return true if \p t is NoType (empty set).
   bool isNoType(Type t) const;
 
@@ -701,7 +825,20 @@ class TypeContext {
 
   /// Print the human-readable type name to \p OS. Leaf kinds print their name
   /// (e.g. "number"). Unions print pipe-separated arms (e.g. "number|string").
-  /// NoType prints "notype". AnyType prints "any".
+  /// NoType prints "notype". AnyType prints "any". A class instance prints
+  /// "classInstance(<name>)". An array prints "array(<element>)" and a
+  /// function prints "function(<return>)" (parameters are not printed); the
+  /// payload is printed recursively by these same rules, so a union payload
+  /// prints its arms (e.g. "array(string|number)").
+  ///
+  /// Printing terminates on recursive types. An array or function that is
+  /// reached again while its own payload is being printed prints as the
+  /// back-reference "^N", where N counts the enclosing arrays and functions
+  /// from the innermost one (N = 1) outwards to the one being referenced.
+  /// For example, `type A = A[]` prints "array(^1)",
+  /// `type F = () => F | null` prints "function(null|^1)", and
+  /// `type M = M[][]` prints "array(array(^2))", which differs from the
+  /// "array(array(^1))" of `N[]` with `type N = N[]`.
   void print(llvh::raw_ostream &OS, Type t) const;
 
   /// \return a range over the component types of \p t, suitable for
@@ -729,8 +866,24 @@ class TypeContext {
  private:
   friend class Type;
 
-  /// Append the printed form of a single non-union type to \p OS.
-  void printLeaf(llvh::raw_ostream &OS, uint32_t id) const;
+  /// Append the printed form of the type with id \p id, in the format
+  /// documented at print(), to \p OS. \p enclosing holds the ids of the
+  /// arrays and functions whose payload is currently being printed, outermost
+  /// first; it is used to print back-references and is restored on return.
+  void printType(
+      llvh::raw_ostream &OS,
+      uint32_t id,
+      llvh::SmallVectorImpl<uint32_t> &enclosing) const;
+
+  /// Append the printed form of the single non-union, non-NoType type with id
+  /// \p id to \p OS, in the format documented at print(). If \p id is an
+  /// array or function already in \p enclosing (see printType()), print the
+  /// back-reference "^N" instead of its payload. Otherwise an array or
+  /// function is pushed onto \p enclosing while its payload is printed.
+  void printLeaf(
+      llvh::raw_ostream &OS,
+      uint32_t id,
+      llvh::SmallVectorImpl<uint32_t> &enclosing) const;
 
   /// Id-aware leaf subtype test for two non-union types. Distinguishes nominal
   /// classes (which share the ClassInstance kind). Falls back to the
@@ -754,8 +907,22 @@ class TypeContext {
   /// entries.
   std::vector<ExactObjectField> fieldArrays_;
 
+  /// Side array storing function parameters, referenced by
+  /// (paramOffset, paramCount) in Function entries.
+  std::vector<FunctionParam> paramArrays_;
+
   /// Intern table mapping sorted arm sets to existing union type IDs.
   llvh::DenseMap<UnionInternKey, uint32_t, UnionInternKeyInfo> internTable_;
+
+  /// Intern table mapping an element type id to the canonical Array type id.
+  /// Non-recursive arrays only; recursive arrays are built via reserve/fill.
+  llvh::DenseMap<uint32_t, uint32_t> arrayInternTable_;
+
+  /// Intern table mapping a function signature to the canonical Function id.
+  /// Non-recursive functions only; recursive functions are built via
+  /// reserve/fill.
+  llvh::DenseMap<FunctionInternKey, uint32_t, FunctionInternKeyInfo>
+      functionInternTable_;
 
   /// Number of distinct primitive masks (the kPrimMaskBits index space).
   static constexpr uint32_t kNumPrimMasks = 1u << type_internal::kPrimMaskBits;

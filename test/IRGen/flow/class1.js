@@ -45,23 +45,23 @@ return [dotProduct, Vec2D];
 // CHECK-NEXT:  %13 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %14 = UnionNarrowTrustedInst (:classInstance()) %13: object
 // CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %12: object, "prototype": string
-// CHECK-NEXT:  %16 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
+// CHECK-NEXT:  %16 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %Symbol(): functionCode
 // CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
-// CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %16: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %16: function(undefined), "prototype": string
 // CHECK-NEXT:  %20 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
 // CHECK-NEXT:  %21 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %22 = UnionNarrowTrustedInst (:classInstance()) %21: object
 // CHECK-NEXT:        StorePropertyStrictInst %22: classInstance(), %20: object, "prototype": string
-// CHECK-NEXT:  %24 = CreateFunctionInst (:object) empty: any, empty: any, %dotProduct(): functionCode
-// CHECK-NEXT:  %25 = CreateFunctionInst (:object) empty: any, empty: any, %Vec2D(): functionCode
+// CHECK-NEXT:  %24 = CreateFunctionInst (:function(any)) empty: any, empty: any, %dotProduct(): functionCode
+// CHECK-NEXT:  %25 = CreateFunctionInst (:function(undefined)) empty: any, empty: any, %Vec2D(): functionCode
 // CHECK-NEXT:  %26 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %27 = UnionNarrowTrustedInst (:classInstance()) %26: object
-// CHECK-NEXT:        StorePropertyStrictInst %27: classInstance(), %25: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %27: classInstance(), %25: function(undefined), "prototype": string
 // CHECK-NEXT:  %29 = AllocFastArrayInst (:object) 2: number, %14: classInstance()
-// CHECK-NEXT:        FastArrayPushInst %24: object, %29: object
-// CHECK-NEXT:        FastArrayPushInst %25: object, %29: object
-// CHECK-NEXT:  %32 = CheckedTypeCastInst (:classInstance(Array)) %29: object, type(classInstance(Array))
+// CHECK-NEXT:  %30 = UnionNarrowTrustedInst (:array(function(any)|function(undefined))) %29: object
+// CHECK-NEXT:        FastArrayPushInst %24: function(any), %30: array(function(any)|function(undefined))
+// CHECK-NEXT:        FastArrayPushInst %25: function(undefined), %30: array(function(any)|function(undefined))
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

@@ -220,6 +220,14 @@ static SMRange getFunctionRange(
   return functionNode->getSourceRange();
 }
 
+void ESTreeIRGen::setFunctionTypeFromFlow(
+    Function *F,
+    ESTree::FunctionLikeNode *functionNode) {
+  flow::Type *flowType = flowContext_.getNodeTypeOrAny(functionNode);
+  if (llvh::isa<flow::TypedFunctionType>(flowType->info))
+    F->setFunctionType(flowTypeToIRType(flowType));
+}
+
 NormalFunction *ESTreeIRGen::genCapturingFunction(
     Identifier originalName,
     ESTree::FunctionLikeNode *functionNode,
@@ -237,6 +245,10 @@ NormalFunction *ESTreeIRGen::genCapturingFunction(
   if (llvh::isa<flow::TypedFunctionType>(
           flowContext_.getNodeTypeOrAny(functionNode)->info)) {
     newFunc->getAttributesRef(Mod).typed = true;
+    // The body of an async arrow is not a closure (CreateGeneratorInst
+    // creates it); the closure is the outer function's (genAsyncFunction).
+    if (functionKind != Function::DefinitionKind::GeneratorInnerArrow)
+      setFunctionTypeFromFlow(newFunc, functionNode);
   }
 
   if (auto *body = ESTree::getBlockStatement(functionNode);
@@ -333,6 +345,11 @@ NormalFunction *ESTreeIRGen::genBasicFunction(
   if (llvh::isa<flow::TypedFunctionType>(
           flowContext_.getNodeTypeOrAny(functionNode)->info)) {
     newFunction->getAttributesRef(Mod).typed = true;
+    // The inner function of a generator or async function is not a closure
+    // (CreateGeneratorInst creates it); the closure is the outer function's
+    // (genGeneratorFunction, genAsyncFunction).
+    if (!isGeneratorInnerFunction)
+      setFunctionTypeFromFlow(newFunction, functionNode);
   }
 
   if (body->isLazyFunctionBody) {
@@ -503,6 +520,7 @@ Function *ESTreeIRGen::genGeneratorFunction(
       functionNode->getSemInfo()->customDirectives,
       getFunctionRange(functionNode, parentNode),
       /* insertBefore */ nullptr);
+  setFunctionTypeFromFlow(outerFn, functionNode);
 
   auto *body = ESTree::getBlockStatement(functionNode);
   if (body->isLazyFunctionBody) {
@@ -638,6 +656,7 @@ Function *ESTreeIRGen::genAsyncFunction(
       functionNode->getSemInfo()->customDirectives,
       getFunctionRange(functionNode, parentNode),
       /* insertBefore */ nullptr);
+  setFunctionTypeFromFlow(asyncFn, functionNode);
 
   auto *body = ESTree::getBlockStatement(functionNode);
   if (body->isLazyFunctionBody) {

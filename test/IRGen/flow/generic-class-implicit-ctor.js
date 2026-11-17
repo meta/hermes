@@ -32,8 +32,8 @@ a.foo();
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.A]: any
 // CHECK-NEXT:  %6 = CreateFunctionInst (:object) %1: environment, %VS1: any, %A(): functionCode
 // CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.A]: any
-// CHECK-NEXT:  %8 = CreateFunctionInst (:object) %1: environment, %VS1: any, %foo(): functionCode
-// CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null, "foo": string, %8: object
+// CHECK-NEXT:  %8 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %foo(): functionCode
+// CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null, "foo": string, %8: function(undefined)
 // CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %10: classInstance(), [%VS1.?A.prototype]: classInstance()
 // CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %6: object, "prototype": string
@@ -46,8 +46,8 @@ a.foo();
 // CHECK-NEXT:  %19 = LoadFrameInst (:any) %1: environment, [%VS1.a]: any
 // CHECK-NEXT:  %20 = CheckedTypeCastInst (:classInstance(A)) %19: any, type(classInstance(A))
 // CHECK-NEXT:  %21 = TypedLoadParentInst (:object) %20: classInstance(A)
-// CHECK-NEXT:  %22 = PrLoadInst (:object) %21: object, 0: number, "foo": string
-// CHECK-NEXT:  %23 = CallInst [njsf] (:undefined) %22: object, %foo(): functionCode, true: boolean, empty: any, undefined: undefined, %20: classInstance(A)
+// CHECK-NEXT:  %22 = PrLoadInst (:function(undefined)) %21: object, 0: number, "foo": string
+// CHECK-NEXT:  %23 = CallInst [njsf] (:undefined) %22: function(undefined), %foo(): functionCode, true: boolean, empty: any, undefined: undefined, %20: classInstance(A)
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

@@ -51,9 +51,9 @@ return function main() {
 // CHECK-NEXT:        StoreFrameInst %1: environment, %17: object, [%VS1.f]: any
 // CHECK-NEXT:  %19 = LoadFrameInst (:any) %1: environment, [%VS1.f]: any
 // CHECK-NEXT:  %20 = CheckedTypeCastInst (:object) %19: any, type(object)
-// CHECK-NEXT:  %21 = LoadPropertyInst (:undefined|object) %20: object, "g": string
-// CHECK-NEXT:  %22 = CheckedTypeCastInst (:object) %21: undefined|object, type(object)
-// CHECK-NEXT:  %23 = CallInst [njsf] (:number) %22: object, empty: any, false: boolean, empty: any, undefined: undefined, %20: object
+// CHECK-NEXT:  %21 = LoadPropertyInst (:undefined|function(number)) %20: object, "g": string
+// CHECK-NEXT:  %22 = CheckedTypeCastInst (:function(number)) %21: undefined|function(number), type(function(number))
+// CHECK-NEXT:  %23 = CallInst [njsf] (:number) %22: function(number), empty: any, false: boolean, empty: any, undefined: undefined, %20: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %23: number, [%VS1.r]: any
 // CHECK-NEXT:  %25 = LoadFrameInst (:any) %1: environment, [%VS1.d]: any
 // CHECK-NEXT:  %26 = CheckedTypeCastInst (:object) %25: any, type(object)

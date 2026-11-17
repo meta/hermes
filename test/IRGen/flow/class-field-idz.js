@@ -68,11 +68,11 @@ return C;
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS2: any, %0: environment
 // CHECK-NEXT:  %2 = LoadFrameInst (:any) %0: environment, [%VS0.C]: any
-// CHECK-NEXT:  %3 = CheckedTypeCastInst (:object) %2: any, type(object)
+// CHECK-NEXT:  %3 = CheckedTypeCastInst (:function(undefined)) %2: any, type(function(undefined))
 // CHECK-NEXT:  %4 = LoadFrameInst (:classInstance()) %0: environment, [%VS0.?C.prototype]: classInstance()
 // CHECK-NEXT:  %5 = AllocTypedObjectInst (:object) %4: classInstance(), "p1": string, 0: number, "p2": string, 0: number, "p3": string, undefined: undefined, "p4": string, uninit: uninit, "p5": string, uninit: uninit, "p6": string, uninit: uninit
 // CHECK-NEXT:  %6 = UnionNarrowTrustedInst (:classInstance(C)) %5: object
-// CHECK-NEXT:  %7 = CallInst (:any) %3: object, %C(): functionCode, true: boolean, empty: any, %3: object, %6: classInstance(C)
+// CHECK-NEXT:  %7 = CallInst (:any) %3: function(undefined), %C(): functionCode, true: boolean, empty: any, %3: function(undefined), %6: classInstance(C)
 // CHECK-NEXT:       ReturnInst %6: classInstance(C)
 // CHECK-NEXT:function_end
 

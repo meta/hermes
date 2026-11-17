@@ -1115,6 +1115,9 @@ class CreateFunctionInst : public BaseCreateCallableInst {
          llvh::isa<GeneratorFunction>(code) ||
          llvh::isa<AsyncFunction>(code)) &&
         "Only NormalFunction/GeneratorFunction supported by CreateFunctionInst");
+    // A closure's type is the function's type (object for untyped functions).
+    // Overrides the generic object inherent type from BaseCreateCallableInst.
+    setType(code->getFunctionType());
   }
   explicit CreateFunctionInst(
       const CreateFunctionInst *src,

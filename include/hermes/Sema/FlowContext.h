@@ -1487,20 +1487,30 @@ class FlowContext {
     return arrayGenericClassDecl_;
   }
 
-  /// \return true if \p t is a specialization of the builtin Array<T> class.
-  bool isArrayClassType(const Type *t) const {
-    if (!t || !t->info)
-      return false;
-    auto *ct = llvh::dyn_cast<ClassType>(t->info);
+  /// \return true if \p info is a specialization of the builtin Array<T>
+  /// class.
+  bool isArrayClassType(const TypeInfo *info) const {
+    auto *ct = llvh::dyn_cast_or_null<ClassType>(info);
     return ct && arrayGenericClassDecl_ &&
         ct->getGenericClassDecl() == arrayGenericClassDecl_;
+  }
+
+  /// \return true if \p t is a specialization of the builtin Array<T> class.
+  bool isArrayClassType(const Type *t) const {
+    return t && isArrayClassType(t->info);
+  }
+
+  /// \return the element type of an Array<T> specialization.
+  /// \pre isArrayClassType(info).
+  Type *getArrayElementType(const TypeInfo *info) const {
+    assert(isArrayClassType(info) && "not an Array ClassType");
+    return llvh::cast<ClassType>(info)->getTypeArgs()[0];
   }
 
   /// \return the element type of an Array<T> specialization.
   /// \pre isArrayClassType(t).
   Type *getArrayElementType(const Type *t) const {
-    assert(isArrayClassType(t) && "not an Array ClassType");
-    return llvh::cast<ClassType>(t->info)->getTypeArgs()[0];
+    return getArrayElementType(t->info);
   }
 
  private:

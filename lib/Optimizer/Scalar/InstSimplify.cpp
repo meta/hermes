@@ -507,8 +507,15 @@ class InstSimplifyImpl {
           return builder_.getLiteralBool(true);
         }
 
-        // Operands of different types can't be strictly equal.
-        if (typeCtx_.intersectTy(leftTy, rightTy).isNoType()) {
+        // Operands whose value sets are disjoint can't be strictly equal.
+        // Use areDisjoint rather than an empty intersection: two distinct
+        // refined structural types (e.g. two function types with different
+        // signatures) have an empty interned intersection under the shallow
+        // model, yet their runtime identities can still coincide (subtyping /
+        // variance / an over-narrowed cast such as new.target). areDisjoint
+        // is conservative for such refined types and stays exact for the
+        // primitive / unrelated-class cases this fold targets.
+        if (typeCtx_.areDisjoint(leftTy, rightTy)) {
           return builder_.getLiteralBool(false);
         }
         break;
@@ -518,8 +525,9 @@ class InstSimplifyImpl {
         if (identicalForEquality) {
           return builder_.getLiteralBool(false);
         }
-        // Operands of different types can't be strictly equal.
-        if (typeCtx_.intersectTy(leftTy, rightTy).isNoType()) {
+        // Operands whose value sets are disjoint are always strictly unequal.
+        // See the note on areDisjoint in the === case above.
+        if (typeCtx_.areDisjoint(leftTy, rightTy)) {
           return builder_.getLiteralBool(true);
         }
         break;

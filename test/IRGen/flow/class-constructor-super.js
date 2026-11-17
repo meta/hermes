@@ -49,28 +49,28 @@ new D();
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: any, [%VS1.exports]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.C]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.D]: any
-// CHECK-NEXT:  %6 = CreateFunctionInst (:object) %1: environment, %VS1: any, %C(): functionCode
-// CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.C]: any
+// CHECK-NEXT:  %6 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %C(): functionCode
+// CHECK-NEXT:       StoreFrameInst %1: environment, %6: function(undefined), [%VS1.C]: any
 // CHECK-NEXT:  %8 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %9 = UnionNarrowTrustedInst (:classInstance()) %8: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %9: classInstance(), [%VS1.?C.prototype]: classInstance()
-// CHECK-NEXT:        StorePropertyStrictInst %9: classInstance(), %6: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %9: classInstance(), %6: function(undefined), "prototype": string
 // CHECK-NEXT:  %12 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
-// CHECK-NEXT:  %13 = CheckedTypeCastInst (:object) %12: any, type(object)
-// CHECK-NEXT:  %14 = CreateFunctionInst (:object) %1: environment, %VS1: any, %D(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %14: object, [%VS1.D]: any
+// CHECK-NEXT:  %13 = CheckedTypeCastInst (:function(undefined)) %12: any, type(function(undefined))
+// CHECK-NEXT:  %14 = CreateFunctionInst (:function(undefined)) %1: environment, %VS1: any, %D(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %14: function(undefined), [%VS1.D]: any
 // CHECK-NEXT:  %16 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?C.prototype]: classInstance()
 // CHECK-NEXT:  %17 = UnionNarrowTrustedInst (:object) %16: classInstance()
 // CHECK-NEXT:  %18 = AllocTypedNonEnumObjectInst (:object) %17: object
 // CHECK-NEXT:  %19 = UnionNarrowTrustedInst (:classInstance()) %18: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %19: classInstance(), [%VS1.?D.prototype]: classInstance()
-// CHECK-NEXT:        StorePropertyStrictInst %19: classInstance(), %14: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %19: classInstance(), %14: function(undefined), "prototype": string
 // CHECK-NEXT:  %22 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
-// CHECK-NEXT:  %23 = CheckedTypeCastInst (:object) %22: any, type(object)
+// CHECK-NEXT:  %23 = CheckedTypeCastInst (:function(undefined)) %22: any, type(function(undefined))
 // CHECK-NEXT:  %24 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?D.prototype]: classInstance()
 // CHECK-NEXT:  %25 = AllocTypedObjectInst (:object) %24: classInstance()
 // CHECK-NEXT:  %26 = UnionNarrowTrustedInst (:classInstance(D)) %25: object
-// CHECK-NEXT:  %27 = CallInst (:any) %23: object, %D(): functionCode, true: boolean, empty: any, %23: object, %26: classInstance(D)
+// CHECK-NEXT:  %27 = CallInst (:any) %23: function(undefined), %D(): functionCode, true: boolean, empty: any, %23: function(undefined), %26: classInstance(D)
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -91,8 +91,8 @@ new D();
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS3: any, %1: environment
 // CHECK-NEXT:  %3 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
-// CHECK-NEXT:  %4 = CheckedTypeCastInst (:object) %3: any, type(object)
+// CHECK-NEXT:  %4 = CheckedTypeCastInst (:function(undefined)) %3: any, type(function(undefined))
 // CHECK-NEXT:  %5 = GetNewTargetInst (:object) %new.target: object
-// CHECK-NEXT:  %6 = CallInst [njsf] (:undefined) %4: object, empty: any, false: boolean, empty: any, %5: object, %0: classInstance(D)
+// CHECK-NEXT:  %6 = CallInst [njsf] (:undefined) %4: function(undefined), empty: any, false: boolean, empty: any, %5: object, %0: classInstance(D)
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end

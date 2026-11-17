@@ -1153,4 +1153,378 @@ TEST_F(TypeContextTest, ClassInstancePrint) {
   EXPECT_NE(s2.find("null"), std::string::npos);
 }
 
+TEST_F(TypeContextTest, ArrayConstructionAndInterning) {
+  TypeContext ctx;
+
+  // Array<number> and Array<string>.
+  Type arrNum = ctx.createArray(Type::createNumber());
+  Type arrStr = ctx.createArray(Type::createString());
+
+  EXPECT_EQ(ctx.getKind(arrNum), TypeKind::Array);
+  EXPECT_EQ(ctx.getArrayElementType(arrNum), Type::createNumber());
+  EXPECT_EQ(ctx.getArrayElementType(arrStr), Type::createString());
+
+  // Interned: same element type => same id.
+  Type arrNum2 = ctx.createArray(Type::createNumber());
+  EXPECT_EQ(arrNum, arrNum2);
+  // Different element type => different id.
+  EXPECT_NE(arrNum, arrStr);
+}
+
+TEST_F(TypeContextTest, ArrayReserveFillSelfReference) {
+  TypeContext ctx;
+  // Simulate a recursive array whose element is the array itself:
+  //   type A = Array<A>
+  Type a = ctx.reserveArray();
+  ctx.fillArray(a, a);
+  EXPECT_EQ(ctx.getKind(a), TypeKind::Array);
+  EXPECT_EQ(ctx.getArrayElementType(a), a);
+}
+
+TEST_F(TypeContextTest, FunctionConstructionAndInterning) {
+  TypeContext ctx;
+
+  FunctionParam params[] = {
+      {Type::createNumber().getRawId(), /*isOptional*/ false},
+      {Type::createString().getRawId(), /*isOptional*/ true}};
+
+  // (a: number, b?: string) => boolean, this: object, no rest.
+  Type fn = ctx.createFunction(
+      Type::createBoolean(),
+      Type::createObject(),
+      Type::createNoType(),
+      params,
+      /*isAsync*/ false,
+      /*isGenerator*/ false);
+
+  EXPECT_EQ(ctx.getKind(fn), TypeKind::Function);
+  EXPECT_EQ(ctx.getFunctionReturn(fn), Type::createBoolean());
+  EXPECT_EQ(ctx.getFunctionThis(fn), Type::createObject());
+  EXPECT_TRUE(ctx.getFunctionRest(fn).isNoType());
+  EXPECT_FALSE(ctx.getFunctionIsAsync(fn));
+  EXPECT_FALSE(ctx.getFunctionIsGenerator(fn));
+  auto gotParams = ctx.getFunctionParams(fn);
+  ASSERT_EQ(gotParams.size(), 2u);
+  EXPECT_EQ(gotParams[0].typeId, Type::createNumber().getRawId());
+  EXPECT_FALSE(gotParams[0].isOptional);
+  EXPECT_EQ(gotParams[1].typeId, Type::createString().getRawId());
+  EXPECT_TRUE(gotParams[1].isOptional);
+
+  // Interned: identical signature => same id.
+  Type fn2 = ctx.createFunction(
+      Type::createBoolean(),
+      Type::createObject(),
+      Type::createNoType(),
+      params,
+      false,
+      false);
+  EXPECT_EQ(fn, fn2);
+
+  // Differ by isAsync => different id.
+  Type fnAsync = ctx.createFunction(
+      Type::createBoolean(),
+      Type::createObject(),
+      Type::createNoType(),
+      params,
+      /*isAsync*/ true,
+      false);
+  EXPECT_NE(fn, fnAsync);
+
+  // Differ by a param optional flag => different id.
+  FunctionParam params2[] = {
+      {Type::createNumber().getRawId(), false},
+      {Type::createString().getRawId(), /*isOptional*/ false}};
+  Type fn3 = ctx.createFunction(
+      Type::createBoolean(),
+      Type::createObject(),
+      Type::createNoType(),
+      params2,
+      false,
+      false);
+  EXPECT_NE(fn, fn3);
+}
+
+TEST_F(TypeContextTest, FunctionReserveFillSelfReference) {
+  TypeContext ctx;
+  // type F = (cb: F) => void  — a function whose parameter is itself.
+  Type f = ctx.reserveFunction();
+  FunctionParam params[] = {{f.getRawId(), false}};
+  ctx.fillFunction(
+      f,
+      Type::createUndefined(),
+      Type::createNoType(),
+      Type::createNoType(),
+      params,
+      false,
+      false);
+  EXPECT_EQ(ctx.getKind(f), TypeKind::Function);
+  ASSERT_EQ(ctx.getFunctionParams(f).size(), 1u);
+  EXPECT_EQ(ctx.getFunctionParams(f)[0].typeId, f.getRawId());
+}
+
+TEST_F(TypeContextTest, FunctionFillFromOwnParams) {
+  TypeContext ctx;
+  FunctionParam baseParams[] = {
+      {Type::createNumber().getRawId(), false},
+      {Type::createString().getRawId(), true}};
+  Type prev = ctx.createFunction(
+      Type::createUndefined(),
+      Type::createNoType(),
+      Type::createNoType(),
+      baseParams,
+      false,
+      false);
+
+  // Build a chain of functions, each returning the previous one and filled
+  // with its params read straight out of the context. The params being
+  // appended point into the side array they are appended to, which grows and
+  // reallocates many times along the chain.
+  for (unsigned i = 0; i < 64; ++i) {
+    Type cur = ctx.reserveFunction();
+    ctx.fillFunction(
+        cur,
+        prev,
+        Type::createNoType(),
+        Type::createNoType(),
+        ctx.getFunctionParams(prev),
+        false,
+        false);
+    llvh::ArrayRef<FunctionParam> params = ctx.getFunctionParams(cur);
+    ASSERT_EQ(params.size(), 2u);
+    EXPECT_EQ(params[0].typeId, Type::createNumber().getRawId());
+    EXPECT_FALSE(params[0].isOptional);
+    EXPECT_EQ(params[1].typeId, Type::createString().getRawId());
+    EXPECT_TRUE(params[1].isOptional);
+    prev = cur;
+  }
+}
+
+TEST_F(TypeContextTest, ReservedUnfilledEntriesInAlgebra) {
+  TypeContext ctx;
+  // Lowering a recursive type such as
+  //   type Json = number | string | Json[]
+  // builds the union number|string|A while the Array entry A is reserved but
+  // not yet filled. The algebra must work from the kind and the id alone.
+  Type numStr = ctx.unionTy(Type::createNumber(), Type::createString());
+  Type arrNum = ctx.createArray(Type::createNumber());
+  Type fnVoid = ctx.createFunction(
+      Type::createUndefined(),
+      Type::createNoType(),
+      Type::createNoType(),
+      {},
+      false,
+      false);
+
+  Type reservedArr = ctx.reserveArray();
+  Type reservedFn = ctx.reserveFunction();
+  // Unfilled: the payloads still hold NoType.
+  ASSERT_TRUE(ctx.getArrayElementType(reservedArr).isNoType());
+  ASSERT_TRUE(ctx.getFunctionReturn(reservedFn).isNoType());
+
+  for (Type r : {reservedArr, reservedFn}) {
+    Type u = ctx.unionTy(numStr, r);
+    EXPECT_EQ(ctx.countKinds(u), 3u);
+    EXPECT_TRUE(ctx.isSubsetOf(r, u));
+    EXPECT_TRUE(ctx.isSubsetOf(numStr, u));
+    EXPECT_FALSE(ctx.isSubsetOf(u, numStr));
+
+    EXPECT_TRUE(ctx.isSubsetOf(r, Type::createObject()));
+    EXPECT_FALSE(ctx.isSubsetOf(Type::createObject(), r));
+    EXPECT_FALSE(ctx.isSubsetOf(r, arrNum));
+    EXPECT_FALSE(ctx.isSubsetOf(r, fnVoid));
+
+    EXPECT_TRUE(ctx.areDisjoint(r, numStr));
+    EXPECT_FALSE(ctx.areDisjoint(r, Type::createObject()));
+    EXPECT_FALSE(ctx.areDisjoint(r, arrNum));
+    EXPECT_FALSE(ctx.areDisjoint(r, fnVoid));
+    EXPECT_FALSE(ctx.areDisjoint(r, u));
+  }
+
+  // Filling changes only the payload: the union built before the fill is
+  // still the canonical union of the same arms.
+  Type uArr = ctx.unionTy(numStr, reservedArr);
+  ctx.fillArray(reservedArr, uArr);
+  EXPECT_EQ(ctx.getArrayElementType(reservedArr), uArr);
+  EXPECT_EQ(ctx.unionTy(numStr, reservedArr), uArr);
+}
+
+TEST_F(TypeContextTest, RecursiveTypesAreObjects) {
+  TypeContext ctx;
+  // type Json = number | string | Json[]
+  Type arr = ctx.reserveArray();
+  Type json =
+      ctx.unionTy(ctx.unionTy(Type::createNumber(), Type::createString()), arr);
+  ctx.fillArray(arr, json);
+  // type F = (x: number) => F
+  Type fn = ctx.reserveFunction();
+  FunctionParam params[] = {{Type::createNumber().getRawId(), false}};
+  ctx.fillFunction(
+      fn, fn, Type::createNoType(), Type::createNoType(), params, false, false);
+
+  EXPECT_TRUE(ctx.isSubsetOf(arr, Type::createObject()));
+  EXPECT_TRUE(ctx.isSubsetOf(fn, Type::createObject()));
+  EXPECT_FALSE(ctx.isSubsetOf(json, Type::createObject()));
+  EXPECT_TRUE(ctx.isSubsetOf(json, json));
+  EXPECT_TRUE(ctx.isSubsetOf(fn, fn));
+  EXPECT_FALSE(ctx.areDisjoint(json, arr));
+  EXPECT_FALSE(ctx.areDisjoint(fn, arr));
+  EXPECT_EQ(ctx.intersectTy(json, Type::createObject()), arr);
+  EXPECT_EQ(ctx.getFunctionReturn(fn), fn);
+}
+
+TEST_F(TypeContextTest, ArrayFunctionAlgebra) {
+  TypeContext ctx;
+
+  Type arrNum = ctx.createArray(Type::createNumber());
+  Type arrStr = ctx.createArray(Type::createString());
+  Type fnVoid = ctx.createFunction(
+      Type::createUndefined(),
+      Type::createNoType(),
+      Type::createNoType(),
+      {},
+      false,
+      false);
+  Type obj = Type::createObject();
+
+  // Every refinement is a subtype of Object.
+  EXPECT_TRUE(ctx.isSubsetOf(arrNum, obj));
+  EXPECT_TRUE(ctx.isSubsetOf(fnVoid, obj));
+  EXPECT_FALSE(ctx.isSubsetOf(obj, arrNum));
+
+  // Invariant / id-equality within kind: Array<number> is only a subtype of
+  // itself, not of Array<string>.
+  EXPECT_TRUE(ctx.isSubsetOf(arrNum, arrNum));
+  EXPECT_FALSE(ctx.isSubsetOf(arrNum, arrStr));
+
+  // Conservative disjointness (D5): distinct structural refined types are NOT
+  // declared disjoint; refined-vs-primitive IS disjoint.
+  EXPECT_FALSE(ctx.areDisjoint(arrNum, arrStr));
+  EXPECT_FALSE(ctx.areDisjoint(arrNum, fnVoid));
+  EXPECT_TRUE(ctx.areDisjoint(arrNum, Type::createNumber()));
+
+  // intersect: refined ∩ Object = refined; refined ∩ same = same; refined ∩
+  // distinct-primitive = NoType.
+  EXPECT_EQ(ctx.intersectTy(arrNum, obj), arrNum);
+  EXPECT_EQ(ctx.intersectTy(arrNum, arrNum), arrNum);
+  EXPECT_TRUE(ctx.intersectTy(arrNum, Type::createNumber()).isNoType());
+
+  // union: refined | Object collapses to Object (subsumption); refined |
+  // distinct-refined keeps both arms.
+  EXPECT_EQ(ctx.unionTy(arrNum, obj), obj);
+  Type u = ctx.unionTy(arrNum, arrStr);
+  EXPECT_EQ(ctx.countKinds(u), 2u);
+  EXPECT_TRUE(ctx.isSubsetOf(arrNum, u));
+  EXPECT_TRUE(ctx.isSubsetOf(arrStr, u));
+}
+
+TEST_F(TypeContextTest, ArrayFunctionPrint) {
+  TypeContext ctx;
+
+  Type arrNum = ctx.createArray(Type::createNumber());
+  FunctionParam params[] = {{Type::createNumber().getRawId(), false}};
+  Type fn = ctx.createFunction(
+      Type::createString(),
+      Type::createNoType(),
+      Type::createNoType(),
+      params,
+      false,
+      false);
+
+  auto str = [&](Type t) {
+    std::string s;
+    llvh::raw_string_ostream os{s};
+    ctx.print(os, t);
+    return os.str();
+  };
+
+  EXPECT_EQ(str(arrNum), "array(number)");
+  EXPECT_EQ(str(fn), "function(string)");
+
+  // A union element or return type prints its arms, using the same "any"
+  // shorthand as a top-level union.
+  Type numStr = ctx.unionTy(Type::createNumber(), Type::createString());
+  EXPECT_EQ(str(ctx.createArray(numStr)), "array(string|number)");
+  EXPECT_EQ(
+      str(ctx.createArray(
+          ctx.unionTy(Type::createAnyType(), Type::createEmpty()))),
+      "array(any|empty)");
+  Type fnNumStr = ctx.createFunction(
+      numStr, Type::createNoType(), Type::createNoType(), {}, false, false);
+  EXPECT_EQ(str(fnNumStr), "function(string|number)");
+  // Parentheses keep a union payload apart from an enclosing union.
+  EXPECT_EQ(
+      str(ctx.unionTy(fnNumStr, Type::createNull())),
+      "null|function(string|number)");
+}
+
+TEST_F(TypeContextTest, RecursiveTypePrint) {
+  TypeContext ctx;
+
+  auto str = [&](Type t) {
+    std::string s;
+    llvh::raw_string_ostream os{s};
+    ctx.print(os, t);
+    return os.str();
+  };
+  // Fill the reserved function \p f with return type \p ret and no params.
+  auto fillFn = [&](Type f, Type ret) {
+    ctx.fillFunction(
+        f, ret, Type::createNoType(), Type::createNoType(), {}, false, false);
+  };
+
+  // type A = A[]
+  Type a = ctx.reserveArray();
+  ctx.fillArray(a, a);
+  EXPECT_EQ(str(a), "array(^1)");
+
+  // type F = () => F
+  Type f = ctx.reserveFunction();
+  fillFn(f, f);
+  EXPECT_EQ(str(f), "function(^1)");
+
+  // type G = () => G | null
+  Type g = ctx.reserveFunction();
+  fillFn(g, ctx.unionTy(g, Type::createNull()));
+  EXPECT_EQ(str(g), "function(null|^1)");
+
+  // type Json = number | string | Json[]. The element union refers to the
+  // array, so the array prints its own arms with a back-reference.
+  Type jsonArr = ctx.reserveArray();
+  Type json = ctx.unionTy(
+      ctx.unionTy(Type::createNumber(), Type::createString()), jsonArr);
+  ctx.fillArray(jsonArr, json);
+  EXPECT_EQ(str(json), "string|number|array(string|number|^1)");
+
+  // type M = M[][]: the inner array refers back to the outer one, two levels
+  // up. It must print differently from N[] where type N = N[], whose inner
+  // array refers to itself.
+  Type mOuter = ctx.reserveArray();
+  Type mInner = ctx.createArray(mOuter);
+  ctx.fillArray(mOuter, mInner);
+  Type n = ctx.reserveArray();
+  ctx.fillArray(n, n);
+  Type arrN = ctx.createArray(n);
+  EXPECT_EQ(str(mOuter), "array(array(^2))");
+  EXPECT_EQ(str(arrN), "array(array(^1))");
+  // Printing starts from the given type, so the inner entry of M prints
+  // with its own back-reference depth.
+  EXPECT_EQ(str(mInner), "array(array(^2))");
+
+  // Mutual recursion through an array and a function:
+  //   type P = Q[]; type Q = () => P
+  Type p = ctx.reserveArray();
+  Type q = ctx.reserveFunction();
+  fillFn(q, p);
+  ctx.fillArray(p, q);
+  EXPECT_EQ(str(p), "array(function(^2))");
+  EXPECT_EQ(str(q), "function(array(^2))");
+
+  // A type that repeats a non-recursive entry on two arms is not a cycle and
+  // prints it in full both times.
+  Type arrNum = ctx.createArray(Type::createNumber());
+  Type twice = ctx.createArray(
+      ctx.unionTy(arrNum, ctx.createArray(ctx.createArray(arrNum))));
+  EXPECT_EQ(str(twice), "array(array(number)|array(array(array(number))))");
+}
+
 } // anonymous namespace
