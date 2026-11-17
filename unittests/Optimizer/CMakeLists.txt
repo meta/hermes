@@ -6,6 +6,7 @@
 set(OptimizerSources
   Scalar/InstructionEscapeAnalysisTest.cpp
   Scalar/LowerBuiltinCallsTest.cpp
+  Scalar/TypeInferenceTest.cpp
   PassManager/PassManagerTest.cpp
   )
 

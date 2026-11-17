@@ -793,7 +793,7 @@ class TypeInferenceImpl {
   Type inferHBCCallWithArgCountInst(HBCCallWithArgCountInst *inst) {
     // If the target of this call is known, propagate its return type.
     if (auto *F = llvh::dyn_cast<Function>(inst->getTarget()))
-      return F->getType();
+      return F->getReturnType();
     return Type::createAnyType();
   }
   Type inferCallBuiltinInst(CallBuiltinInst *inst) {
