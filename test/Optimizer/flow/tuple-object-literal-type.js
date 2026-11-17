@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %shermes -Xdump-functions=mkTuple,mkObj,mkEmpty,rest -typed -dump-ir -O %s | %FileCheckOrRegen --match-full-lines %s
+// RUN: %shermes -Xdump-functions=mkTuple,mkObj,mkEmpty,rest,widen -typed -dump-ir -O %s | %FileCheckOrRegen --match-full-lines %s
 // RUN: %shermes -typed -verify-ir -O0 -exec %s | %FileCheck --check-prefix=EXEC --match-full-lines %s
 // RUN: %shermes -typed -verify-ir -O -exec %s | %FileCheck --check-prefix=EXEC --match-full-lines %s
 
@@ -36,10 +36,32 @@ function rest(o: {a: number, b: string, c: number}): {b: string, c: number} {
   return r;
 }
 
+// An object stored into bindings whose type is not its own exact type: Flow
+// lets {x: number} flow into {+x: number | string} (a readonly field is
+// covariant), but under shallow subtyping neither IR type is a subset of the
+// other. Each store narrows it again (trusted) to the binding's type, so the
+// value reaches the typed static field and the return without a runtime cast.
+type RO = {+x: number | string};
+class Store {
+  static o: RO;
+}
+function widen(n: number): RO {
+  'noinline';
+  const o: {x: number} = {x: n};
+  let local: RO = o;
+  function read(): RO {
+    return local;
+  }
+  Store.o = read();
+  return o;
+}
+
 print(mkTuple(1)[0], mkTuple(2)[1], mkObj(3).x, mkObj(4).y, typeof mkEmpty());
 // EXEC: 1 s 3 s object
 print(rest({a: 1, b: 'b', c: 2}).b, rest({a: 3, b: 'd', c: 4}).c);
 // EXEC-NEXT: b 4
+print(widen(5).x, Store.o.x);
+// EXEC-NEXT: 5 5
 
 })();
 
@@ -79,4 +101,17 @@ print(rest({a: 1, b: 'b', c: 2}).b, rest({a: 3, b: 'd', c: 4}).c);
 // CHECK-NEXT:       PrStoreInst %4: number, %1: object, 1: number, "c": string, true: boolean
 // CHECK-NEXT:  %6 = UnionNarrowTrustedInst (:exactObject(b: string, c: number)) %1: object
 // CHECK-NEXT:       ReturnInst %6: exactObject(b: string, c: number)
+// CHECK-NEXT:function_end
+
+// CHECK:scope %VS0 [o: empty|exactObject(x: string|number)]
+
+// CHECK:function widen(n: number): exactObject(x: number) [allCallsitesKnownInStrictMode,typed]
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
+// CHECK-NEXT:  %1 = AllocObjectLiteralInst (:object) empty: any, "x": string, 0: number
+// CHECK-NEXT:       PrStoreInst 5: number, %1: object, 0: number, "x": string, true: boolean
+// CHECK-NEXT:  %3 = UnionNarrowTrustedInst (:exactObject(x: number)) %1: object
+// CHECK-NEXT:  %4 = UnionNarrowTrustedInst (:exactObject(x: string|number)) %3: exactObject(x: number)
+// CHECK-NEXT:       StoreFrameInst %0: environment, %4: exactObject(x: string|number), [%VS0.o]: empty|exactObject(x: string|number)
+// CHECK-NEXT:       ReturnInst %3: exactObject(x: number)
 // CHECK-NEXT:function_end

@@ -33,13 +33,20 @@ Value *ESTreeIRGen::narrowToFlowType(
 
   if (!tc.isSubsetOf(targetIRType, valueType)) {
     // Refined object types (e.g. function types) use shallow, identity-based
-    // subtyping, so structurally compatible ones that the FlowChecker accepted
-    // can be neither a subset nor a superset of each other. No cast can
-    // express the relation, so leave the value as is.
+    // subtyping (D4), so structurally compatible ones that the FlowChecker
+    // accepted can be neither a subset nor a superset of each other. The
+    // FlowChecker proved that this value has the target Flow type, so a
+    // trusted narrow to the target IR type is sound, and it gives the value
+    // the type that typed slots require. Type inference keeps the narrow's
+    // type because intersectTy keeps its first operand for such pairs (D9).
     if (!tc.areDisjoint(targetIRType, valueType) &&
         tc.isSubsetOf(
-            tc.subtractTy(valueType, targetIRType), Type::createObject()))
-      return value;
+            tc.subtractTy(valueType, targetIRType), Type::createObject())) {
+      Instruction *narrow =
+          Builder.createUnionNarrowTrustedInst(value, targetIRType);
+      narrow->setLocation(loc->getDebugLoc());
+      return narrow;
+    }
     Mod->getContext().getSourceErrorManager().error(
         loc->getSourceRange(),
         "Internal error: Flow expr type is not a subset of value type");
