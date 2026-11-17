@@ -3010,7 +3010,8 @@ class FlowChecker::ExprVisitor {
           llvh::ArrayRef<TypedFunctionType::Param> params = ftype->getParams();
           if (shouldVisitArguments)
             visitCallArgumentsWithConstraints(node->_arguments, node, params);
-          outer_.setNodeType(node, ftype->getReturnType());
+          outer_.setNodeType(
+              node, outer_.flowContext_.getCallResultType(ftype));
           checkCallArgumentTypes(params, node, node->_arguments, "function");
           return;
         }
@@ -3035,7 +3036,7 @@ class FlowChecker::ExprVisitor {
     llvh::ArrayRef<TypedFunctionType::Param> params{};
 
     if (auto *ftype = llvh::dyn_cast<TypedFunctionType>(calleeType->info)) {
-      returnType = ftype->getReturnType();
+      returnType = outer_.flowContext_.getCallResultType(ftype);
       params = ftype->getParams();
     } else {
       auto *nftype = llvh::cast<NativeFunctionType>(calleeType->info);
@@ -3332,7 +3333,7 @@ class FlowChecker::ExprVisitor {
       return;
     }
 
-    outer_.setNodeType(call, ftype->getReturnType());
+    outer_.setNodeType(call, outer_.flowContext_.getCallResultType(ftype));
 
     ++it;
     if (it == call->_arguments.end()) {
@@ -3407,7 +3408,7 @@ class FlowChecker::ExprVisitor {
       return;
     }
 
-    outer_.setNodeType(call, ftype->getReturnType());
+    outer_.setNodeType(call, outer_.flowContext_.getCallResultType(ftype));
 
     if (it == call->_arguments.end()) {
       outer_.sm_.error(

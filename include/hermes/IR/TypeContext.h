@@ -837,6 +837,13 @@ class TypeContext {
   /// Create a Function type. Interned: two calls with an identical signature
   /// return the same Type. Allocates an entry only on a cache miss. \p thisTy
   /// and \p restTy may be NoType when absent.
+  ///
+  /// When \p isAsync or \p isGenerator is set, \p ret is the annotated return
+  /// type (the promise's value type, or the generator's return value), not
+  /// the type of a call, which returns a promise or a generator object. Until
+  /// the type system has promise and generator types, such a call is
+  /// 'mixed' in Flow and 'object' in the IR. Deep structural subtyping (D10)
+  /// will compare these return types, so it must use the same definition.
   Type createFunction(
       Type ret,
       Type thisTy,

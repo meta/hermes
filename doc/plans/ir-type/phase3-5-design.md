@@ -367,6 +367,20 @@ constrained:
 Until step 3, D2 holds for the structural kinds, and casts to them remain
 object-ness checks backed only by Flow's static guarantees.
 
+**Note: the return type of async and generator signatures.** For an async
+function or a generator, the return type in the Flow `TypedFunctionType`
+and in the IR `Function` type is the annotation (the promise's value type,
+or the generator's return value), not the type of a call, which is a
+promise or a generator object. Until typed mode has promise and generator
+types, a call to such a function is `mixed` in Flow
+(`FlowContext::getCallResultType`) and `object` in the IR (`emitCall`).
+`mixed` rather than `any`, because `any` flows implicitly into any type
+through a checked cast that, for refined object kinds, checks only that the
+value is an object (D2).
+Deep structural subtyping (step 2) compares these return types; it must
+treat them as annotations, and only between signatures with equal async and
+generator flags, as Flow's `canAFlowIntoB` does.
+
 ## Phase Plan (Approach A: phase-by-phase, each wired live)
 
 Ordered by difficulty. The lowering sections below describe what was

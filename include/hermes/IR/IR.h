@@ -1576,6 +1576,10 @@ class Function : public llvh::ilist_node_with_parent<Function, Module>,
   /// whose closure user code receives, and not on the inner function, which
   /// CreateGeneratorInst creates and which is never a closure. Used as the
   /// type of CreateFunctionInst closures so they carry their real signature.
+  /// For an async function or a generator the return type in it is the
+  /// annotation (the promise's value type, or the generator's return value),
+  /// not the type of a call, which IRGen types 'object' (see
+  /// TypeContext::createFunction).
   Type functionType_{Type::createObject()};
 
   /// A name derived from \c originalOrInferredName_, but unique in the Module.

@@ -695,6 +695,17 @@ class BaseFunctionType : public TypeInfo {
   }
 };
 
+/// The type of a typed function: its parameters, optional "this" parameter,
+/// return type and async/generator flags.
+///
+/// The return type is the annotation. For a plain function it is also the
+/// type of a call. For an async function it is the type of the promise's
+/// value, and for a generator the type of its return value, so it is not the
+/// type of a call, which is a promise or a generator object. Typed mode has
+/// no promise or generator types yet, so FlowContext::getCallResultType
+/// types such a call 'mixed', and IRGen types it 'object' in the IR. Function
+/// assignability (canAFlowIntoB) compares the annotations and requires equal
+/// async and generator flags.
 class TypedFunctionType : public BaseFunctionType {
  public:
   struct Param {
@@ -711,7 +722,8 @@ class TypedFunctionType : public BaseFunctionType {
   };
 
  private:
-  /// Result type.
+  /// Return type annotation: for an async function or a generator, not the
+  /// type of a call (see the class comment).
   Type *return_ = nullptr;
   /// Optional "this" parameter type.
   Type *thisParam_ = nullptr;
@@ -734,6 +746,12 @@ class TypedFunctionType : public BaseFunctionType {
 
   Type *getReturnType() const {
     return return_;
+  }
+  /// \return true if a call to this function does not return a value of the
+  /// return type: an async function returns a promise and a generator
+  /// returns a generator object.
+  bool callWrapsReturnType() const {
+    return isAsync() || isGenerator();
   }
   Type *getThisParam() const {
     return thisParam_;
@@ -1360,6 +1378,20 @@ class FlowContext {
 
   /// Get a singleton type by index.
   Type *getSingletonType(TypeKind kind) const;
+
+  /// \return the type of a call to a function of type \p ft: its return type,
+  /// or 'mixed' for an async function or a generator, whose call returns a
+  /// promise or a generator object. Flow has no general object type (exact
+  /// objects are fixed shapes and classes are nominal, so either would be
+  /// false). 'any' would flow implicitly into any concrete type through a
+  /// checked cast, and a cast to a refined object kind checks only that the
+  /// value is an object, so a promise could be used as a class instance.
+  /// 'mixed' flows only into 'any' and 'mixed' (or through an explicit
+  /// cast), and still allows typeof and await, until promise and generator
+  /// types exist.
+  Type *getCallResultType(const TypedFunctionType *ft) const {
+    return ft->callWrapsReturnType() ? getMixed() : ft->getReturnType();
+  }
 
   /// Options on which arms to exclude from a created union.
   struct UnionExcludes {

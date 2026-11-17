@@ -1091,7 +1091,12 @@ Value *ESTreeIRGen::emitCall(
       callInst->getAttributesRef(Mod).isNativeJSFunction = true;
       if (auto *typedFunc =
               llvh::dyn_cast<flow::TypedFunctionType>(baseFunctionType)) {
-        callInst->setType(flowTypeToIRType(typedFunc->getReturnType()));
+        // A call to an async function returns a promise, and a call to a
+        // generator a generator object, not a value of the return type.
+        callInst->setType(
+            typedFunc->callWrapsReturnType()
+                ? Type::createObject()
+                : flowTypeToIRType(typedFunc->getReturnType()));
       }
     }
     return callInst;

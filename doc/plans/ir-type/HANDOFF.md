@@ -355,12 +355,17 @@ Open issues, filed in `dz/` (`dz show <id>`):
 - `01a1c623-8582`: `mermes` (`tools/facebook/mermes`) does not link (missing
   `hermesHBCBackend`). Not caused by this work; it makes a target-less
   `ninja` exit non-zero.
+- `01a1cb5b-f083`: typed mode has no promise or generator types. For an
+  async function or a generator, the return type of the Flow
+  `TypedFunctionType` and of the IR `Function` type is the annotation (the
+  promise's value type, or the generator's return value), not the type of a
+  call. A call is `mixed` in Flow (`FlowContext::getCallResultType`) and
+  `object` in the IR (`emitCall`) until real types exist; deep structural
+  subtyping must compare these return types as annotations (see the note
+  after D10 in `phase3-5-design.md`).
 
 Bugs found while testing the review follow-ups, all also present on the
 base master commit, before this stack:
-- `01a1c623-6e9a`: a call to a typed async or generator function is typed
-  with the annotated return type (a promise held in a `number` binding;
-  a generator call fails verification at `-O`).
 - `01a1c623-7516`: `new Array<number>()` allocates a typed object, not an
   array; `push` on it aborts.
 
@@ -368,6 +373,10 @@ Fixed after the review, following `typed-mode-bugs-plan.md`:
 - `01a1c623-71c5` (typed parameters of async and generator functions
   failed IR verification after `LowerGeneratorFunction`): fixed by "Keep
   param types when lowering generators".
+- `01a1c623-6e9a` (a call to a typed async or generator function was typed
+  with the annotated return type: a promise held in a `number` binding, and
+  a generator call failed verification at `-O`): fixed by "Type
+  async/generator calls as mixed/object".
 
 The redundant double narrow of an object rest binding whose type equals a
 recursive alias is fixed: FlowChecker records the rest type on the
