@@ -508,12 +508,11 @@ class InstSimplifyImpl {
         }
 
         // Operands whose value sets are disjoint can't be strictly equal.
-        // Use areDisjoint rather than an empty intersection: two distinct
-        // refined structural types (e.g. two function types with different
-        // signatures) have an empty interned intersection under the shallow
-        // model, yet their runtime identities can still coincide (subtyping /
-        // variance / an over-narrowed cast such as new.target). areDisjoint
-        // is conservative for such refined types and stays exact for the
+        // areDisjoint is conservative for refined types (D5): two distinct
+        // structural types (e.g. two function types with different
+        // signatures) are not disjoint, because one runtime value can have
+        // both (subtyping / variance / an over-narrowed cast such as
+        // new.target), so they are not folded. It stays exact for the
         // primitive / unrelated-class cases this fold targets.
         if (typeCtx_.areDisjoint(leftTy, rightTy)) {
           return builder_.getLiteralBool(false);
@@ -902,7 +901,7 @@ class InstSimplifyImpl {
 
     // The subset of invalid types that the operand could actually be.
     Type invalidSubset =
-        typeCtx_.intersectTy(TIE->getCheckedValue()->getType(), invalidTypes);
+        typeCtx_.intersectTy(invalidTypes, TIE->getCheckedValue()->getType());
     // If all invalid types are possible, there is nothing we can optimize.
     if (invalidSubset == invalidTypes)
       return nullptr;

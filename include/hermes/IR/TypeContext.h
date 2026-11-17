@@ -956,7 +956,22 @@ class TypeContext {
   /// union type.
   Type unionTy(Type a, Type b);
 
-  /// \return the intersection of types \p a and \p b.
+  /// \return the intersection of types \p a and \p b, or, where that is not
+  /// expressible, a type that contains it and is a subset of \p a.
+  ///
+  /// The result is exact, and symmetric, except when neither operand is a
+  /// subset of the other and a leaf of \p a and a leaf of \p b overlap
+  /// without either being a subtype of the other: two distinct structural
+  /// refined types (e.g. two different function types), or a class and a
+  /// structural refined type. Shallow subtyping (D4) cannot express their
+  /// meet, so the leaf of \p a stands in for it (decision D9 in
+  /// doc/plans/ir-type/phase3-5-design.md). The result is therefore always a
+  /// subset of \p a, but not necessarily of \p b.
+  ///
+  /// Argument-order contract: pass the type whose shape the caller keeps (the
+  /// target type of a cast or a narrow, a declared type that bounds an
+  /// inferred one) as \p a. Whether the result is NoType does not depend on
+  /// the order, so callers that only test for NoType may pass either order.
   Type intersectTy(Type a, Type b);
 
   /// \return type \p a minus type \p b (conservative approximation).
@@ -1123,7 +1138,12 @@ class TypeContext {
   /// Helper to append arms to typeArrays_ and create a union entry.
   uint32_t addUnionEntry(llvh::ArrayRef<uint32_t> arms);
 
-  /// Intersect two non-union, non-empty type IDs.
+  /// Intersect two non-union, non-empty type IDs. The result is exact unless
+  /// \p a and \p b overlap without either being a subtype of the other (two
+  /// distinct structural refined types, or a class and a structural refined
+  /// type). Their meet is not expressible, so \p a is returned (D9). The
+  /// result is therefore always a subtype of \p a but not necessarily of \p b,
+  /// and callers must pass the leaf whose type they keep as \p a.
   uint32_t intersectLeafTy(uint32_t a, uint32_t b) const;
 
   /// Create a union from two operands with full canonicalization and interning.

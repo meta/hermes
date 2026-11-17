@@ -1153,7 +1153,18 @@ uint32_t TypeContext::intersectLeafTy(uint32_t a, uint32_t b) const {
   // above.
   if (isNumberKind(aKind) && isNumberKind(bKind))
     return kUInt31Id;
-  return kNoTypeId;
+  if (areLeafTypesDisjointById(a, b))
+    return kNoTypeId;
+
+  // The leaves overlap, but neither contains the other: two distinct
+  // structural refined types, or a class and a structural refined type (D5).
+  // Their exact meet is not expressible in the shallow model (D4), and NoType
+  // would claim that no value has both types. Return a, which contains the
+  // meet (D9). This makes the result a subtype of a but not necessarily of b.
+  assert(
+      isRefinedKind(aKind) && isRefinedKind(bKind) &&
+      "only refined leaves can overlap without a subtype relation");
+  return a;
 }
 
 uint32_t TypeContext::createUnionFromLeafArms(llvh::ArrayRef<uint32_t> arms) {
@@ -1279,6 +1290,13 @@ Type TypeContext::intersectTy(Type a, Type b) {
   if (aKind != TypeKind::Union && bKind != TypeKind::Union)
     return Type{intersectLeafTy(a.id_, b.id_)};
 
+  // If b is a subset of a, b is the exact meet (D9). The arm-by-arm meet
+  // below would not find it when an arm of a overlaps an arm of b without a
+  // subtype relation: that arm of a is kept, as in
+  // (array(number)|function(number)) ∩ array(number).
+  if (isSubsetOf(b, a))
+    return b;
+
   llvh::SmallVector<uint32_t, 16> intersections;
 
   if (aKind == TypeKind::Union && bKind == TypeKind::Union) {
@@ -1295,11 +1313,14 @@ Type TypeContext::intersectTy(Type a, Type b) {
     return Type{createUnionFromLeafArms(intersections)};
   }
 
+  // Exactly one operand is a union. Keep a's leaves first in every
+  // intersectLeafTy call, so the result stays a subtype of a (D9).
   auto unionArms = aKind == TypeKind::Union ? getUnionArms(a) : getUnionArms(b);
-  uint32_t leaf = aKind == TypeKind::Union ? b.id_ : a.id_;
   intersections.reserve(unionArms.size());
   for (Type arm : unionArms) {
-    uint32_t intersection = intersectLeafTy(arm.id_, leaf);
+    uint32_t intersection = aKind == TypeKind::Union
+        ? intersectLeafTy(arm.id_, b.id_)
+        : intersectLeafTy(a.id_, arm.id_);
     if (intersection != kNoTypeId)
       intersections.push_back(intersection);
   }

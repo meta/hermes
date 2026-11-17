@@ -1935,6 +1935,92 @@ TEST_F(TypeContextTest, TupleExactObjectAlgebra) {
   EXPECT_EQ(ctx.unionTy(tupOrObj, obj), obj);
 }
 
+/// D9: intersecting two leaves that overlap without a subtype relation
+/// returns the first operand, so the result is a subset of the first operand
+/// and the argument order matters. Exact cases are unaffected.
+TEST_F(TypeContextTest, IntersectOverlappingUnrelatedReturnsFirst) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+  Type num = Type::createNumber();
+  Type str = Type::createString();
+  Type null = Type::createNull();
+  Type obj = Type::createObject();
+
+  // (x: number|string) => number and (x: number) => number|string: the
+  // function types of a value that Flow lets flow into the other.
+  FunctionParam numOrStrParam[] = {
+      {ctx.unionTy(num, str).getRawId(), /*isOptional*/ false}};
+  FunctionParam numParam[] = {{num.getRawId(), /*isOptional*/ false}};
+  Type f1 = ctx.createFunction(
+      num,
+      Type::createNoType(),
+      Type::createNoType(),
+      numOrStrParam,
+      false,
+      false);
+  Type f2 = ctx.createFunction(
+      ctx.unionTy(num, str),
+      Type::createNoType(),
+      Type::createNoType(),
+      numParam,
+      false,
+      false);
+  Type arr = ctx.createArray(num);
+  Type tup = ctx.createTuple({num, str});
+  Type animal = ctx.createClassInstance(
+      Type::createNoType(), strTab.getIdentifier("Animal"), {});
+  Type dog = ctx.createClassInstance(animal, strTab.getIdentifier("Dog"), {});
+  Type cat = ctx.createClassInstance(animal, strTab.getIdentifier("Cat"), {});
+
+  // Overlapping, unrelated leaves: the first operand wins, in either order.
+  // Two functions, an array and a tuple, a class and a function.
+  Type pairs[][2] = {{f1, f2}, {arr, tup}, {dog, f1}};
+  for (auto [a, b] : pairs) {
+    ASSERT_FALSE(ctx.areDisjoint(a, b));
+    ASSERT_FALSE(ctx.isSubsetOf(a, b));
+    ASSERT_FALSE(ctx.isSubsetOf(b, a));
+    EXPECT_EQ(ctx.intersectTy(a, b), a);
+    EXPECT_EQ(ctx.intersectTy(b, a), b);
+  }
+
+  // With unions, each arm of the first operand is kept, whichever operand is
+  // the union.
+  Type f1OrNull = ctx.unionTy(f1, null);
+  Type f2OrNull = ctx.unionTy(f2, null);
+  EXPECT_EQ(ctx.intersectTy(f2OrNull, f1OrNull), f2OrNull);
+  EXPECT_EQ(ctx.intersectTy(f1OrNull, f2OrNull), f1OrNull);
+  EXPECT_EQ(ctx.intersectTy(f2OrNull, f1), f2);
+  EXPECT_EQ(ctx.intersectTy(f1, f2OrNull), f1);
+  EXPECT_EQ(ctx.intersectTy(f2, ctx.unionTy(f1, arr)), f2);
+
+  // When one operand is a subset of the other, the result is the smaller one,
+  // even if an arm of the union operand overlaps the other operand without a
+  // subtype relation.
+  Type f1OrArr = ctx.unionTy(f1, arr);
+  EXPECT_EQ(ctx.intersectTy(f1OrArr, arr), arr);
+  EXPECT_EQ(ctx.intersectTy(arr, f1OrArr), arr);
+  EXPECT_EQ(ctx.intersectTy(ctx.unionTy(dog, f1), dog), dog);
+
+  // Exact cases are unchanged and symmetric: a subtype relation returns the
+  // smaller type, Int32 and Uint32 meet at UInt31, disjoint pairs are empty.
+  EXPECT_EQ(ctx.intersectTy(f1, obj), f1);
+  EXPECT_EQ(ctx.intersectTy(obj, f1), f1);
+  EXPECT_EQ(ctx.intersectTy(f1, f1), f1);
+  EXPECT_EQ(ctx.intersectTy(animal, dog), dog);
+  EXPECT_EQ(ctx.intersectTy(dog, animal), dog);
+  EXPECT_EQ(
+      ctx.intersectTy(asType(kInt32Id), asType(kUint32Id)), asType(kUInt31Id));
+  EXPECT_EQ(
+      ctx.intersectTy(asType(kUint32Id), asType(kInt32Id)), asType(kUInt31Id));
+  EXPECT_TRUE(ctx.intersectTy(dog, cat).isNoType());
+  EXPECT_TRUE(ctx.intersectTy(cat, dog).isNoType());
+  EXPECT_TRUE(ctx.intersectTy(f1, num).isNoType());
+  EXPECT_TRUE(ctx.intersectTy(num, f1).isNoType());
+  EXPECT_EQ(ctx.intersectTy(f1OrNull, ctx.unionTy(num, null)), null);
+  EXPECT_EQ(ctx.intersectTy(ctx.unionTy(num, null), f1OrNull), null);
+}
+
 TEST_F(TypeContextTest, TupleExactObjectPrint) {
   hermes::BumpPtrAllocator alloc;
   hermes::StringTable strTab{alloc};
@@ -2070,6 +2156,367 @@ TEST_F(TypeContextTest, RecursiveTupleExactObjectPrint) {
   EXPECT_EQ(
       print(ctx.createTuple({tupNum, tupNum})),
       "tuple(tuple(number), tuple(number))");
+}
+
+/// Fixture for the totality tests of the type algebra. It builds a sample of
+/// types that covers every leaf kind, every refined kind (including a
+/// self-referential entry of each), and unions that mix them.
+/// The tests check algebraic laws over all ordered pairs of the sample instead
+/// of hand-written result tables, so a new kind or rule is checked against
+/// every other one.
+class TypeAlgebraTotalityTest : public TypeContextTest {
+ protected:
+  /// A sample type and the label that names it in failure messages.
+  struct Sample {
+    const char *name;
+    Type type;
+  };
+
+  /// Build the sample types in ctx_ and list them in samples_.
+  TypeAlgebraTotalityTest();
+
+  /// \return "(a, b)" with the labels of \p a and \p b, for failure messages.
+  static std::string pairName(const Sample &a, const Sample &b);
+
+  /// \return \p t printed by the context.
+  std::string print(Type t) const;
+
+  /// \return true if \p t is a leaf of a refined kind.
+  bool isRefinedLeaf(Type t) const;
+
+  /// \return true if \p t is or has an arm of a refined kind.
+  bool hasRefinedArm(Type t) const;
+
+  /// \return true if leaves \p x and \p y are a pair that D9 covers: two
+  /// distinct structural refined types, or a class and a structural refined
+  /// type, that overlap without either being a subtype of the other.
+  bool isD9LeafPair(Type x, Type y) const;
+
+  /// \return true if some arm of \p a and some arm of \p b form a D9 pair.
+  bool hasD9ArmPair(Type a, Type b) const;
+
+  /// \return true if D9 exempts the pair (\p a, \p b) from the law
+  /// `isSubsetOf(intersectTy(a, b), b)`. intersectTy returns b when b is a
+  /// subset of a. Otherwise it intersects arm by arm, and each arm-by-arm
+  /// result is the exact meet (a subset of b) except for a D9 arm pair (x, y),
+  /// which yields the arm x of a. So the result escapes b exactly when b is
+  /// not a subset of a and such an x is itself not a subset of b. Such an x
+  /// survives the subsumption in the result union: anything that could
+  /// subsume it is either a subset of b or another arm of a, and the arms of
+  /// a canonical union do not subsume each other.
+  bool isD9Exempt(Type a, Type b) const;
+
+  /// The allocator behind strTab_.
+  hermes::BumpPtrAllocator alloc_;
+  /// Names of the classes and fields in the sample.
+  hermes::StringTable strTab_{alloc_};
+  /// The context that owns every sample type.
+  TypeContext ctx_;
+  /// The sample, in construction order.
+  std::vector<Sample> samples_;
+};
+
+TypeAlgebraTotalityTest::TypeAlgebraTotalityTest() {
+  Type none = Type::createNoType();
+  Type num = Type::createNumber();
+  Type str = Type::createString();
+  Type null = Type::createNull();
+  // Type::createInt32() and Type::createUint32() return Number.
+  Type int32 = asType(kInt32Id);
+  Type uint32 = asType(kUint32Id);
+  Identifier x = strTab_.getIdentifier("x");
+  Identifier y = strTab_.getIdentifier("y");
+  Identifier next = strTab_.getIdentifier("next");
+  Identifier left = strTab_.getIdentifier("left");
+  Identifier right = strTab_.getIdentifier("right");
+
+  // Classes: Dog extends Animal; Plant is unrelated to both.
+  //   class Node { next: Node | null }
+  Type animal =
+      ctx_.createClassInstance(none, strTab_.getIdentifier("Animal"), {});
+  Type dog = ctx_.createClassInstance(animal, strTab_.getIdentifier("Dog"), {});
+  Type plant =
+      ctx_.createClassInstance(none, strTab_.getIdentifier("Plant"), {});
+  Type node = ctx_.reserveClassInstance(none);
+  ctx_.fillClassInstance(
+      node, strTab_.getIdentifier("Node"), {{next, ctx_.unionTy(node, null)}});
+
+  FunctionParam numParam[] = {{num.getRawId(), /*isOptional*/ false}};
+  Type arrNum = ctx_.createArray(num);
+  Type arrStr = ctx_.createArray(str);
+  Type fnNum = ctx_.createFunction(num, none, none, {}, false, false);
+  Type fnStr = ctx_.createFunction(str, none, none, numParam, false, false);
+  Type tupNumStr = ctx_.createTuple({num, str});
+  Type tupStrNum = ctx_.createTuple({str, num});
+  Type objXY = ctx_.createExactObject({{x, num}, {y, str}});
+  Type objYX = ctx_.createExactObject({{y, str}, {x, num}});
+
+  // Self-referential structural entries, built by reserve and fill:
+  //   type A = A[]
+  //   type F = (x: number) => F | null
+  //   type T = [number, T]
+  //   type Tree = null | {left: Tree, right: Tree}
+  Type selfArr = ctx_.reserveArray();
+  ctx_.fillArray(selfArr, selfArr);
+  Type selfFn = ctx_.reserveFunction();
+  ctx_.fillFunction(
+      selfFn, ctx_.unionTy(selfFn, null), none, none, numParam, false, false);
+  Type selfTup = ctx_.reserveTuple();
+  ctx_.fillTuple(selfTup, {num, selfTup});
+  Type treeNode = ctx_.reserveExactObject();
+  Type tree = ctx_.unionTy(null, treeNode);
+  ctx_.fillExactObject(treeNode, {{left, tree}, {right, tree}});
+
+  samples_ = {
+      {"notype", none},
+      {"empty", Type::createEmpty()},
+      {"uninit", Type::createUninit()},
+      {"undefined", Type::createUndefined()},
+      {"null", null},
+      {"boolean", Type::createBoolean()},
+      {"string", str},
+      {"bigint", Type::createBigInt()},
+      {"symbol", Type::createSymbol()},
+      {"number", num},
+      {"int32", int32},
+      {"uint32", uint32},
+      {"uint31", asType(kUInt31Id)},
+      {"environment", Type::createEnvironment()},
+      {"privateName", Type::createPrivateName()},
+      {"functionCode", Type::createFunctionCode()},
+      {"bits32", asType(kBits32Id)},
+      {"object", Type::createObject()},
+      {"Animal", animal},
+      {"Dog", dog},
+      {"Plant", plant},
+      {"Node (self-referential)", node},
+      {"array(number)", arrNum},
+      {"array(string)", arrStr},
+      {"function(number)", fnNum},
+      {"function(string)", fnStr},
+      {"tuple(number, string)", tupNumStr},
+      {"tuple(string, number)", tupStrNum},
+      {"exactObject(x, y)", objXY},
+      {"exactObject(y, x)", objYX},
+      {"A = A[]", selfArr},
+      {"F = () => F|null", selfFn},
+      {"T = [number, T]", selfTup},
+      {"Tree node", treeNode},
+      {"Tree = null|node", tree},
+      {"array(number)|function(number)", ctx_.unionTy(arrNum, fnNum)},
+      {"tuple(number, string)|null", ctx_.unionTy(tupNumStr, null)},
+      {"Dog|function(string)", ctx_.unionTy(dog, fnStr)},
+      {"number|string", ctx_.unionTy(num, str)},
+      {"int32|uint32", ctx_.unionTy(int32, uint32)},
+      {"bits32|environment",
+       ctx_.unionTy(asType(kBits32Id), Type::createEnvironment())},
+      {"any", Type::createAnyType()},
+  };
+}
+
+std::string TypeAlgebraTotalityTest::pairName(
+    const Sample &a,
+    const Sample &b) {
+  return std::string("(") + a.name + ", " + b.name + ")";
+}
+
+std::string TypeAlgebraTotalityTest::print(Type t) const {
+  std::string s;
+  llvh::raw_string_ostream os{s};
+  ctx_.print(os, t);
+  return os.str();
+}
+
+bool TypeAlgebraTotalityTest::isRefinedLeaf(Type t) const {
+  TypeKind k = ctx_.getKind(t);
+  return k >= TypeKind::_RefinedFirst && k <= TypeKind::_RefinedLast;
+}
+
+bool TypeAlgebraTotalityTest::hasRefinedArm(Type t) const {
+  for (Type arm : ctx_.arms(t)) {
+    if (isRefinedLeaf(arm))
+      return true;
+  }
+  return false;
+}
+
+bool TypeAlgebraTotalityTest::isD9LeafPair(Type x, Type y) const {
+  if (!isRefinedLeaf(x) || !isRefinedLeaf(y))
+    return false;
+  // Two classes are related or disjoint (D5), never a D9 pair.
+  if (ctx_.getKind(x) == TypeKind::ClassInstance &&
+      ctx_.getKind(y) == TypeKind::ClassInstance)
+    return false;
+  return !ctx_.areDisjoint(x, y) && !ctx_.isSubsetOf(x, y) &&
+      !ctx_.isSubsetOf(y, x);
+}
+
+bool TypeAlgebraTotalityTest::hasD9ArmPair(Type a, Type b) const {
+  for (Type x : ctx_.arms(a)) {
+    for (Type y : ctx_.arms(b)) {
+      if (isD9LeafPair(x, y))
+        return true;
+    }
+  }
+  return false;
+}
+
+bool TypeAlgebraTotalityTest::isD9Exempt(Type a, Type b) const {
+  if (ctx_.isSubsetOf(b, a))
+    return false;
+  for (Type x : ctx_.arms(a)) {
+    if (ctx_.isSubsetOf(x, b))
+      continue;
+    for (Type y : ctx_.arms(b)) {
+      if (isD9LeafPair(x, y))
+        return true;
+    }
+  }
+  return false;
+}
+
+TEST_F(TypeAlgebraTotalityTest, UnionContainsOperandsAndCommutes) {
+  for (const Sample &a : samples_) {
+    for (const Sample &b : samples_) {
+      Type u = ctx_.unionTy(a.type, b.type);
+      EXPECT_TRUE(ctx_.isSubsetOf(a.type, u)) << pairName(a, b);
+      EXPECT_TRUE(ctx_.isSubsetOf(b.type, u)) << pairName(a, b);
+      EXPECT_EQ(u, ctx_.unionTy(b.type, a.type)) << pairName(a, b);
+    }
+  }
+}
+
+TEST_F(TypeAlgebraTotalityTest, IntersectionIsSubsetOfFirstOperand) {
+  for (const Sample &a : samples_) {
+    for (const Sample &b : samples_) {
+      EXPECT_TRUE(ctx_.isSubsetOf(ctx_.intersectTy(a.type, b.type), a.type))
+          << pairName(a, b);
+    }
+  }
+}
+
+/// `isSubsetOf(intersectTy(a, b), b)` holds for every pair except exactly the
+/// ones D9 exempts (see isD9Exempt), and in particular whenever one operand
+/// is a subset of the other or neither has a refined arm.
+TEST_F(TypeAlgebraTotalityTest, IntersectionIsSubsetOfSecondOperandExceptD9) {
+  unsigned exempt = 0;
+  for (const Sample &a : samples_) {
+    for (const Sample &b : samples_) {
+      bool holds = ctx_.isSubsetOf(ctx_.intersectTy(a.type, b.type), b.type);
+      bool isExempt = isD9Exempt(a.type, b.type);
+      exempt += isExempt;
+      EXPECT_EQ(holds, !isExempt) << pairName(a, b);
+      if (ctx_.isSubsetOf(a.type, b.type) || ctx_.isSubsetOf(b.type, a.type) ||
+          (!hasRefinedArm(a.type) && !hasRefinedArm(b.type))) {
+        EXPECT_TRUE(holds) << pairName(a, b);
+      }
+    }
+  }
+  // The exemption is not vacuous: the sample has D9 pairs.
+  EXPECT_GT(exempt, 0u);
+}
+
+/// D9: two leaves that overlap without a subtype relation are either a D9
+/// pair, whose intersection is the first operand, or Int32 and Uint32, which
+/// meet at UInt31. Every other leaf pair intersects exactly and symmetrically,
+/// and so does every pair of types that has no D9 arm pair or where one type
+/// is a subset of the other. When one type is a subset of the other, the
+/// intersection is exactly the smaller type.
+TEST_F(TypeAlgebraTotalityTest, IntersectionIsExactExceptD9) {
+  Type int32 = asType(kInt32Id);
+  Type uint32 = asType(kUint32Id);
+  for (const Sample &a : samples_) {
+    for (const Sample &b : samples_) {
+      Type ab = ctx_.intersectTy(a.type, b.type);
+      if (!hasD9ArmPair(a.type, b.type) || ctx_.isSubsetOf(a.type, b.type) ||
+          ctx_.isSubsetOf(b.type, a.type)) {
+        EXPECT_TRUE(ctx_.isSubsetOf(ab, b.type)) << pairName(a, b);
+        EXPECT_EQ(ab, ctx_.intersectTy(b.type, a.type)) << pairName(a, b);
+      }
+      if (ctx_.isSubsetOf(a.type, b.type)) {
+        EXPECT_EQ(ab, a.type) << pairName(a, b);
+      } else if (ctx_.isSubsetOf(b.type, a.type)) {
+        EXPECT_EQ(ab, b.type) << pairName(a, b);
+      }
+      if (ctx_.countKinds(a.type) != 1 || ctx_.countKinds(b.type) != 1 ||
+          ctx_.areDisjoint(a.type, b.type) || ctx_.isSubsetOf(a.type, b.type) ||
+          ctx_.isSubsetOf(b.type, a.type))
+        continue;
+      if (isD9LeafPair(a.type, b.type)) {
+        EXPECT_EQ(ab, a.type) << pairName(a, b);
+      } else {
+        EXPECT_TRUE(
+            (a.type == int32 && b.type == uint32) ||
+            (a.type == uint32 && b.type == int32))
+            << pairName(a, b);
+        EXPECT_EQ(ab, asType(kUInt31Id)) << pairName(a, b);
+      }
+    }
+  }
+}
+
+TEST_F(TypeAlgebraTotalityTest, DisjointIffIntersectionIsEmpty) {
+  for (const Sample &a : samples_) {
+    for (const Sample &b : samples_) {
+      bool disjoint = ctx_.areDisjoint(a.type, b.type);
+      EXPECT_EQ(disjoint, ctx_.areDisjoint(b.type, a.type)) << pairName(a, b);
+      EXPECT_EQ(disjoint, ctx_.intersectTy(a.type, b.type).isNoType())
+          << pairName(a, b);
+    }
+  }
+}
+
+TEST_F(TypeAlgebraTotalityTest, SubsetIsPartialOrder) {
+  size_t n = samples_.size();
+  std::vector<std::vector<bool>> sub(n, std::vector<bool>(n));
+  for (size_t i = 0; i < n; ++i) {
+    for (size_t j = 0; j < n; ++j)
+      sub[i][j] = ctx_.isSubsetOf(samples_[i].type, samples_[j].type);
+  }
+  for (size_t i = 0; i < n; ++i) {
+    EXPECT_TRUE(sub[i][i]) << samples_[i].name;
+    for (size_t j = 0; j < n; ++j) {
+      // Antisymmetric: mutual subsets are the same canonical type.
+      if (sub[i][j] && sub[j][i]) {
+        EXPECT_EQ(samples_[i].type, samples_[j].type)
+            << pairName(samples_[i], samples_[j]);
+      }
+      if (!sub[i][j])
+        continue;
+      for (size_t k = 0; k < n; ++k) {
+        if (sub[j][k]) {
+          EXPECT_TRUE(sub[i][k]) << pairName(samples_[i], samples_[j])
+                                 << " <: " << samples_[k].name;
+        }
+      }
+    }
+  }
+}
+
+TEST_F(TypeAlgebraTotalityTest, SubtractionIsSubsetOfMinuend) {
+  for (const Sample &a : samples_) {
+    EXPECT_TRUE(ctx_.subtractTy(a.type, a.type).isNoType()) << a.name;
+    for (const Sample &b : samples_) {
+      EXPECT_TRUE(ctx_.isSubsetOf(ctx_.subtractTy(a.type, b.type), a.type))
+          << pairName(a, b);
+    }
+  }
+}
+
+/// Printing terminates on every sample type, including the self-referential
+/// ones, and on every result the binary operations produce from the sample.
+TEST_F(TypeAlgebraTotalityTest, PrintingTerminates) {
+  for (const Sample &a : samples_) {
+    EXPECT_FALSE(print(a.type).empty()) << a.name;
+    for (const Sample &b : samples_) {
+      for (Type r :
+           {ctx_.unionTy(a.type, b.type),
+            ctx_.intersectTy(a.type, b.type),
+            ctx_.subtractTy(a.type, b.type)}) {
+        EXPECT_FALSE(print(r).empty()) << pairName(a, b);
+      }
+    }
+  }
 }
 
 } // anonymous namespace
