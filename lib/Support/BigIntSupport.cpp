@@ -150,6 +150,10 @@ OperationStatus initWithBytes(
   return OperationStatus::RETURNED;
 }
 
+bool isZero(ImmutableBigIntRef lhs) {
+  return lhs.numDigits == 0;
+}
+
 bool isNegative(ImmutableBigIntRef src) {
   return src.numDigits > 0 &&
       static_cast<SignedBigIntDigitType>(src.digits[src.numDigits - 1]) < 0;
@@ -1028,7 +1032,7 @@ std::optional<ParsedBigInt> ParsedBigInt::parsedBigIntFromNumericValue(
 std::string toString(ImmutableBigIntRef src, uint8_t radix) {
   assert(radix >= 2 && radix <= 36);
 
-  if (compare(src, 0) == 0) {
+  if (isZero(src)) {
     return "0";
   }
 
@@ -1148,6 +1152,22 @@ ImmutableBigIntRef makeImmutableRefFromSignedDigit(
 } // namespace
 
 int compare(ImmutableBigIntRef lhs, SignedBigIntDigitType rhs) {
+  const int kLhsGreater = 1;
+  const int kRhsGreater = -kLhsGreater;
+
+  if (rhs == 0) {
+    if (isZero(lhs)) return 0;
+    return isNegative(lhs) ? kRhsGreater : kLhsGreater;
+  } else if (rhs == 1) {
+    if (isZero(lhs) || isNegative(lhs)) return kRhsGreater;
+    if (lhs.numDigits > 1) return kLhsGreater;
+    return static_cast<SignedBigIntDigitType>(lhs.digits[0]) == 1 ? 0 : kLhsGreater;
+  } else if (rhs == -1) {
+    if (!isNegative(lhs)) return kLhsGreater;
+    if (lhs.numDigits > 1) return kRhsGreater;
+    return static_cast<SignedBigIntDigitType>(lhs.digits[0]) == -1 ? 0 : kRhsGreater;
+  }
+
   // wrapping rhs in a ImmutableBigIntRef is safe -- rhs outlives the temporary.
   return compare(lhs, makeImmutableRefFromSignedDigit(rhs));
 }
@@ -1386,7 +1406,7 @@ OperationStatus unaryMinus(MutableBigIntRef dst, ImmutableBigIntRef src) {
   assert(
       ((isNegative(ImmutableBigIntRef{dst.digits, dst.numDigits}) !=
         isNegative(src)) ||
-       compare(src, 0) == 0) &&
+       isZero(src)) &&
       "unaryMinus overflow");
   return OperationStatus::RETURNED;
 }
@@ -1773,7 +1793,7 @@ static OperationStatus compute(
   rem.numDigits = resultSize;
 
   // Signal division by zero.
-  if (compare(rhs, 0) == 0) {
+  if (isZero(rhs)) {
     return OperationStatus::DIVISION_BY_ZERO;
   }
 
@@ -2061,7 +2081,7 @@ OperationStatus exponentiateSlowPath(
     // include runningSquare in the result if lhs_i is 1.
     if ((exponent & 1) != 0) {
       nextResult.resetRefNumDigits();
-      if (compare(result, 0) == 0) {
+      if (isZero(result)) {
         res = initWithDigits(nextResult, runningSquare);
       } else {
         res = multiply(nextResult, result, runningSquare);
@@ -2093,7 +2113,7 @@ OperationStatus exponentiate(
     MutableBigIntRef dst,
     ImmutableBigIntRef lhs,
     ImmutableBigIntRef rhs) {
-  if (compare(rhs, 0) < 0) {
+  if (isNegative(rhs)) {
     return OperationStatus::NEGATIVE_EXPONENT;
   }
 
@@ -2110,7 +2130,7 @@ OperationStatus exponentiate(
   // 4. If |lhs| == 2, use a fast-path for that.
   // 5. Fall back to the slow path.
   OperationStatus res = OperationStatus::RETURNED;
-  if (compare(rhs, 0) == 0) {
+  if (isZero(rhs)) {
     // lhs ** 0 => 1, for all lhs
     // N.B.: JS defines 0n ** 0n == 1.
     if (dst.numDigits < 1) {
@@ -2119,7 +2139,7 @@ OperationStatus exponentiate(
       dst.numDigits = 1;
       dst.digits[0] = 1;
     }
-  } else if (compare(lhs, 0) == 0) {
+  } else if (isZero(lhs)) {
     // 0 ** rhs => 0, for rhs > 0
     dst.numDigits = 0;
   } else if (dst.numDigits < 1) {
