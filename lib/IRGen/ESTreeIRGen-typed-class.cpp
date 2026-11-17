@@ -170,11 +170,13 @@ void ESTreeIRGen::genClassDeclaration(ESTree::ClassDeclarationNode *node) {
   // Must be done even if there are no methods to enable 'instanceof'.
   Value *vtable;
   if (superClass) {
-    vtable = emitLoadTypedHomeObject(classType->getSuperClassInfo());
+    Value *superHomeObject =
+        emitLoadTypedHomeObject(classType->getSuperClassInfo());
     // TODO: This will be known to be the actual type when we properly use an
     // instruction for class creation, but for now we need an object here
     // because we want to use PrLoad on it.
-    vtable->setType(Type::createObject());
+    vtable = Builder.createUnionNarrowTrustedInst(
+        superHomeObject, Type::createObject());
   } else {
     vtable = Builder.getLiteralNull();
   }
@@ -557,9 +559,18 @@ Value *ESTreeIRGen::emitTypedClassAllocation(
     }
   }
 
-  if (propertiesEnumerable)
-    return Builder.createAllocTypedObjectInst(propMap, parent);
-  return Builder.createAllocTypedNonEnumObjectInst(propMap, parent);
+  Value *obj = propertiesEnumerable
+      ? static_cast<Value *>(
+            Builder.createAllocTypedObjectInst(propMap, parent))
+      : static_cast<Value *>(
+            Builder.createAllocTypedNonEnumObjectInst(propMap, parent));
+  // The allocation instruction's inherent type is the generic `object`. Narrow
+  // it (trusted -- we just built it, no runtime check) to the class instance
+  // type so the home object, static object, and real instances all carry their
+  // refined ClassInstance type. This makes the home-object StoreFrame
+  // type-check and turns the redundant object->instance casts at `new` sites
+  // into no-ops.
+  return Builder.createUnionNarrowTrustedInst(obj, flowTypeToIRType(classType));
 }
 
 Value *ESTreeIRGen::getDefaultInitValue(flow::Type *type) {
@@ -666,8 +677,47 @@ Type ESTreeIRGen::flowTypeToIRType(flow::TypeInfo *flowType) {
     case flow::TypeKind::TypedFunction:
     case flow::TypeKind::UntypedFunction:
       return Type::createObject();
-    case flow::TypeKind::Class:
-      return Type::createObject();
+    case flow::TypeKind::Class: {
+      auto *classType = llvh::cast<flow::ClassType>(flowType);
+      // Identity cache: return the reserved/finished entry if present.
+      auto it = loweredClassTypes_.find(classType);
+      if (it != loweredClassTypes_.end())
+        return it->second;
+
+      TypeContext &tc = getTypeContext();
+      // Lower the superclass first, so that this class is reserved with its
+      // superclass already set and subtyping against it is exact while its
+      // fields are lowered: in `class D extends Base`, a field of type
+      // `D | Base` lowers to Base. Lowering the superclass may lower this
+      // class too, through a field of the superclass, so look it up again.
+      Type superTy = Type::createNoType();
+      if (flow::Type *super = classType->getSuperClass()) {
+        superTy = flowTypeToIRType(super);
+        it = loweredClassTypes_.find(classType);
+        if (it != loweredClassTypes_.end())
+          return it->second;
+      }
+
+      // Reserve and record this class BEFORE lowering its fields, so a field
+      // referencing it (or a mutually recursive sibling) resolves to the
+      // reserved Type instead of recursing forever.
+      Type t = tc.reserveClassInstance(superTy);
+      bool inserted = loweredClassTypes_.insert({classType, t}).second;
+      (void)inserted;
+      assert(inserted && "class lowered twice");
+
+      llvh::SmallVector<ExactObjectField, 8> fields;
+      for (const flow::ClassType::Field &f : classType->getFields()) {
+        // Only data fields carry a value type in the IR class type; methods
+        // are represented separately and skipped here.
+        if (f.isMethod())
+          continue;
+        fields.push_back(ExactObjectField{f.name, flowTypeToIRType(f.type)});
+      }
+
+      tc.fillClassInstance(t, classType->getClassName(), fields);
+      return t;
+    }
     case flow::TypeKind::ClassConstructor:
       return Type::createObject();
     case flow::TypeKind::Array:

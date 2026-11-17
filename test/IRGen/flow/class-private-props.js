@@ -43,7 +43,7 @@ new C(1, 2);
 // CHECK-NEXT:       ReturnInst %7: any
 // CHECK-NEXT:function_end
 
-// CHECK:scope %VS1 [exports: any, C: any, #privateMethod: empty|object, <fieldInitFuncVar:C>: object, ?C.prototype: object]
+// CHECK:scope %VS1 [exports: any, C: any, #privateMethod: empty|object, <fieldInitFuncVar:C>: object, ?C.prototype: classInstance()]
 
 // CHECK:function ""(exports: any): any
 // CHECK-NEXT:%BB0:
@@ -61,14 +61,15 @@ new C(1, 2);
 // CHECK-NEXT:        StoreFrameInst %1: environment, %10: object, [%VS1.C]: any
 // CHECK-NEXT:  %12 = CreateFunctionInst (:object) %1: environment, %VS1: any, %method(): functionCode
 // CHECK-NEXT:  %13 = AllocTypedNonEnumObjectInst (:object) null: null, "method": string, %12: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %13: object, [%VS1.?C.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %13: object, %10: object, "prototype": string
-// CHECK-NEXT:  %16 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
-// CHECK-NEXT:  %17 = CheckedTypeCastInst (:object) %16: any, type(object)
-// CHECK-NEXT:  %18 = LoadFrameInst (:object) %1: environment, [%VS1.?C.prototype]: object
-// CHECK-NEXT:  %19 = UnionNarrowTrustedInst (:object) %18: object
-// CHECK-NEXT:  %20 = AllocTypedObjectInst (:object) %19: object, private "#x": any, 0: number, "y": string, 0: number
-// CHECK-NEXT:  %21 = CallInst (:any) %17: object, %C(): functionCode, true: boolean, empty: any, %17: object, %20: object, 1: number, 2: number
+// CHECK-NEXT:  %14 = UnionNarrowTrustedInst (:classInstance()) %13: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %14: classInstance(), [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %10: object, "prototype": string
+// CHECK-NEXT:  %17 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
+// CHECK-NEXT:  %18 = CheckedTypeCastInst (:object) %17: any, type(object)
+// CHECK-NEXT:  %19 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:  %20 = AllocTypedObjectInst (:object) %19: classInstance(), private "#x": any, 0: number, "y": string, 0: number
+// CHECK-NEXT:  %21 = UnionNarrowTrustedInst (:classInstance(C)) %20: object
+// CHECK-NEXT:  %22 = CallInst (:any) %18: object, %C(): functionCode, true: boolean, empty: any, %18: object, %21: classInstance(C), 1: number, 2: number
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -76,10 +77,10 @@ new C(1, 2);
 
 // CHECK:function #privateMethod(): any [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:object) %<this>: object
+// CHECK-NEXT:  %0 = LoadParamInst (:classInstance(C)) %<this>: classInstance(C)
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS2: any, %1: environment
-// CHECK-NEXT:  %3 = PrLoadInst (:number) %0: object, 0: number, private "#x": any
+// CHECK-NEXT:  %3 = PrLoadInst (:number) %0: classInstance(C), 0: number, private "#x": any
 // CHECK-NEXT:       ReturnInst %3: number
 // CHECK-NEXT:function_end
 
@@ -87,10 +88,10 @@ new C(1, 2);
 
 // CHECK:function <instance_members_initializer:C>(): undefined
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:object) %<this>: object
+// CHECK-NEXT:  %0 = LoadParamInst (:classInstance(C)) %<this>: classInstance(C)
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS3: any, %1: environment
-// CHECK-NEXT:       PrStoreInst 1: number, %0: object, 0: number, private "#x": any, true: boolean
+// CHECK-NEXT:       PrStoreInst 1: number, %0: classInstance(C), 0: number, private "#x": any, true: boolean
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -98,7 +99,7 @@ new C(1, 2);
 
 // CHECK:base constructor C(x: any, y: any): any [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:object) %<this>: object
+// CHECK-NEXT:  %0 = LoadParamInst (:classInstance(C)) %<this>: classInstance(C)
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS4: any, %1: environment
 // CHECK-NEXT:  %3 = LoadParamInst (:any) %x: any
@@ -106,13 +107,13 @@ new C(1, 2);
 // CHECK-NEXT:  %5 = LoadParamInst (:any) %y: any
 // CHECK-NEXT:       StoreFrameInst %2: environment, %5: any, [%VS4.y]: any
 // CHECK-NEXT:  %7 = LoadFrameInst (:object) %1: environment, [%VS1.<fieldInitFuncVar:C>]: object
-// CHECK-NEXT:  %8 = CallInst (:undefined) %7: object, %<instance_members_initializer:C>(): functionCode, true: boolean, empty: any, undefined: undefined, %0: object
+// CHECK-NEXT:  %8 = CallInst (:undefined) %7: object, %<instance_members_initializer:C>(): functionCode, true: boolean, empty: any, undefined: undefined, %0: classInstance(C)
 // CHECK-NEXT:  %9 = LoadFrameInst (:any) %2: environment, [%VS4.x]: any
 // CHECK-NEXT:  %10 = CheckedTypeCastInst (:number) %9: any, type(number)
-// CHECK-NEXT:        PrStoreInst %10: number, %0: object, 0: number, private "#x": any, true: boolean
+// CHECK-NEXT:        PrStoreInst %10: number, %0: classInstance(C), 0: number, private "#x": any, true: boolean
 // CHECK-NEXT:  %12 = LoadFrameInst (:any) %2: environment, [%VS4.y]: any
 // CHECK-NEXT:  %13 = CheckedTypeCastInst (:number) %12: any, type(number)
-// CHECK-NEXT:        PrStoreInst %13: number, %0: object, 1: number, "y": string, true: boolean
+// CHECK-NEXT:        PrStoreInst %13: number, %0: classInstance(C), 1: number, "y": string, true: boolean
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -120,11 +121,11 @@ new C(1, 2);
 
 // CHECK:function method(): any [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:object) %<this>: object
+// CHECK-NEXT:  %0 = LoadParamInst (:classInstance(C)) %<this>: classInstance(C)
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS5: any, %1: environment
 // CHECK-NEXT:  %3 = LoadFrameInst (:empty|object) %1: environment, [%VS1.#privateMethod]: empty|object
 // CHECK-NEXT:  %4 = ThrowIfInst (:object) %3: empty|object, type(empty)
-// CHECK-NEXT:  %5 = CallInst [njsf] (:number) %4: object, %#privateMethod(): functionCode, true: boolean, empty: any, undefined: undefined, %0: object
+// CHECK-NEXT:  %5 = CallInst [njsf] (:number) %4: object, %#privateMethod(): functionCode, true: boolean, empty: any, undefined: undefined, %0: classInstance(C)
 // CHECK-NEXT:       ReturnInst %5: number
 // CHECK-NEXT:function_end

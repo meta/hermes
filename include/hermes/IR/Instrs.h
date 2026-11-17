@@ -5918,9 +5918,12 @@ class LoadParentNoTrapsInst : public Instruction {
 
   explicit LoadParentNoTrapsInst(Value *object)
       : Instruction(ValueKind::LoadParentNoTrapsInstKind) {
-    assert(
-        object->getType().isObjectType() &&
-        "object input must be of type object");
+    // Refined object kinds (e.g. classInstance) are also valid object inputs,
+    // but identifying them requires a TypeContext, which is not available in
+    // this constructor. IRBuilder::createLoadParentNoTrapsInst and the
+    // IRVerifier (visitLoadParentNoTrapsInst) check that the input is a subset
+    // of object.
+    assert(!object->getType().isNoType() && "object input must not be NoType");
     setType(*getInherentTypeImpl());
     pushOperand(object);
   }

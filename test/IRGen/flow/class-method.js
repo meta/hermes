@@ -34,7 +34,7 @@ return new C().method();
 // CHECK-NEXT:       ReturnInst %7: any
 // CHECK-NEXT:function_end
 
-// CHECK:scope %VS1 [exports: any, C: any, ?C.prototype: object]
+// CHECK:scope %VS1 [exports: any, C: any, ?C.prototype: classInstance()]
 
 // CHECK:function ""(exports: any): any
 // CHECK-NEXT:%BB0:
@@ -47,17 +47,18 @@ return new C().method();
 // CHECK-NEXT:       StoreFrameInst %1: environment, %5: object, [%VS1.C]: any
 // CHECK-NEXT:  %7 = CreateFunctionInst (:object) %1: environment, %VS1: any, %method(): functionCode
 // CHECK-NEXT:  %8 = AllocTypedNonEnumObjectInst (:object) null: null, "method": string, %7: object
-// CHECK-NEXT:       StoreFrameInst %1: environment, %8: object, [%VS1.?C.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %8: object, %5: object, "prototype": string
-// CHECK-NEXT:  %11 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
-// CHECK-NEXT:  %12 = CheckedTypeCastInst (:object) %11: any, type(object)
-// CHECK-NEXT:  %13 = LoadFrameInst (:object) %1: environment, [%VS1.?C.prototype]: object
-// CHECK-NEXT:  %14 = UnionNarrowTrustedInst (:object) %13: object
-// CHECK-NEXT:  %15 = AllocTypedObjectInst (:object) %14: object
-// CHECK-NEXT:  %16 = TypedLoadParentInst (:object) %15: object
-// CHECK-NEXT:  %17 = PrLoadInst (:object) %16: object, 0: number, "method": string
-// CHECK-NEXT:  %18 = CallInst [njsf] (:number) %17: object, %method(): functionCode, true: boolean, empty: any, undefined: undefined, %15: object
-// CHECK-NEXT:        ReturnInst %18: number
+// CHECK-NEXT:  %9 = UnionNarrowTrustedInst (:classInstance()) %8: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %9: classInstance(), [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %9: classInstance(), %5: object, "prototype": string
+// CHECK-NEXT:  %12 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
+// CHECK-NEXT:  %13 = CheckedTypeCastInst (:object) %12: any, type(object)
+// CHECK-NEXT:  %14 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:  %15 = AllocTypedObjectInst (:object) %14: classInstance()
+// CHECK-NEXT:  %16 = UnionNarrowTrustedInst (:classInstance(C)) %15: object
+// CHECK-NEXT:  %17 = TypedLoadParentInst (:object) %16: classInstance(C)
+// CHECK-NEXT:  %18 = PrLoadInst (:object) %17: object, 0: number, "method": string
+// CHECK-NEXT:  %19 = CallInst [njsf] (:number) %18: object, %method(): functionCode, true: boolean, empty: any, undefined: undefined, %16: classInstance(C)
+// CHECK-NEXT:        ReturnInst %19: number
 // CHECK-NEXT:function_end
 
 // CHECK:scope %VS2 []

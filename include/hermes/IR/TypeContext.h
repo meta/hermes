@@ -226,12 +226,6 @@ struct FunctionParam {
   bool isOptional;
 };
 
-/// Side array element for exact object fields.
-struct ExactObjectField {
-  Identifier name;
-  uint32_t typeId;
-};
-
 /// Pre-allocated type IDs (assigned by TypeContext constructor).
 /// These are constants, valid for any TypeContext instance.
 /// The well-known ID assignment is frozen: IDs are never removed or reordered.
@@ -497,6 +491,12 @@ class Type {
 
 static_assert(sizeof(Type) == 4, "Type must be 4 bytes");
 
+/// Side array element for exact object fields (and class fields).
+struct ExactObjectField {
+  Identifier name;
+  Type type;
+};
+
 /// An iterator over the types in a Type. For non-union types, yields
 /// the type itself as the single element. For unions, fetches arms fresh
 /// from a TypeContext on each dereference. Safe under TypeContext
@@ -568,6 +568,49 @@ class TypeContext {
   /// underlying typeArrays_. Copy the arms into a local container before
   /// calling such operations during iteration.
   llvh::ArrayRef<Type> getUnionArms(Type t) const;
+
+  /// Create a nominal class instance type. NOT interned: each call returns a
+  /// fresh entry, so two structurally identical class declarations are
+  /// different types. \p superClass is the parent ClassInstance, or NoType for
+  /// a root class.
+  Type createClassInstance(
+      Type superClass,
+      Identifier className,
+      llvh::ArrayRef<ExactObjectField> fields);
+
+  /// Reserve a ClassInstance entry whose superclass is \p superClass (the IR
+  /// type of the parent class, or NoType for a root class) and return its
+  /// Type. Used together with fillClassInstance to break self/mutual
+  /// recursion when lowering a class whose fields reference the class itself.
+  /// Between reserve and fill, only the kind, the id and the superclass of
+  /// the entry are valid. They are all the type algebra reads from a class,
+  /// so subtyping, union, intersection and disjointness involving the entry
+  /// are already exact. Its name and fields (getClassName, getClassFields,
+  /// printing) are valid only after fill.
+  Type reserveClassInstance(Type superClass);
+
+  /// Fill a previously reserved ClassInstance entry with its name and fields.
+  /// \p t must come from reserveClassInstance. \p fields may point into this
+  /// context (e.g. come from getClassFields).
+  void fillClassInstance(
+      Type t,
+      Identifier className,
+      llvh::ArrayRef<ExactObjectField> fields);
+
+  /// \return the superclass of class \p t, or NoType if it is a root class.
+  Type getClassSuperType(Type t) const;
+  /// \return the name of class \p t.
+  Identifier getClassName(Type t) const;
+  /// \return the fields of class \p t.
+  /// \warning The returned ArrayRef points into an internal vector. It is
+  /// invalidated by any later class creation, since that may reallocate the
+  /// underlying fieldArrays_. Copy the fields into a local container before
+  /// creating more class instances during iteration.
+  llvh::ArrayRef<ExactObjectField> getClassFields(Type t) const;
+
+  /// \return true if class \p a is the same as or a subclass of class \p b.
+  /// Both must be ClassInstance types.
+  bool isSubclass(Type a, Type b) const;
 
   /// \return true if \p t is NoType (empty set).
   bool isNoType(Type t) const;
@@ -686,12 +729,30 @@ class TypeContext {
  private:
   friend class Type;
 
+  /// Append the printed form of a single non-union type to \p OS.
+  void printLeaf(llvh::raw_ostream &OS, uint32_t id) const;
+
+  /// Id-aware leaf subtype test for two non-union types. Distinguishes nominal
+  /// classes (which share the ClassInstance kind). Falls back to the
+  /// kind-based isLeafSubtype for non-refined kinds.
+  bool isLeafSubtypeById(uint32_t a, uint32_t b) const;
+
+  /// Id-aware disjointness test for two non-union types. Conservative for
+  /// structural refined kinds (D5): only unrelated classes and refined-vs-
+  /// primitive are declared disjoint.
+  bool areLeafTypesDisjointById(uint32_t a, uint32_t b) const;
+
   /// Type table. Index 0 = NoType. Pre-allocated entries for primitives.
   std::vector<TypeEntry> entries_;
 
   /// Side array storing union arm types (and in the future, tuple element
   /// types). Type is layout-compatible with uint32_t (it wraps a uint32_t id).
   std::vector<Type> typeArrays_;
+
+  /// Side array storing class (and, later, exact-object) field descriptors,
+  /// referenced by (fieldOffset, fieldCount) in ClassInstance/ExactObject
+  /// entries.
+  std::vector<ExactObjectField> fieldArrays_;
 
   /// Intern table mapping sorted arm sets to existing union type IDs.
   llvh::DenseMap<UnionInternKey, uint32_t, UnionInternKeyInfo> internTable_;

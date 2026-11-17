@@ -13,20 +13,21 @@ return function foo(x: string, y: string): string[] {
 
 // Auto-generated content below. Please do not modify manually.
 
-// CHECK:scope %VS0 [?Array.prototype: object]
+// CHECK:scope %VS0 [?Array.prototype: classInstance()]
 
-// CHECK:function foo(x: string, y: string): object [typed]
+// CHECK:function foo(x: string, y: string): classInstance(Array) [typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
 // CHECK-NEXT:  %1 = LoadParamInst (:string) %x: string
 // CHECK-NEXT:  %2 = LoadParamInst (:string) %y: string
-// CHECK-NEXT:  %3 = LoadFrameInst (:object) %0: environment, [%VS0.?Array.prototype]: object
-// CHECK-NEXT:  %4 = AllocFastArrayInst (:object) 3: number, %3: object
+// CHECK-NEXT:  %3 = LoadFrameInst (:classInstance()) %0: environment, [%VS0.?Array.prototype]: classInstance()
+// CHECK-NEXT:  %4 = AllocFastArrayInst (:object) 3: number, %3: classInstance()
 // CHECK-NEXT:  %5 = StringConcatInst (:string) %1: string, %2: string
 // CHECK-NEXT:       FastArrayPushInst %5: string, %4: object
 // CHECK-NEXT:  %7 = StringConcatInst (:string) %1: string, "abc": string
 // CHECK-NEXT:       FastArrayPushInst %7: string, %4: object
 // CHECK-NEXT:  %9 = StringConcatInst (:string) %1: string, %2: string, "abcdef": string, %2: string
 // CHECK-NEXT:        FastArrayPushInst %9: string, %4: object
-// CHECK-NEXT:        ReturnInst %4: object
+// CHECK-NEXT:  %11 = CheckedTypeCastInst (:classInstance(Array)) %4: object, type(classInstance(Array))
+// CHECK-NEXT:        ReturnInst %11: classInstance(Array)
 // CHECK-NEXT:function_end

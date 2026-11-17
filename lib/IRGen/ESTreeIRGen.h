@@ -613,6 +613,15 @@ class ESTreeIRGen {
   /// the class.
   llvh::DenseMap<flow::ClassType *, ClassFieldInitInfo> classFieldInitInfo_{};
 
+  /// Identity cache for lowering nominal Flow classes to IR ClassInstance
+  /// types, keyed by Flow ClassType (nominal identity). Persists for the whole
+  /// ESTreeIRGen instance, so references to the same class across functions
+  /// share one ClassInstance Type. Populated with the reserved IR Type, which
+  /// already carries its superclass, after the superclass is lowered and
+  /// before the fields are lowered, so self- and mutually-recursive classes
+  /// resolve without infinite recursion.
+  llvh::DenseMap<const flow::ClassType *, Type> loweredClassTypes_;
+
   /// Handles any methods that were not overridden on typed classes.
   /// This includes @Hermes.final annotated methods, as well as methods that
   /// simply have no known overrides.

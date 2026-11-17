@@ -746,7 +746,7 @@ class InstSimplifyImpl {
     // If we can statically determine whether the return value of the
     // constructor will be an object, we can eliminate this instruction.
     auto opTy = GCOI->getConstructorReturnValue()->getType();
-    if (opTy.isObjectType())
+    if (typeCtx_.isSubsetOf(opTy, Type::createObject()))
       return GCOI->getConstructorReturnValue();
     // Ideally, all we would need to check is that opTy cannot be an object.
     // However, there might be cases where we have inferred the return type of
@@ -755,7 +755,8 @@ class InstSimplifyImpl {
     // GetConstructedObject, which is of type object, with ThisValue, which is
     // not of type object.
     if (!typeCtx_.canBeObject(opTy) &&
-        GCOI->getThisValue()->getType().isObjectType())
+        typeCtx_.isSubsetOf(
+            GCOI->getThisValue()->getType(), Type::createObject()))
       return GCOI->getThisValue();
     return nullptr;
   }
@@ -874,7 +875,7 @@ class InstSimplifyImpl {
     }
 
     // Objects are unchanged.
-    if (operand->getType().isObjectType())
+    if (typeCtx_.isSubsetOf(operand->getType(), Type::createObject()))
       return operand;
 
     return nullptr;

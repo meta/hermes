@@ -1357,6 +1357,9 @@ FastArrayLengthInst *IRBuilder::createFastArrayLengthInst(Value *array) {
 }
 
 LoadParentNoTrapsInst *IRBuilder::createLoadParentNoTrapsInst(Value *object) {
+  assert(
+      getTypeContext().isSubsetOf(object->getType(), Type::createObject()) &&
+      "object input must be of type object");
   auto *inst = new LoadParentNoTrapsInst(object);
   insert(inst);
   return inst;

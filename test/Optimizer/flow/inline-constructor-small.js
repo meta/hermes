@@ -29,24 +29,40 @@ print(p1.x, p2.x);
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = CreateFunctionInst (:object) empty: any, empty: any, %Array(): functionCode
 // CHECK-NEXT:  %1 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:       StorePropertyStrictInst %1: object, %0: object, "prototype": string
-// CHECK-NEXT:  %3 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 1#"(): functionCode
-// CHECK-NEXT:  %4 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:       StorePropertyStrictInst %4: object, %3: object, "prototype": string
-// CHECK-NEXT:  %6 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 2#"(): functionCode
-// CHECK-NEXT:  %7 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:       StorePropertyStrictInst %7: object, %6: object, "prototype": string
-// CHECK-NEXT:  %9 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
-// CHECK-NEXT:  %10 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:        StorePropertyStrictInst %10: object, %9: object, "prototype": string
-// CHECK-NEXT:  %12 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
+// CHECK-NEXT:  %2 = UnionNarrowTrustedInst (:classInstance()) %1: object
+// CHECK-NEXT:       StorePropertyStrictInst %2: classInstance(), %0: object, "prototype": string
+// CHECK-NEXT:  %4 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 1#"(): functionCode
+// CHECK-NEXT:  %5 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:  %6 = UnionNarrowTrustedInst (:classInstance()) %5: object
+// CHECK-NEXT:       StorePropertyStrictInst %6: classInstance(), %4: object, "prototype": string
+// CHECK-NEXT:  %8 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 2#"(): functionCode
+// CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
+// CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %8: object, "prototype": string
+// CHECK-NEXT:  %12 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
 // CHECK-NEXT:  %13 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:        StorePropertyStrictInst %13: object, %12: object, "prototype": string
-// CHECK-NEXT:  %15 = CreateFunctionInst (:object) empty: any, empty: any, %Point(): functionCode
-// CHECK-NEXT:  %16 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:        StorePropertyStrictInst %16: object, %15: object, "prototype": string
-// CHECK-NEXT:  %18 = TryLoadGlobalPropertyInst (:any) globalObject: object, "print": string
-// CHECK-NEXT:  %19 = CallInst (:any) %18: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 1: number, 3: number
+// CHECK-NEXT:  %14 = UnionNarrowTrustedInst (:classInstance()) %13: object
+// CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %12: object, "prototype": string
+// CHECK-NEXT:  %16 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
+// CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
+// CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %16: object, "prototype": string
+// CHECK-NEXT:  %20 = CreateFunctionInst (:object) empty: any, empty: any, %Point(): functionCode
+// CHECK-NEXT:  %21 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:  %22 = UnionNarrowTrustedInst (:classInstance()) %21: object
+// CHECK-NEXT:        StorePropertyStrictInst %22: classInstance(), %20: object, "prototype": string
+// CHECK-NEXT:  %24 = AllocTypedObjectInst (:object) %22: classInstance(), "x": string, 0: number, "y": string, 0: number
+// CHECK-NEXT:  %25 = UnionNarrowTrustedInst (:classInstance(Point)) %24: object
+// CHECK-NEXT:        PrStoreInst 1: number, %25: classInstance(Point), 0: number, "x": string, true: boolean
+// CHECK-NEXT:        PrStoreInst 2: number, %25: classInstance(Point), 1: number, "y": string, true: boolean
+// CHECK-NEXT:  %28 = AllocTypedObjectInst (:object) %22: classInstance(), "x": string, 0: number, "y": string, 0: number
+// CHECK-NEXT:  %29 = UnionNarrowTrustedInst (:classInstance(Point)) %28: object
+// CHECK-NEXT:        PrStoreInst 3: number, %29: classInstance(Point), 0: number, "x": string, true: boolean
+// CHECK-NEXT:        PrStoreInst 4: number, %29: classInstance(Point), 1: number, "y": string, true: boolean
+// CHECK-NEXT:  %32 = TryLoadGlobalPropertyInst (:any) globalObject: object, "print": string
+// CHECK-NEXT:  %33 = PrLoadInst (:number) %25: classInstance(Point), 0: number, "x": string
+// CHECK-NEXT:  %34 = PrLoadInst (:number) %29: classInstance(Point), 0: number, "x": string
+// CHECK-NEXT:  %35 = CallInst (:any) %32: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %33: number, %34: number
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -81,10 +97,10 @@ print(p1.x, p2.x);
 
 // CHECK:base constructor Point(x: number, y: number): undefined [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:object) %<this>: object
+// CHECK-NEXT:  %0 = LoadParamInst (:classInstance(Point)) %<this>: classInstance(Point)
 // CHECK-NEXT:  %1 = LoadParamInst (:number) %x: number
 // CHECK-NEXT:  %2 = LoadParamInst (:number) %y: number
-// CHECK-NEXT:       PrStoreInst %1: number, %0: object, 0: number, "x": string, true: boolean
-// CHECK-NEXT:       PrStoreInst %2: number, %0: object, 1: number, "y": string, true: boolean
+// CHECK-NEXT:       PrStoreInst %1: number, %0: classInstance(Point), 0: number, "x": string, true: boolean
+// CHECK-NEXT:       PrStoreInst %2: number, %0: classInstance(Point), 1: number, "y": string, true: boolean
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end

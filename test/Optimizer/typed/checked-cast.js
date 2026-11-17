@@ -25,25 +25,31 @@ exports.next = next
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = CreateFunctionInst (:object) empty: any, empty: any, %Array(): functionCode
 // CHECK-NEXT:  %1 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:       StorePropertyStrictInst %1: object, %0: object, "prototype": string
-// CHECK-NEXT:  %3 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 1#"(): functionCode
-// CHECK-NEXT:  %4 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:       StorePropertyStrictInst %4: object, %3: object, "prototype": string
-// CHECK-NEXT:  %6 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 2#"(): functionCode
-// CHECK-NEXT:  %7 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:       StorePropertyStrictInst %7: object, %6: object, "prototype": string
-// CHECK-NEXT:  %9 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
-// CHECK-NEXT:  %10 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:        StorePropertyStrictInst %10: object, %9: object, "prototype": string
-// CHECK-NEXT:  %12 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
+// CHECK-NEXT:  %2 = UnionNarrowTrustedInst (:classInstance()) %1: object
+// CHECK-NEXT:       StorePropertyStrictInst %2: classInstance(), %0: object, "prototype": string
+// CHECK-NEXT:  %4 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 1#"(): functionCode
+// CHECK-NEXT:  %5 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:  %6 = UnionNarrowTrustedInst (:classInstance()) %5: object
+// CHECK-NEXT:       StorePropertyStrictInst %6: classInstance(), %4: object, "prototype": string
+// CHECK-NEXT:  %8 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 2#"(): functionCode
+// CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
+// CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %8: object, "prototype": string
+// CHECK-NEXT:  %12 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
 // CHECK-NEXT:  %13 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:        StorePropertyStrictInst %13: object, %12: object, "prototype": string
-// CHECK-NEXT:  %15 = AllocObjectLiteralInst (:object) empty: any
-// CHECK-NEXT:  %16 = CreateFunctionInst (:object) empty: any, empty: any, %next(): functionCode
-// CHECK-NEXT:  %17 = CreateFunctionInst (:object) empty: any, empty: any, %Cls(): functionCode
-// CHECK-NEXT:  %18 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:        StorePropertyStrictInst %18: object, %17: object, "prototype": string
-// CHECK-NEXT:        StorePropertyStrictInst %16: object, %15: object, "next": string
+// CHECK-NEXT:  %14 = UnionNarrowTrustedInst (:classInstance()) %13: object
+// CHECK-NEXT:        StorePropertyStrictInst %14: classInstance(), %12: object, "prototype": string
+// CHECK-NEXT:  %16 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
+// CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
+// CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %16: object, "prototype": string
+// CHECK-NEXT:  %20 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:  %21 = CreateFunctionInst (:object) empty: any, empty: any, %next(): functionCode
+// CHECK-NEXT:  %22 = CreateFunctionInst (:object) empty: any, empty: any, %Cls(): functionCode
+// CHECK-NEXT:  %23 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:  %24 = UnionNarrowTrustedInst (:classInstance()) %23: object
+// CHECK-NEXT:        StorePropertyStrictInst %24: classInstance(), %22: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %21: object, %20: object, "next": string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -76,13 +82,13 @@ exports.next = next
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
-// CHECK:function next(ptr: undefined|null|object): object [typed]
+// CHECK:function next(ptr: undefined|null|classInstance(Cls)): classInstance(Cls) [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:undefined|null|object) %ptr: undefined|null|object
-// CHECK-NEXT:  %1 = CheckedTypeCastInst (:object) %0: undefined|null|object, type(object)
-// CHECK-NEXT:  %2 = PrLoadInst (:undefined|null|object) %1: object, 0: number, "next": string
-// CHECK-NEXT:  %3 = CheckedTypeCastInst (:object) %2: undefined|null|object, type(object)
-// CHECK-NEXT:       ReturnInst %3: object
+// CHECK-NEXT:  %0 = LoadParamInst (:undefined|null|classInstance(Cls)) %ptr: undefined|null|classInstance(Cls)
+// CHECK-NEXT:  %1 = CheckedTypeCastInst (:classInstance(Cls)) %0: undefined|null|classInstance(Cls), type(classInstance(Cls))
+// CHECK-NEXT:  %2 = PrLoadInst (:undefined|null|classInstance(Cls)) %1: classInstance(Cls), 0: number, "next": string
+// CHECK-NEXT:  %3 = CheckedTypeCastInst (:classInstance(Cls)) %2: undefined|null|classInstance(Cls), type(classInstance(Cls))
+// CHECK-NEXT:       ReturnInst %3: classInstance(Cls)
 // CHECK-NEXT:function_end
 
 // CHECK:function Cls(): undefined

@@ -904,4 +904,253 @@ TEST(TypeContextNoGuardTest, PrintFallback) {
   EXPECT_EQ(os.str(), "type#7");
 }
 
+TEST_F(TypeContextTest, ClassInstanceConstruction) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+
+  Identifier animalName = strTab.getIdentifier("Animal");
+  Identifier dogName = strTab.getIdentifier("Dog");
+
+  // class Animal { legs: number }
+  ExactObjectField animalFields[] = {
+      {strTab.getIdentifier("legs"), Type::createNumber()}};
+  Type animal =
+      ctx.createClassInstance(Type::createNoType(), animalName, animalFields);
+
+  // class Dog extends Animal { name: string }
+  ExactObjectField dogFields[] = {
+      {strTab.getIdentifier("name"), Type::createString()}};
+  Type dog = ctx.createClassInstance(animal, dogName, dogFields);
+
+  EXPECT_EQ(ctx.getKind(animal), TypeKind::ClassInstance);
+  EXPECT_EQ(ctx.getKind(dog), TypeKind::ClassInstance);
+
+  // Nominal: each declaration is a distinct entry, even structurally identical.
+  Type animal2 =
+      ctx.createClassInstance(Type::createNoType(), animalName, animalFields);
+  EXPECT_NE(animal, animal2);
+
+  // Accessors.
+  EXPECT_EQ(ctx.getClassName(dog), dogName);
+  EXPECT_EQ(ctx.getClassSuperType(dog), animal);
+  EXPECT_TRUE(ctx.getClassSuperType(animal).isNoType());
+
+  auto fields = ctx.getClassFields(dog);
+  ASSERT_EQ(fields.size(), 1u);
+  EXPECT_EQ(fields[0].name, strTab.getIdentifier("name"));
+  EXPECT_EQ(fields[0].type, Type::createString());
+}
+
+TEST_F(TypeContextTest, ClassInstanceReserveFillSelfReference) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+
+  // class Node { next: Node } -- reserve first so the self-referential field
+  // can point at the class being built.
+  Type node = ctx.reserveClassInstance(Type::createNoType());
+  ExactObjectField fields[] = {{strTab.getIdentifier("next"), node}};
+  ctx.fillClassInstance(node, strTab.getIdentifier("Node"), fields);
+
+  EXPECT_EQ(ctx.getKind(node), TypeKind::ClassInstance);
+  EXPECT_EQ(ctx.getClassName(node), strTab.getIdentifier("Node"));
+  EXPECT_TRUE(ctx.getClassSuperType(node).isNoType());
+
+  auto f = ctx.getClassFields(node);
+  ASSERT_EQ(f.size(), 1u);
+  EXPECT_EQ(f[0].name, strTab.getIdentifier("next"));
+  EXPECT_EQ(f[0].type, node); // self-reference resolved to the same type
+}
+
+/// A class is reserved with its superclass, so the algebra treats the
+/// reserved, unfilled entry as a subclass while its fields are being built:
+/// the field `f: D | Base` of `class D extends Base` normalizes to Base.
+TEST_F(TypeContextTest, ClassInstanceReservedWithSuperclass) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+
+  Type base = ctx.createClassInstance(
+      Type::createNoType(), strTab.getIdentifier("Base"), {});
+  Type d = ctx.reserveClassInstance(base);
+
+  // Before fill.
+  EXPECT_EQ(ctx.getClassSuperType(d), base);
+  EXPECT_TRUE(ctx.isSubclass(d, base));
+  EXPECT_TRUE(ctx.isSubsetOf(d, base));
+  EXPECT_FALSE(ctx.areDisjoint(d, base));
+  EXPECT_EQ(ctx.intersectTy(d, base), d);
+  Type fieldTy = ctx.unionTy(d, base);
+  EXPECT_EQ(fieldTy, base);
+
+  ExactObjectField fields[] = {{strTab.getIdentifier("f"), fieldTy}};
+  ctx.fillClassInstance(d, strTab.getIdentifier("D"), fields);
+
+  // Fill sets the name and fields and keeps the superclass.
+  EXPECT_EQ(ctx.getClassSuperType(d), base);
+  EXPECT_EQ(ctx.getClassName(d), strTab.getIdentifier("D"));
+  ASSERT_EQ(ctx.getClassFields(d).size(), 1u);
+  EXPECT_EQ(ctx.getClassFields(d)[0].type, base);
+}
+
+TEST_F(TypeContextTest, ClassInstanceFillFromOwnFields) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+
+  ExactObjectField baseFields[] = {
+      {strTab.getIdentifier("a"), Type::createNumber()},
+      {strTab.getIdentifier("b"), Type::createString()}};
+  Type prev = ctx.createClassInstance(
+      Type::createNoType(), strTab.getIdentifier("C0"), baseFields);
+
+  // Build a chain of classes, each filled with the fields of the previous one
+  // read straight out of the context. The fields being appended point into
+  // the side array they are appended to, which grows and reallocates many
+  // times along the chain.
+  for (unsigned i = 0; i < 64; ++i) {
+    Type cur = ctx.reserveClassInstance(prev);
+    ctx.fillClassInstance(
+        cur, strTab.getIdentifier("C"), ctx.getClassFields(prev));
+    llvh::ArrayRef<ExactObjectField> fields = ctx.getClassFields(cur);
+    ASSERT_EQ(fields.size(), 2u);
+    EXPECT_EQ(fields[0].name, strTab.getIdentifier("a"));
+    EXPECT_EQ(fields[0].type, Type::createNumber());
+    EXPECT_EQ(fields[1].name, strTab.getIdentifier("b"));
+    EXPECT_EQ(fields[1].type, Type::createString());
+    prev = cur;
+  }
+}
+
+TEST_F(TypeContextTest, ClassInstanceSubtyping) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+
+  Type animal = ctx.createClassInstance(
+      Type::createNoType(), strTab.getIdentifier("Animal"), {});
+  Type dog = ctx.createClassInstance(animal, strTab.getIdentifier("Dog"), {});
+  Type cat = ctx.createClassInstance(animal, strTab.getIdentifier("Cat"), {});
+
+  // Reflexive + nominal chain.
+  EXPECT_TRUE(ctx.isSubsetOf(dog, dog));
+  EXPECT_TRUE(ctx.isSubsetOf(dog, animal));
+  EXPECT_FALSE(ctx.isSubsetOf(animal, dog));
+  EXPECT_FALSE(ctx.isSubsetOf(dog, cat));
+  EXPECT_FALSE(ctx.isSubsetOf(cat, dog));
+
+  // Every refinement <: Object.
+  EXPECT_TRUE(ctx.isSubsetOf(dog, Type::createObject()));
+  EXPECT_FALSE(ctx.isSubsetOf(Type::createObject(), dog));
+
+  // Class vs primitive: never a subtype.
+  EXPECT_FALSE(ctx.isSubsetOf(dog, Type::createNumber()));
+  EXPECT_FALSE(ctx.isSubsetOf(Type::createNumber(), dog));
+
+  // Class is a subset of a union containing its ancestor.
+  Type animalOrNull = ctx.unionTy(animal, Type::createNull());
+  EXPECT_TRUE(ctx.isSubsetOf(dog, animalOrNull));
+
+  // Public isSubclass.
+  EXPECT_TRUE(ctx.isSubclass(dog, animal));
+  EXPECT_FALSE(ctx.isSubclass(animal, dog));
+  EXPECT_TRUE(ctx.isSubclass(dog, dog));
+}
+
+/// Subclassing is transitive: a grandchild is a subclass of the root, which
+/// a walk that stops at the immediate superclass does not find.
+TEST_F(TypeContextTest, ClassInstanceTransitiveSubtyping) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+
+  // Puppy extends Dog extends Animal; Cat extends Animal.
+  Type animal = ctx.createClassInstance(
+      Type::createNoType(), strTab.getIdentifier("Animal"), {});
+  Type dog = ctx.createClassInstance(animal, strTab.getIdentifier("Dog"), {});
+  Type puppy = ctx.createClassInstance(dog, strTab.getIdentifier("Puppy"), {});
+  Type cat = ctx.createClassInstance(animal, strTab.getIdentifier("Cat"), {});
+
+  EXPECT_TRUE(ctx.isSubclass(puppy, animal));
+  EXPECT_FALSE(ctx.isSubclass(animal, puppy));
+  EXPECT_FALSE(ctx.isSubclass(puppy, cat));
+
+  EXPECT_TRUE(ctx.isSubsetOf(puppy, animal));
+  EXPECT_FALSE(ctx.isSubsetOf(animal, puppy));
+  EXPECT_FALSE(ctx.isSubsetOf(puppy, cat));
+
+  // A union holding the root contains the grandchild; one holding only an
+  // unrelated class does not.
+  Type animalOrNull = ctx.unionTy(animal, Type::createNull());
+  EXPECT_TRUE(ctx.isSubsetOf(puppy, animalOrNull));
+  EXPECT_FALSE(ctx.isSubsetOf(puppy, ctx.unionTy(cat, Type::createNull())));
+  EXPECT_EQ(ctx.unionTy(puppy, animalOrNull), animalOrNull);
+}
+
+TEST_F(TypeContextTest, ClassInstanceAlgebra) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+
+  Type animal = ctx.createClassInstance(
+      Type::createNoType(), strTab.getIdentifier("Animal"), {});
+  Type dog = ctx.createClassInstance(animal, strTab.getIdentifier("Dog"), {});
+  Type cat = ctx.createClassInstance(animal, strTab.getIdentifier("Cat"), {});
+
+  // Disjointness.
+  EXPECT_TRUE(ctx.areDisjoint(dog, cat)); // unrelated classes
+  EXPECT_FALSE(ctx.areDisjoint(dog, animal)); // related
+  EXPECT_TRUE(ctx.areDisjoint(dog, Type::createNumber())); // class vs primitive
+  EXPECT_FALSE(ctx.areDisjoint(dog, Type::createObject())); // dog <: Object
+
+  // Intersection.
+  EXPECT_EQ(ctx.intersectTy(animal, dog), dog); // narrower wins
+  EXPECT_EQ(ctx.intersectTy(dog, animal), dog);
+  EXPECT_TRUE(ctx.intersectTy(dog, cat).isNoType()); // unrelated -> empty
+  EXPECT_EQ(ctx.intersectTy(dog, Type::createObject()), dog);
+
+  // Union subsumption / non-subsumption.
+  EXPECT_EQ(ctx.unionTy(dog, animal), animal); // dog <: animal -> animal
+  EXPECT_EQ(
+      ctx.unionTy(dog, Type::createObject()),
+      Type::createObject()); // refinement -> Object
+  Type dogOrCat = ctx.unionTy(dog, cat);
+  EXPECT_EQ(ctx.getKind(dogOrCat), TypeKind::Union); // unrelated -> union
+  EXPECT_EQ(ctx.countKinds(dogOrCat), 2u);
+
+  // The arm-by-arm intersection of a union with two unrelated class arms
+  // keeps both arms: the classes share a kind, but neither subsumes the
+  // other when the result union is normalized.
+  EXPECT_EQ(ctx.intersectTy(dogOrCat, Type::createObject()), dogOrCat);
+  EXPECT_EQ(ctx.intersectTy(dogOrCat, animal), dogOrCat);
+
+  // Subtract stays conservative but exact where representable.
+  EXPECT_TRUE(ctx.subtractTy(dog, animal).isNoType()); // dog <: animal
+  EXPECT_EQ(ctx.subtractTy(dog, cat), dog); // disjoint
+}
+
+TEST_F(TypeContextTest, ClassInstancePrint) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+
+  Type dog = ctx.createClassInstance(
+      Type::createNoType(), strTab.getIdentifier("Dog"), {});
+
+  std::string s;
+  llvh::raw_string_ostream os{s};
+  ctx.print(os, dog);
+  os.flush();
+  EXPECT_EQ(s, "classInstance(Dog)");
+
+  // A union containing a class prints the class arm via the same path.
+  std::string s2;
+  llvh::raw_string_ostream os2{s2};
+  ctx.print(os2, ctx.unionTy(dog, Type::createNull()));
+  os2.flush();
+  EXPECT_NE(s2.find("classInstance(Dog)"), std::string::npos);
+  EXPECT_NE(s2.find("null"), std::string::npos);
+}
+
 } // anonymous namespace

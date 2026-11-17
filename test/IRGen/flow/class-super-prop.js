@@ -44,7 +44,7 @@ class B extends A {
 // CHECK-NEXT:       ReturnInst %7: any
 // CHECK-NEXT:function_end
 
-// CHECK:scope %VS1 [exports: any, A: any, B: any, ?A.prototype: object, ?B.prototype: object]
+// CHECK:scope %VS1 [exports: any, A: any, B: any, ?A.prototype: classInstance(), ?B.prototype: classInstance()]
 
 // CHECK:function ""(exports: any): any
 // CHECK-NEXT:%BB0:
@@ -57,17 +57,20 @@ class B extends A {
 // CHECK-NEXT:  %6 = CreateFunctionInst (:object) %1: environment, %VS1: any, %A(): functionCode
 // CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.A]: any
 // CHECK-NEXT:  %8 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:       StoreFrameInst %1: environment, %8: object, [%VS1.?A.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %8: object, %6: object, "prototype": string
-// CHECK-NEXT:  %11 = LoadFrameInst (:any) %1: environment, [%VS1.A]: any
-// CHECK-NEXT:  %12 = CheckedTypeCastInst (:object) %11: any, type(object)
-// CHECK-NEXT:  %13 = CreateFunctionInst (:object) %1: environment, %VS1: any, %B(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %13: object, [%VS1.B]: any
-// CHECK-NEXT:  %15 = LoadFrameInst (:object) %1: environment, [%VS1.?A.prototype]: object
-// CHECK-NEXT:  %16 = CreateFunctionInst (:object) %1: environment, %VS1: any, %f(): functionCode
-// CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) %15: object, "f": string, %16: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %17: object, [%VS1.?B.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %17: object, %13: object, "prototype": string
+// CHECK-NEXT:  %9 = UnionNarrowTrustedInst (:classInstance()) %8: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %9: classInstance(), [%VS1.?A.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %9: classInstance(), %6: object, "prototype": string
+// CHECK-NEXT:  %12 = LoadFrameInst (:any) %1: environment, [%VS1.A]: any
+// CHECK-NEXT:  %13 = CheckedTypeCastInst (:object) %12: any, type(object)
+// CHECK-NEXT:  %14 = CreateFunctionInst (:object) %1: environment, %VS1: any, %B(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %14: object, [%VS1.B]: any
+// CHECK-NEXT:  %16 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?A.prototype]: classInstance()
+// CHECK-NEXT:  %17 = UnionNarrowTrustedInst (:object) %16: classInstance()
+// CHECK-NEXT:  %18 = CreateFunctionInst (:object) %1: environment, %VS1: any, %f(): functionCode
+// CHECK-NEXT:  %19 = AllocTypedNonEnumObjectInst (:object) %17: object, "f": string, %18: object
+// CHECK-NEXT:  %20 = UnionNarrowTrustedInst (:classInstance()) %19: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %20: classInstance(), [%VS1.?B.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %20: classInstance(), %14: object, "prototype": string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -75,14 +78,14 @@ class B extends A {
 
 // CHECK:base constructor A(x: number): any [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:object) %<this>: object
+// CHECK-NEXT:  %0 = LoadParamInst (:classInstance(A)) %<this>: classInstance(A)
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS2: any, %1: environment
 // CHECK-NEXT:  %3 = LoadParamInst (:number) %x: number
 // CHECK-NEXT:       StoreFrameInst %2: environment, %3: number, [%VS2.x]: any
 // CHECK-NEXT:  %5 = LoadFrameInst (:any) %2: environment, [%VS2.x]: any
 // CHECK-NEXT:  %6 = CheckedTypeCastInst (:number) %5: any, type(number)
-// CHECK-NEXT:       PrStoreInst %6: number, %0: object, 0: number, "x": string, true: boolean
+// CHECK-NEXT:       PrStoreInst %6: number, %0: classInstance(A), 0: number, "x": string, true: boolean
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -90,7 +93,7 @@ class B extends A {
 
 // CHECK:derived constructor B(x: number): any [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:object) %<this>: object
+// CHECK-NEXT:  %0 = LoadParamInst (:classInstance(B)) %<this>: classInstance(B)
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS3: any, %1: environment
 // CHECK-NEXT:  %3 = LoadParamInst (:number) %x: number
@@ -100,7 +103,7 @@ class B extends A {
 // CHECK-NEXT:  %7 = GetNewTargetInst (:object) %new.target: object
 // CHECK-NEXT:  %8 = LoadFrameInst (:any) %2: environment, [%VS3.x]: any
 // CHECK-NEXT:  %9 = CheckedTypeCastInst (:number) %8: any, type(number)
-// CHECK-NEXT:  %10 = CallInst [njsf] (:undefined) %6: object, empty: any, false: boolean, empty: any, %7: object, %0: object, %9: number
+// CHECK-NEXT:  %10 = CallInst [njsf] (:undefined) %6: object, empty: any, false: boolean, empty: any, %7: object, %0: classInstance(B), %9: number
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -108,9 +111,9 @@ class B extends A {
 
 // CHECK:function f(): any [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:object) %<this>: object
+// CHECK-NEXT:  %0 = LoadParamInst (:classInstance(B)) %<this>: classInstance(B)
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS4: any, %1: environment
-// CHECK-NEXT:  %3 = PrLoadInst (:number) %0: object, 0: number, "x": string
+// CHECK-NEXT:  %3 = PrLoadInst (:number) %0: classInstance(B), 0: number, "x": string
 // CHECK-NEXT:       ReturnInst %3: number
 // CHECK-NEXT:function_end

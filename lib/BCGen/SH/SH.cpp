@@ -2366,7 +2366,7 @@ class InstrGen {
       suffix = "_number";
     } else if (propType.isBooleanType()) {
       suffix = "_bool";
-    } else if (propType.isObjectType()) {
+    } else if (typeCtx_.isSubsetOf(propType, Type::createObject())) {
       suffix = "_object";
     } else if (propType.isStringType()) {
       suffix = "_string";
@@ -2428,6 +2428,15 @@ class InstrGen {
       case TypeKind::FunctionCode:
         hermes_fatal("cannot check for functionCode type");
       case TypeKind::Object:
+      // Refined object kinds are ordinary objects at runtime. Until precise
+      // runtime type descriptors exist (a later phase), a cast to a refined
+      // object type is enforced as a plain object check -- the same code that
+      // was emitted before these types flowed through the IR.
+      case TypeKind::ClassInstance:
+      case TypeKind::Array:
+      case TypeKind::Tuple:
+      case TypeKind::Function:
+      case TypeKind::ExactObject:
         return "_sh_ljs_is_object";
       default:
         break;
@@ -2446,9 +2455,14 @@ class InstrGen {
     os_ << "if (";
 
     // Are there fewer "bad" types than "good" types? That determines which we
-    // check.
-    auto [checkTypes, negativeCheck] =
-        typeCtx_.countKinds(badTypes) < typeCtx_.countKinds(resultType)
+    // check. Every object kind, refined or not, is checked with the same
+    // plain object check (see nameOfFunctionCheckingForType), so when both
+    // sides can be objects, checking the bad arms would also reject the valid
+    // objects. Check the good arms then.
+    bool canCheckBad =
+        !(typeCtx_.canBeObject(badTypes) && typeCtx_.canBeObject(resultType));
+    auto [checkTypes, negativeCheck] = canCheckBad &&
+            typeCtx_.countKinds(badTypes) < typeCtx_.countKinds(resultType)
         ? std::make_pair(badTypes, true)
         : std::make_pair(resultType, false);
 

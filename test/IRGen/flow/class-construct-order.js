@@ -21,7 +21,7 @@ class C {
 
 // Auto-generated content below. Please do not modify manually.
 
-// CHECK:scope %VS0 [exports: any, foo: any, C: any, ?C.prototype: object]
+// CHECK:scope %VS0 [exports: any, foo: any, C: any, ?C.prototype: classInstance()]
 
 // CHECK:scope %VS1 [x: any]
 
@@ -33,11 +33,11 @@ class C {
 // CHECK-NEXT:       StoreFrameInst %1: environment, %2: number, [%VS1.x]: any
 // CHECK-NEXT:  %4 = LoadFrameInst (:any) %0: environment, [%VS0.C]: any
 // CHECK-NEXT:  %5 = CheckedTypeCastInst (:object) %4: any, type(object)
-// CHECK-NEXT:  %6 = LoadFrameInst (:object) %0: environment, [%VS0.?C.prototype]: object
-// CHECK-NEXT:  %7 = UnionNarrowTrustedInst (:object) %6: object
-// CHECK-NEXT:  %8 = AllocTypedObjectInst (:object) %7: object, "x": string, 0: number
+// CHECK-NEXT:  %6 = LoadFrameInst (:classInstance()) %0: environment, [%VS0.?C.prototype]: classInstance()
+// CHECK-NEXT:  %7 = AllocTypedObjectInst (:object) %6: classInstance(), "x": string, 0: number
+// CHECK-NEXT:  %8 = UnionNarrowTrustedInst (:classInstance(C)) %7: object
 // CHECK-NEXT:  %9 = LoadFrameInst (:any) %1: environment, [%VS1.x]: any
 // CHECK-NEXT:  %10 = CheckedTypeCastInst (:number) %9: any, type(number)
-// CHECK-NEXT:  %11 = CallInst (:any) %5: object, %C(): functionCode, true: boolean, empty: any, %5: object, %8: object, %10: number
-// CHECK-NEXT:        ReturnInst %8: object
+// CHECK-NEXT:  %11 = CallInst (:any) %5: object, %C(): functionCode, true: boolean, empty: any, %5: object, %8: classInstance(C), %10: number
+// CHECK-NEXT:        ReturnInst %8: classInstance(C)
 // CHECK-NEXT:function_end

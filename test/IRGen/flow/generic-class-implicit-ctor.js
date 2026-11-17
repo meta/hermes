@@ -20,7 +20,7 @@ a.foo();
 
 // CHECK:scope %VS0 []
 
-// CHECK:scope %VS1 [exports: any, a: any, A: any, ?A.prototype: object]
+// CHECK:scope %VS1 [exports: any, a: any, A: any, ?A.prototype: classInstance()]
 
 // CHECK:function ""(exports: any): any
 // CHECK-NEXT:%BB0:
@@ -34,19 +34,20 @@ a.foo();
 // CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.A]: any
 // CHECK-NEXT:  %8 = CreateFunctionInst (:object) %1: environment, %VS1: any, %foo(): functionCode
 // CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null, "foo": string, %8: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %9: object, [%VS1.?A.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %9: object, %6: object, "prototype": string
-// CHECK-NEXT:  %12 = LoadFrameInst (:any) %1: environment, [%VS1.A]: any
-// CHECK-NEXT:  %13 = CheckedTypeCastInst (:object) %12: any, type(object)
-// CHECK-NEXT:  %14 = LoadFrameInst (:object) %1: environment, [%VS1.?A.prototype]: object
-// CHECK-NEXT:  %15 = UnionNarrowTrustedInst (:object) %14: object
-// CHECK-NEXT:  %16 = AllocTypedObjectInst (:object) %15: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %16: object, [%VS1.a]: any
-// CHECK-NEXT:  %18 = LoadFrameInst (:any) %1: environment, [%VS1.a]: any
-// CHECK-NEXT:  %19 = CheckedTypeCastInst (:object) %18: any, type(object)
-// CHECK-NEXT:  %20 = TypedLoadParentInst (:object) %19: object
-// CHECK-NEXT:  %21 = PrLoadInst (:object) %20: object, 0: number, "foo": string
-// CHECK-NEXT:  %22 = CallInst [njsf] (:undefined) %21: object, %foo(): functionCode, true: boolean, empty: any, undefined: undefined, %19: object
+// CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %10: classInstance(), [%VS1.?A.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %6: object, "prototype": string
+// CHECK-NEXT:  %13 = LoadFrameInst (:any) %1: environment, [%VS1.A]: any
+// CHECK-NEXT:  %14 = CheckedTypeCastInst (:object) %13: any, type(object)
+// CHECK-NEXT:  %15 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?A.prototype]: classInstance()
+// CHECK-NEXT:  %16 = AllocTypedObjectInst (:object) %15: classInstance()
+// CHECK-NEXT:  %17 = UnionNarrowTrustedInst (:classInstance(A)) %16: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %17: classInstance(A), [%VS1.a]: any
+// CHECK-NEXT:  %19 = LoadFrameInst (:any) %1: environment, [%VS1.a]: any
+// CHECK-NEXT:  %20 = CheckedTypeCastInst (:classInstance(A)) %19: any, type(classInstance(A))
+// CHECK-NEXT:  %21 = TypedLoadParentInst (:object) %20: classInstance(A)
+// CHECK-NEXT:  %22 = PrLoadInst (:object) %21: object, 0: number, "foo": string
+// CHECK-NEXT:  %23 = CallInst [njsf] (:undefined) %22: object, %foo(): functionCode, true: boolean, empty: any, undefined: undefined, %20: classInstance(A)
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

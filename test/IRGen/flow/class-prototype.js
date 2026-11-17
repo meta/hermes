@@ -46,7 +46,7 @@ D.prototype.own.call(new D());
 // CHECK-NEXT:       ReturnInst %7: any
 // CHECK-NEXT:function_end
 
-// CHECK:scope %VS1 [exports: any, C: any, D: any, ?C.prototype: object, ?D.prototype: object]
+// CHECK:scope %VS1 [exports: any, C: any, D: any, ?C.prototype: classInstance(), ?D.prototype: classInstance()]
 
 // CHECK:function ""(exports: any): any
 // CHECK-NEXT:%BB0:
@@ -60,56 +60,59 @@ D.prototype.own.call(new D());
 // CHECK-NEXT:       StoreFrameInst %1: environment, %6: object, [%VS1.C]: any
 // CHECK-NEXT:  %8 = CreateFunctionInst (:object) %1: environment, %VS1: any, %method(): functionCode
 // CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null, "method": string, %8: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %9: object, [%VS1.?C.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %9: object, %6: object, "prototype": string
-// CHECK-NEXT:  %12 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
-// CHECK-NEXT:  %13 = CheckedTypeCastInst (:object) %12: any, type(object)
-// CHECK-NEXT:  %14 = CreateFunctionInst (:object) %1: environment, %VS1: any, %D(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %14: object, [%VS1.D]: any
-// CHECK-NEXT:  %16 = LoadFrameInst (:object) %1: environment, [%VS1.?C.prototype]: object
-// CHECK-NEXT:  %17 = PrLoadInst (:object) %16: object, 0: number, "method": string
-// CHECK-NEXT:  %18 = CreateFunctionInst (:object) %1: environment, %VS1: any, %own(): functionCode
-// CHECK-NEXT:  %19 = AllocTypedNonEnumObjectInst (:object) %16: object, "method": string, %17: object, "own": string, %18: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %19: object, [%VS1.?D.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %19: object, %14: object, "prototype": string
-// CHECK-NEXT:  %22 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
-// CHECK-NEXT:  %23 = CheckedTypeCastInst (:object) %22: any, type(object)
-// CHECK-NEXT:  %24 = LoadPropertyInst (:object) %23: object, "prototype": string
-// CHECK-NEXT:  %25 = PrLoadInst (:uninit|object) %24: object, 0: number, "method": string
-// CHECK-NEXT:  %26 = ThrowIfInst (:object) %25: uninit|object, type(uninit)
-// CHECK-NEXT:  %27 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
-// CHECK-NEXT:  %28 = CheckedTypeCastInst (:object) %27: any, type(object)
-// CHECK-NEXT:  %29 = LoadFrameInst (:object) %1: environment, [%VS1.?C.prototype]: object
-// CHECK-NEXT:  %30 = UnionNarrowTrustedInst (:object) %29: object
-// CHECK-NEXT:  %31 = AllocTypedObjectInst (:object) %30: object
-// CHECK-NEXT:  %32 = CallInst (:any) %26: object, empty: any, false: boolean, empty: any, undefined: undefined, %31: object
-// CHECK-NEXT:  %33 = CheckedTypeCastInst (:number) %32: any, type(number)
-// CHECK-NEXT:  %34 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
-// CHECK-NEXT:  %35 = CheckedTypeCastInst (:object) %34: any, type(object)
-// CHECK-NEXT:  %36 = LoadPropertyInst (:object) %35: object, "prototype": string
-// CHECK-NEXT:  %37 = PrLoadInst (:uninit|object) %36: object, 0: number, "method": string
-// CHECK-NEXT:  %38 = ThrowIfInst (:object) %37: uninit|object, type(uninit)
-// CHECK-NEXT:  %39 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
-// CHECK-NEXT:  %40 = CheckedTypeCastInst (:object) %39: any, type(object)
-// CHECK-NEXT:  %41 = LoadFrameInst (:object) %1: environment, [%VS1.?D.prototype]: object
-// CHECK-NEXT:  %42 = UnionNarrowTrustedInst (:object) %41: object
-// CHECK-NEXT:  %43 = AllocTypedObjectInst (:object) %42: object
-// CHECK-NEXT:  %44 = CallInst (:any) %40: object, %D(): functionCode, true: boolean, empty: any, %40: object, %43: object
-// CHECK-NEXT:  %45 = CallInst (:any) %38: object, empty: any, false: boolean, empty: any, undefined: undefined, %43: object
-// CHECK-NEXT:  %46 = CheckedTypeCastInst (:number) %45: any, type(number)
-// CHECK-NEXT:  %47 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
-// CHECK-NEXT:  %48 = CheckedTypeCastInst (:object) %47: any, type(object)
-// CHECK-NEXT:  %49 = LoadPropertyInst (:object) %48: object, "prototype": string
-// CHECK-NEXT:  %50 = PrLoadInst (:uninit|object) %49: object, 1: number, "own": string
-// CHECK-NEXT:  %51 = ThrowIfInst (:object) %50: uninit|object, type(uninit)
-// CHECK-NEXT:  %52 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
-// CHECK-NEXT:  %53 = CheckedTypeCastInst (:object) %52: any, type(object)
-// CHECK-NEXT:  %54 = LoadFrameInst (:object) %1: environment, [%VS1.?D.prototype]: object
-// CHECK-NEXT:  %55 = UnionNarrowTrustedInst (:object) %54: object
-// CHECK-NEXT:  %56 = AllocTypedObjectInst (:object) %55: object
-// CHECK-NEXT:  %57 = CallInst (:any) %53: object, %D(): functionCode, true: boolean, empty: any, %53: object, %56: object
-// CHECK-NEXT:  %58 = CallInst (:any) %51: object, empty: any, false: boolean, empty: any, undefined: undefined, %56: object
-// CHECK-NEXT:  %59 = CheckedTypeCastInst (:number) %58: any, type(number)
+// CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %10: classInstance(), [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %6: object, "prototype": string
+// CHECK-NEXT:  %13 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
+// CHECK-NEXT:  %14 = CheckedTypeCastInst (:object) %13: any, type(object)
+// CHECK-NEXT:  %15 = CreateFunctionInst (:object) %1: environment, %VS1: any, %D(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %15: object, [%VS1.D]: any
+// CHECK-NEXT:  %17 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:object) %17: classInstance()
+// CHECK-NEXT:  %19 = PrLoadInst (:object) %18: object, 0: number, "method": string
+// CHECK-NEXT:  %20 = CreateFunctionInst (:object) %1: environment, %VS1: any, %own(): functionCode
+// CHECK-NEXT:  %21 = AllocTypedNonEnumObjectInst (:object) %18: object, "method": string, %19: object, "own": string, %20: object
+// CHECK-NEXT:  %22 = UnionNarrowTrustedInst (:classInstance()) %21: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %22: classInstance(), [%VS1.?D.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %22: classInstance(), %15: object, "prototype": string
+// CHECK-NEXT:  %25 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
+// CHECK-NEXT:  %26 = CheckedTypeCastInst (:object) %25: any, type(object)
+// CHECK-NEXT:  %27 = LoadPropertyInst (:classInstance()) %26: object, "prototype": string
+// CHECK-NEXT:  %28 = PrLoadInst (:uninit|object) %27: classInstance(), 0: number, "method": string
+// CHECK-NEXT:  %29 = ThrowIfInst (:object) %28: uninit|object, type(uninit)
+// CHECK-NEXT:  %30 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
+// CHECK-NEXT:  %31 = CheckedTypeCastInst (:object) %30: any, type(object)
+// CHECK-NEXT:  %32 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:  %33 = AllocTypedObjectInst (:object) %32: classInstance()
+// CHECK-NEXT:  %34 = UnionNarrowTrustedInst (:classInstance(C)) %33: object
+// CHECK-NEXT:  %35 = CallInst (:any) %29: object, empty: any, false: boolean, empty: any, undefined: undefined, %34: classInstance(C)
+// CHECK-NEXT:  %36 = CheckedTypeCastInst (:number) %35: any, type(number)
+// CHECK-NEXT:  %37 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
+// CHECK-NEXT:  %38 = CheckedTypeCastInst (:object) %37: any, type(object)
+// CHECK-NEXT:  %39 = LoadPropertyInst (:classInstance()) %38: object, "prototype": string
+// CHECK-NEXT:  %40 = PrLoadInst (:uninit|object) %39: classInstance(), 0: number, "method": string
+// CHECK-NEXT:  %41 = ThrowIfInst (:object) %40: uninit|object, type(uninit)
+// CHECK-NEXT:  %42 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
+// CHECK-NEXT:  %43 = CheckedTypeCastInst (:object) %42: any, type(object)
+// CHECK-NEXT:  %44 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?D.prototype]: classInstance()
+// CHECK-NEXT:  %45 = AllocTypedObjectInst (:object) %44: classInstance()
+// CHECK-NEXT:  %46 = UnionNarrowTrustedInst (:classInstance(D)) %45: object
+// CHECK-NEXT:  %47 = CallInst (:any) %43: object, %D(): functionCode, true: boolean, empty: any, %43: object, %46: classInstance(D)
+// CHECK-NEXT:  %48 = CallInst (:any) %41: object, empty: any, false: boolean, empty: any, undefined: undefined, %46: classInstance(D)
+// CHECK-NEXT:  %49 = CheckedTypeCastInst (:number) %48: any, type(number)
+// CHECK-NEXT:  %50 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
+// CHECK-NEXT:  %51 = CheckedTypeCastInst (:object) %50: any, type(object)
+// CHECK-NEXT:  %52 = LoadPropertyInst (:classInstance()) %51: object, "prototype": string
+// CHECK-NEXT:  %53 = PrLoadInst (:uninit|object) %52: classInstance(), 1: number, "own": string
+// CHECK-NEXT:  %54 = ThrowIfInst (:object) %53: uninit|object, type(uninit)
+// CHECK-NEXT:  %55 = LoadFrameInst (:any) %1: environment, [%VS1.D]: any
+// CHECK-NEXT:  %56 = CheckedTypeCastInst (:object) %55: any, type(object)
+// CHECK-NEXT:  %57 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?D.prototype]: classInstance()
+// CHECK-NEXT:  %58 = AllocTypedObjectInst (:object) %57: classInstance()
+// CHECK-NEXT:  %59 = UnionNarrowTrustedInst (:classInstance(D)) %58: object
+// CHECK-NEXT:  %60 = CallInst (:any) %56: object, %D(): functionCode, true: boolean, empty: any, %56: object, %59: classInstance(D)
+// CHECK-NEXT:  %61 = CallInst (:any) %54: object, empty: any, false: boolean, empty: any, undefined: undefined, %59: classInstance(D)
+// CHECK-NEXT:  %62 = CheckedTypeCastInst (:number) %61: any, type(number)
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

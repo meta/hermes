@@ -53,7 +53,7 @@ function foo(c: C, d: D){
 // CHECK-NEXT:       ReturnInst %7: any
 // CHECK-NEXT:function_end
 
-// CHECK:scope %VS1 [exports: any, C: any, D: any, foo: any, ?C.prototype: object, ?D.prototype: object]
+// CHECK:scope %VS1 [exports: any, C: any, D: any, foo: any, ?C.prototype: classInstance(), ?D.prototype: classInstance()]
 
 // CHECK:function ""(exports: any): any
 // CHECK-NEXT:%BB0:
@@ -70,41 +70,44 @@ function foo(c: C, d: D){
 // CHECK-NEXT:  %10 = CreateFunctionInst (:object) %1: environment, %VS1: any, %override(): functionCode
 // CHECK-NEXT:  %11 = CreateFunctionInst (:object) %1: environment, %VS1: any, %override2(): functionCode
 // CHECK-NEXT:  %12 = AllocTypedNonEnumObjectInst (:object) null: null, "override": string, %10: object, "override2": string, %11: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %12: object, [%VS1.?C.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %12: object, %8: object, "prototype": string
-// CHECK-NEXT:  %15 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
-// CHECK-NEXT:  %16 = CheckedTypeCastInst (:object) %15: any, type(object)
-// CHECK-NEXT:  %17 = CreateFunctionInst (:object) %1: environment, %VS1: any, %D(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %17: object, [%VS1.D]: any
-// CHECK-NEXT:  %19 = LoadFrameInst (:object) %1: environment, [%VS1.?C.prototype]: object
-// CHECK-NEXT:  %20 = CreateFunctionInst (:object) %1: environment, %VS1: any, %"override 1#"(): functionCode
-// CHECK-NEXT:  %21 = CreateFunctionInst (:object) %1: environment, %VS1: any, %"override2 1#"(): functionCode
-// CHECK-NEXT:  %22 = AllocTypedNonEnumObjectInst (:object) %19: object, "override": string, %20: object, "override2": string, %21: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %22: object, [%VS1.?D.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %22: object, %17: object, "prototype": string
+// CHECK-NEXT:  %13 = UnionNarrowTrustedInst (:classInstance()) %12: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %13: classInstance(), [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %13: classInstance(), %8: object, "prototype": string
+// CHECK-NEXT:  %16 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
+// CHECK-NEXT:  %17 = CheckedTypeCastInst (:object) %16: any, type(object)
+// CHECK-NEXT:  %18 = CreateFunctionInst (:object) %1: environment, %VS1: any, %D(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %18: object, [%VS1.D]: any
+// CHECK-NEXT:  %20 = LoadFrameInst (:classInstance()) %1: environment, [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:  %21 = UnionNarrowTrustedInst (:object) %20: classInstance()
+// CHECK-NEXT:  %22 = CreateFunctionInst (:object) %1: environment, %VS1: any, %"override 1#"(): functionCode
+// CHECK-NEXT:  %23 = CreateFunctionInst (:object) %1: environment, %VS1: any, %"override2 1#"(): functionCode
+// CHECK-NEXT:  %24 = AllocTypedNonEnumObjectInst (:object) %21: object, "override": string, %22: object, "override2": string, %23: object
+// CHECK-NEXT:  %25 = UnionNarrowTrustedInst (:classInstance()) %24: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %25: classInstance(), [%VS1.?D.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %25: classInstance(), %18: object, "prototype": string
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
 // CHECK:scope %VS2 [c: any, d: any]
 
-// CHECK:function foo(c: object, d: object): any [typed]
+// CHECK:function foo(c: classInstance(C), d: classInstance(D)): any [typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS2: any, %0: environment
-// CHECK-NEXT:  %2 = LoadParamInst (:object) %c: object
-// CHECK-NEXT:       StoreFrameInst %1: environment, %2: object, [%VS2.c]: any
-// CHECK-NEXT:  %4 = LoadParamInst (:object) %d: object
-// CHECK-NEXT:       StoreFrameInst %1: environment, %4: object, [%VS2.d]: any
+// CHECK-NEXT:  %2 = LoadParamInst (:classInstance(C)) %c: classInstance(C)
+// CHECK-NEXT:       StoreFrameInst %1: environment, %2: classInstance(C), [%VS2.c]: any
+// CHECK-NEXT:  %4 = LoadParamInst (:classInstance(D)) %d: classInstance(D)
+// CHECK-NEXT:       StoreFrameInst %1: environment, %4: classInstance(D), [%VS2.d]: any
 // CHECK-NEXT:  %6 = LoadFrameInst (:any) %1: environment, [%VS2.c]: any
-// CHECK-NEXT:  %7 = CheckedTypeCastInst (:object) %6: any, type(object)
-// CHECK-NEXT:  %8 = TypedLoadParentInst (:object) %7: object
+// CHECK-NEXT:  %7 = CheckedTypeCastInst (:classInstance(C)) %6: any, type(classInstance(C))
+// CHECK-NEXT:  %8 = TypedLoadParentInst (:object) %7: classInstance(C)
 // CHECK-NEXT:  %9 = PrLoadInst (:object) %8: object, 0: number, "override": string
-// CHECK-NEXT:  %10 = CallInst [njsf] (:number) %9: object, empty: any, false: boolean, empty: any, undefined: undefined, %7: object
+// CHECK-NEXT:  %10 = CallInst [njsf] (:number) %9: object, empty: any, false: boolean, empty: any, undefined: undefined, %7: classInstance(C)
 // CHECK-NEXT:  %11 = LoadFrameInst (:any) %1: environment, [%VS2.d]: any
-// CHECK-NEXT:  %12 = CheckedTypeCastInst (:object) %11: any, type(object)
-// CHECK-NEXT:  %13 = TypedLoadParentInst (:object) %12: object
+// CHECK-NEXT:  %12 = CheckedTypeCastInst (:classInstance(D)) %11: any, type(classInstance(D))
+// CHECK-NEXT:  %13 = TypedLoadParentInst (:object) %12: classInstance(D)
 // CHECK-NEXT:  %14 = PrLoadInst (:object) %13: object, 0: number, "override": string
-// CHECK-NEXT:  %15 = CallInst [njsf] (:number) %14: object, %"override 1#"(): functionCode, true: boolean, empty: any, undefined: undefined, %12: object
+// CHECK-NEXT:  %15 = CallInst [njsf] (:number) %14: object, %"override 1#"(): functionCode, true: boolean, empty: any, undefined: undefined, %12: classInstance(D)
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
@@ -141,13 +144,13 @@ function foo(c: C, d: D){
 
 // CHECK:derived constructor D(): any [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:object) %<this>: object
+// CHECK-NEXT:  %0 = LoadParamInst (:classInstance(D)) %<this>: classInstance(D)
 // CHECK-NEXT:  %1 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS6: any, %1: environment
 // CHECK-NEXT:  %3 = LoadFrameInst (:any) %1: environment, [%VS1.C]: any
 // CHECK-NEXT:  %4 = CheckedTypeCastInst (:object) %3: any, type(object)
 // CHECK-NEXT:  %5 = GetNewTargetInst (:object) %new.target: object
-// CHECK-NEXT:  %6 = CallInst (:any) %4: object, empty: any, false: boolean, empty: any, %5: object, %0: object
+// CHECK-NEXT:  %6 = CallInst (:any) %4: object, empty: any, false: boolean, empty: any, %5: object, %0: classInstance(D)
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

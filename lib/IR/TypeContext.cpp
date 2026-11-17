@@ -100,7 +100,7 @@ bool isNumberKind(TypeKind k) {
 }
 
 /// \return true if \p k is a refined object kind that carries payload data.
-[[maybe_unused]] bool isRefinedKind(TypeKind k) {
+bool isRefinedKind(TypeKind k) {
   return k >= TypeKind::_RefinedFirst && k <= TypeKind::_RefinedLast;
 }
 
@@ -154,13 +154,12 @@ bool isNonPtrKind(TypeKind k) {
   }
 }
 
-/// \return true if leaf kind \p a is a subtype of leaf kind \p b.
+/// \return true if non-refined leaf kind \p a is a subtype of \p b.
+/// Refined kinds are handled by TypeContext::isLeafSubtypeById.
 bool isLeafSubtype(TypeKind a, TypeKind b) {
-  // Refined kinds carry payloads and require structural comparison that is
-  // not yet implemented.
-  hermes_assert(
-      !isRefinedKind(a) && !isRefinedKind(b),
-      "refined object kinds not yet supported in subtype check");
+  assert(
+      !isRefinedKind(a) && !isRefinedKind(b) &&
+      "refined kinds are handled by TypeContext::isLeafSubtypeById");
   if (a == b)
     return true;
   // Int32, Uint32, UInt31 are subtypes of Number.
@@ -170,23 +169,11 @@ bool isLeafSubtype(TypeKind a, TypeKind b) {
   // UInt31 is a subtype of both Int32 and Uint32.
   if (a == TypeKind::UInt31 && (b == TypeKind::Int32 || b == TypeKind::Uint32))
     return true;
-  // Object refinements are subtypes of Object.
-  if (b == TypeKind::Object) {
-    switch (a) {
-      case TypeKind::ClassInstance:
-      case TypeKind::Array:
-      case TypeKind::Tuple:
-      case TypeKind::Function:
-      case TypeKind::ExactObject:
-        return true;
-      default:
-        break;
-    }
-  }
   return false;
 }
 
-/// \return true if leaf kinds \p a and \p b have no values in common.
+/// \return true if non-refined leaf kinds \p a and \p b have no values in
+/// common. Refined kinds are handled by TypeContext::areLeafTypesDisjointById.
 bool areLeafKindsDisjoint(TypeKind a, TypeKind b) {
   // If one is a subtype of the other, not disjoint.
   if (isLeafSubtype(a, b) || isLeafSubtype(b, a))
@@ -276,6 +263,120 @@ llvh::ArrayRef<Type> TypeContext::getUnionArms(Type t) const {
       typeArrays_.data() + entry.union_.armOffset, entry.union_.armCount);
 }
 
+Type TypeContext::reserveClassInstance(Type superClass) {
+  uint32_t id = entries_.size();
+  TypeEntry e{}; // primMask defaults to kNotMaskable
+  e.kind = TypeKind::ClassInstance;
+  e.classInstance.superClassTypeId = superClass.id_;
+  e.classInstance.className = Identifier{};
+  e.classInstance.fieldOffset = 0;
+  e.classInstance.fieldCount = 0;
+  entries_.push_back(e);
+  return Type{id};
+}
+
+void TypeContext::fillClassInstance(
+    Type t,
+    Identifier className,
+    llvh::ArrayRef<ExactObjectField> fields) {
+  assert(t.id_ < entries_.size() && "Type ID out of range");
+  TypeEntry &e = entries_[t.id_];
+  assert(e.kind == TypeKind::ClassInstance && "Not a ClassInstance entry");
+  // Copy first: fields may point into fieldArrays_, which the append below
+  // can reallocate.
+  llvh::SmallVector<ExactObjectField, 8> copy(fields.begin(), fields.end());
+  e.classInstance.className = className;
+  e.classInstance.fieldOffset = safePossiblyNarrowingCast<uint32_t>(
+      fieldArrays_.size(), "field array offset overflow");
+  e.classInstance.fieldCount =
+      safePossiblyNarrowingCast<uint16_t>(copy.size(), "too many class fields");
+  fieldArrays_.insert(fieldArrays_.end(), copy.begin(), copy.end());
+}
+
+Type TypeContext::createClassInstance(
+    Type superClass,
+    Identifier className,
+    llvh::ArrayRef<ExactObjectField> fields) {
+  Type t = reserveClassInstance(superClass);
+  fillClassInstance(t, className, fields);
+  return t;
+}
+
+Type TypeContext::getClassSuperType(Type t) const {
+  assert(getKind(t) == TypeKind::ClassInstance && "Not a ClassInstance");
+  return Type{entries_[t.id_].classInstance.superClassTypeId};
+}
+
+Identifier TypeContext::getClassName(Type t) const {
+  assert(getKind(t) == TypeKind::ClassInstance && "Not a ClassInstance");
+  return entries_[t.id_].classInstance.className;
+}
+
+llvh::ArrayRef<ExactObjectField> TypeContext::getClassFields(Type t) const {
+  assert(getKind(t) == TypeKind::ClassInstance && "Not a ClassInstance");
+  const auto &ci = entries_[t.id_].classInstance;
+  return llvh::ArrayRef<ExactObjectField>(
+      fieldArrays_.data() + ci.fieldOffset, ci.fieldCount);
+}
+
+bool TypeContext::isSubclass(Type a, Type b) const {
+  assert(getKind(a) == TypeKind::ClassInstance && "a is not a class");
+  assert(getKind(b) == TypeKind::ClassInstance && "b is not a class");
+  uint32_t cur = a.id_;
+  while (cur != kNoTypeId) {
+    if (cur == b.id_)
+      return true;
+    if (entries_[cur].kind != TypeKind::ClassInstance)
+      break;
+    cur = entries_[cur].classInstance.superClassTypeId;
+  }
+  return false;
+}
+
+bool TypeContext::isLeafSubtypeById(uint32_t a, uint32_t b) const {
+  if (a == b)
+    return true;
+  TypeKind ak = entries_[a].kind;
+  TypeKind bk = entries_[b].kind;
+  if (isRefinedKind(ak) || isRefinedKind(bk)) {
+    // Every refinement is a subtype of unrefined Object.
+    if (isRefinedKind(ak) && bk == TypeKind::Object)
+      return true;
+    // Nominal class subtyping via the superclass chain.
+    if (ak == TypeKind::ClassInstance && bk == TypeKind::ClassInstance)
+      return isSubclass(Type{a}, Type{b});
+    // Shallow model (D4): all other refined relationships -- different
+    // categories, distinct structural types, refined vs primitive -- are not
+    // subtypes. Factored here so deep structural subtyping can be added later
+    // without touching call sites.
+    return false;
+  }
+  return isLeafSubtype(ak, bk);
+}
+
+bool TypeContext::areLeafTypesDisjointById(uint32_t a, uint32_t b) const {
+  TypeKind ak = entries_[a].kind;
+  TypeKind bk = entries_[b].kind;
+  if (isRefinedKind(ak) || isRefinedKind(bk)) {
+    // Subtype either way => overlap.
+    if (isLeafSubtypeById(a, b) || isLeafSubtypeById(b, a))
+      return false;
+    // Two classes with no inheritance relation are disjoint.
+    if (ak == TypeKind::ClassInstance && bk == TypeKind::ClassInstance)
+      return true;
+    // Exactly one is refined: disjoint unless the other is Object (which the
+    // subtype check above already resolved as overlap).
+    if (isRefinedKind(ak) != isRefinedKind(bk)) {
+      TypeKind other = isRefinedKind(ak) ? bk : ak;
+      return other != TypeKind::Object;
+    }
+    // Two distinct structural refined types (or class vs structural):
+    // conservatively NOT disjoint (D5).
+    return false;
+  }
+  return areLeafKindsDisjoint(ak, bk);
+}
+
 bool TypeContext::isNoType(Type t) const {
   return entries_[t.id_].kind == TypeKind::NoType;
 }
@@ -332,6 +433,19 @@ TypeKind TypeContext::getFirstKind(Type t) const {
   return entries_[arms[0].id_].kind;
 }
 
+void TypeContext::printLeaf(llvh::raw_ostream &OS, uint32_t id) const {
+  TypeKind k = entries_[id].kind;
+  if (k == TypeKind::ClassInstance) {
+    OS << "classInstance(";
+    Identifier name = entries_[id].classInstance.className;
+    if (name.isValid())
+      OS << name.str();
+    OS << ')';
+    return;
+  }
+  OS << kindName(k);
+}
+
 void TypeContext::print(llvh::raw_ostream &OS, Type t) const {
   assert(t.id_ < entries_.size() && "Type ID out of range");
   const auto &entry = entries_[t.id_];
@@ -342,7 +456,7 @@ void TypeContext::print(llvh::raw_ostream &OS, Type t) const {
   }
 
   if (entry.kind != TypeKind::Union) {
-    OS << kindName(entry.kind);
+    printLeaf(OS, t.id_);
     return;
   }
 
@@ -352,11 +466,11 @@ void TypeContext::print(llvh::raw_ostream &OS, Type t) const {
     OS << "any";
     auto arms = getUnionArms(t);
     for (Type arm : arms) {
-      TypeKind k = entries_[arm.id_].kind;
       // Skip kinds that are part of AnyType.
       if (isSubsetOf(arm, Type{kAnyTypeId}))
         continue;
-      OS << '|' << kindName(k);
+      OS << '|';
+      printLeaf(OS, arm.id_);
     }
     return;
   }
@@ -366,7 +480,7 @@ void TypeContext::print(llvh::raw_ostream &OS, Type t) const {
   for (size_t i = 0; i < arms.size(); ++i) {
     if (i != 0)
       OS << '|';
-    OS << kindName(entries_[arms[i].id_].kind);
+    printLeaf(OS, arms[i].id_);
   }
 }
 
@@ -577,8 +691,8 @@ bool TypeContext::isSubsetOf(Type a, Type b) const {
     return false;
   }
 
-  // Both leaf types.
-  return isLeafSubtype(aKind, bKind);
+  // Both leaf types (id-aware: distinguishes nominal classes).
+  return isLeafSubtypeById(a.id_, b.id_);
 }
 
 bool TypeContext::areDisjoint(Type a, Type b) const {
@@ -616,8 +730,8 @@ bool TypeContext::areDisjoint(Type a, Type b) const {
     return true;
   }
 
-  // Both leaf types.
-  return areLeafKindsDisjoint(aKind, bKind);
+  // Both leaf types (id-aware, conservative for refined kinds).
+  return areLeafTypesDisjointById(a.id_, b.id_);
 }
 
 uint32_t TypeContext::createUnionImpl(uint32_t a, uint32_t b) {
@@ -638,9 +752,8 @@ uint32_t TypeContext::createUnionImpl(uint32_t a, uint32_t b) {
   // Remove cross-subsumed arms. Arms within each input are already
   // canonical (no internal subsumption), so we only check across inputs.
   auto isSubsumedBy = [this](uint32_t id, llvh::ArrayRef<uint32_t> others) {
-    TypeKind k = entries_[id].kind;
     for (uint32_t o : others) {
-      if (o != id && isLeafSubtype(k, entries_[o].kind))
+      if (o != id && isLeafSubtypeById(id, o))
         return true;
     }
     return false;
@@ -719,9 +832,9 @@ uint32_t TypeContext::intersectLeafTy(uint32_t a, uint32_t b) const {
   TypeKind bKind = entries_[b].kind;
   assert(aKind != TypeKind::Union && bKind != TypeKind::Union);
 
-  if (isLeafSubtype(aKind, bKind))
+  if (isLeafSubtypeById(a, b))
     return a;
-  if (isLeafSubtype(bKind, aKind))
+  if (isLeafSubtypeById(b, a))
     return b;
 
   // The only non-subset overlap in the number family is Int32 ∩ Uint32 =
@@ -750,12 +863,11 @@ uint32_t TypeContext::createUnionFromLeafArms(llvh::ArrayRef<uint32_t> arms) {
   llvh::SmallVector<uint32_t, 16> filtered;
   filtered.reserve(normalized.size());
   for (size_t i = 0; i < normalized.size(); ++i) {
-    TypeKind candidate = entries_[normalized[i]].kind;
     bool subsumed = false;
     for (size_t j = 0; j < normalized.size(); ++j) {
       if (i == j)
         continue;
-      if (isLeafSubtype(candidate, entries_[normalized[j]].kind)) {
+      if (isLeafSubtypeById(normalized[i], normalized[j])) {
         subsumed = true;
         break;
       }

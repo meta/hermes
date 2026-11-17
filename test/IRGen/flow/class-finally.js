@@ -29,7 +29,7 @@ try {} finally { class C {} }
 // CHECK-NEXT:       ReturnInst %7: any
 // CHECK-NEXT:function_end
 
-// CHECK:scope %VS1 [exports: any, C: any, ?C.prototype: object]
+// CHECK:scope %VS1 [exports: any, C: any, ?C.prototype: classInstance()]
 
 // CHECK:function ""(exports: any): any
 // CHECK-NEXT:%BB0:
@@ -44,8 +44,9 @@ try {} finally { class C {} }
 // CHECK-NEXT:  %7 = CreateFunctionInst (:object) %1: environment, %VS1: any, %C(): functionCode
 // CHECK-NEXT:       StoreFrameInst %1: environment, %7: object, [%VS1.C]: any
 // CHECK-NEXT:  %9 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:        StoreFrameInst %1: environment, %9: object, [%VS1.?C.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %9: object, %7: object, "prototype": string
+// CHECK-NEXT:  %10 = UnionNarrowTrustedInst (:classInstance()) %9: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %10: classInstance(), [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %10: classInstance(), %7: object, "prototype": string
 // CHECK-NEXT:        ThrowInst %5: any
 // CHECK-NEXT:%BB2:
 // CHECK-NEXT:        ReturnInst undefined: undefined
@@ -53,11 +54,12 @@ try {} finally { class C {} }
 // CHECK-NEXT:        TryEndInst %BB1, %BB4
 // CHECK-NEXT:%BB4:
 // CHECK-NEXT:        StoreFrameInst %1: environment, undefined: undefined, [%VS1.C]: any
-// CHECK-NEXT:  %16 = CreateFunctionInst (:object) %1: environment, %VS1: any, %C(): functionCode
-// CHECK-NEXT:        StoreFrameInst %1: environment, %16: object, [%VS1.C]: any
-// CHECK-NEXT:  %18 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:        StoreFrameInst %1: environment, %18: object, [%VS1.?C.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %18: object, %16: object, "prototype": string
+// CHECK-NEXT:  %17 = CreateFunctionInst (:object) %1: environment, %VS1: any, %C(): functionCode
+// CHECK-NEXT:        StoreFrameInst %1: environment, %17: object, [%VS1.C]: any
+// CHECK-NEXT:  %19 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:  %20 = UnionNarrowTrustedInst (:classInstance()) %19: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %20: classInstance(), [%VS1.?C.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %20: classInstance(), %17: object, "prototype": string
 // CHECK-NEXT:        BranchInst %BB2
 // CHECK-NEXT:function_end
 

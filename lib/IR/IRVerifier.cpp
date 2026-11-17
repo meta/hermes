@@ -1724,7 +1724,7 @@ bool Verifier::visitFastArrayLengthInst(const FastArrayLengthInst &Inst) {
 bool Verifier::visitLoadParentNoTrapsInst(const LoadParentNoTrapsInst &Inst) {
   AssertIWithMsg(
       Inst,
-      Inst.getObject()->getType().isObjectType(),
+      typeCtx_.isSubsetOf(Inst.getObject()->getType(), Type::createObject()),
       "input object value must be of object type");
   return true;
 }
@@ -1732,7 +1732,7 @@ bool Verifier::visitLoadParentNoTrapsInst(const LoadParentNoTrapsInst &Inst) {
 bool Verifier::visitTypedLoadParentInst(const TypedLoadParentInst &Inst) {
   AssertIWithMsg(
       Inst,
-      Inst.getObject()->getType().isObjectType(),
+      typeCtx_.isSubsetOf(Inst.getObject()->getType(), Type::createObject()),
       "input object value must be of object type");
   return true;
 }

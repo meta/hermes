@@ -122,7 +122,13 @@ static void auditInferredTypes(Function *F) {
         TypeString++;
       } else if (t.isNumberType()) {
         TypeNumber++;
-      } else if (t.isObjectType()) {
+      } else if (
+          !t.isNoType() &&
+          F->getParent()->getTypeContext().isSubsetOf(
+              t, Type::createObject())) {
+        // Plain object or any refinement of it (class instance, array,
+        // function, ...). NoType, the type of instructions without an output,
+        // is a subset of every type, so exclude it.
         TypeObject++;
       } else if (F->getParent()->getTypeContext().canBeAny(t)) {
         TypeAny++;

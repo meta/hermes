@@ -461,8 +461,13 @@ Value *ESTreeIRGen::genFastArrayFromElements(
   // of push and append.
 
   // Load Array<T>.prototype from the home object variable for the type.
-  Value *prototype =
-      emitLoadTypedHomeObject(llvh::cast<flow::ClassType>(arrayType->info));
+  // The Array<T> home object now carries its refined classInstance type, but
+  // AllocFastArrayInst's prototype operand is typed as plain object. Narrow
+  // (trusted) back to object for compatibility; this can be relaxed once
+  // AllocFastArrayInst accepts refined object kinds.
+  Value *prototype = Builder.createUnionNarrowTrustedInst(
+      emitLoadTypedHomeObject(llvh::cast<flow::ClassType>(arrayType->info)),
+      Type::createObject());
 
   auto *array = Builder.createAllocFastArrayInst(
       Builder.getLiteralNumber(list.size()), prototype);
@@ -3395,9 +3400,7 @@ Value *ESTreeIRGen::genNewExpr(ESTree::NewExpressionNode *N) {
     // do not need to perform any TDZ check on the home object variable.
     auto *RSI =
         emitResolveScopeInstIfNeeded(it->second.homeObjectVar->getParent());
-    auto *proto = Builder.createUnionNarrowTrustedInst(
-        Builder.createLoadFrameInst(RSI, it->second.homeObjectVar),
-        Type::createObject());
+    auto *proto = Builder.createLoadFrameInst(RSI, it->second.homeObjectVar);
     Value *newInst = emitTypedClassAllocation(
         classType, proto, /* propertiesEnumerable */ true);
 

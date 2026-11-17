@@ -39,7 +39,7 @@ class A {
 // CHECK-NEXT:       ReturnInst %7: any
 // CHECK-NEXT:function_end
 
-// CHECK:scope %VS1 [exports: any, before: any, A: any, x: number, foo: empty|object, viaThis: empty|object, ?A.prototype: object]
+// CHECK:scope %VS1 [exports: any, before: any, A: any, x: number, foo: empty|object, viaThis: empty|object, ?A.prototype: classInstance()]
 
 // CHECK:function ""(exports: any): any
 // CHECK-NEXT:%BB0:
@@ -61,10 +61,11 @@ class A {
 // CHECK-NEXT:        StoreFrameInst %1: environment, %14: object, [%VS1.A]: any
 // CHECK-NEXT:  %16 = CreateFunctionInst (:object) %1: environment, %VS1: any, %bar(): functionCode
 // CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null, "bar": string, %16: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %17: object, [%VS1.?A.prototype]: object
-// CHECK-NEXT:        StorePropertyStrictInst %17: object, %14: object, "prototype": string
-// CHECK-NEXT:  %20 = CreateFunctionInst (:object) %1: environment, %VS1: any, %<static_elements_initializer:A>(): functionCode
-// CHECK-NEXT:  %21 = CallInst (:undefined) %20: object, %<static_elements_initializer:A>(): functionCode, true: boolean, %1: environment, undefined: undefined, %14: object
+// CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %18: classInstance(), [%VS1.?A.prototype]: classInstance()
+// CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %14: object, "prototype": string
+// CHECK-NEXT:  %21 = CreateFunctionInst (:object) %1: environment, %VS1: any, %<static_elements_initializer:A>(): functionCode
+// CHECK-NEXT:  %22 = CallInst (:undefined) %21: object, %<static_elements_initializer:A>(): functionCode, true: boolean, %1: environment, undefined: undefined, %14: object
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
