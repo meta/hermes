@@ -71,7 +71,12 @@ export class SimpleTransform {
   transform(rootNode: ESNode, options: TransformOptions): ESNode | null {
     let resultRootNode: ESNode | null = rootNode;
     SimpleTraverser.traverse(rootNode, {
-      enter: (node: ESNode, parent: ?ESNode) => {
+      enter: (
+        node: ESNode,
+        parent: ?ESNode,
+        parentKey?: ?string,
+        parentIndex?: ?number,
+      ) => {
         // Ensure the parent pointers are correctly set before entering the node.
         setParentPointer(node, parent);
 
@@ -114,6 +119,8 @@ export class SimpleTransform {
               parent,
               traversedResultNode,
               options.visitorKeys,
+              parentKey,
+              parentIndex,
             );
             setParentPointer(traversedResultNode, parent);
           }
