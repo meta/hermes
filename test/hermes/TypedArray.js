@@ -1438,6 +1438,21 @@ cons.forEach(function(TypedArray) {
 });
 /// @}
 
+/// @name TypedArray.prototype.with
+/// @{
+cons.forEach(function(TypedArray) {
+  var arr = new TypedArray([ 0, 1, 1, 3 ]);
+
+  assert.arrayEqual(arr.with(2, 2), [ 0, 1, 2, 3 ]);
+  assert.arrayEqual(arr.with(-2, 2), [ 0, 1, 2, 3 ]);
+  assert.arrayEqual(new TypedArray(1).with(0, 100), [ 100 ]);
+
+  assert.throws(function() {
+    arr.with(4, 5);
+  }, RangeError);
+});
+/// @}
+
 /// @name Exception cases
 /// @{
 
