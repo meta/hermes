@@ -142,14 +142,6 @@ void FlowChecker::matchConstraintToType(
         // looping union arms.
         continue;
 
-      case TypeKind::Array: {
-        // Visit the array element.
-        auto *constraintArr = llvh::cast<ArrayType>(constraint->info);
-        auto *typeArr = llvh::cast<ArrayType>(type->info);
-        worklist.insert({constraintArr->getElement(), typeArr->getElement()});
-        continue;
-      }
-
       case TypeKind::Tuple: {
         // Visit the tuple elements.
         auto *constraintTuple = llvh::cast<TupleType>(constraint->info);
@@ -987,7 +979,7 @@ class FlowChecker::ExprVisitor {
     if (id->_name == outer_.kw_.identLength)
       return outer_.flowContext_.getNumber();
     if (auto *builtinDecl = outer_.flowContext_.findBuiltinMethod(
-            {TypeKind::String, id->_name, /* isStatic */ false})) {
+            {BuiltinReceiverKind::String, id->_name, /* isStatic */ false})) {
       // Found a builtin method - store for CallExpression to use.
       // The actual type will be determined by CallExpression.
       // For now, use any.
@@ -1004,7 +996,7 @@ class FlowChecker::ExprVisitor {
   Type *visitMemberNumber(ESTree::MemberExpressionNode *node) {
     auto *id = llvh::cast<ESTree::IdentifierNode>(node->_property);
     if (auto *builtinDecl = outer_.flowContext_.findBuiltinMethod(
-            {TypeKind::Number, id->_name, /* isStatic */ false})) {
+            {BuiltinReceiverKind::Number, id->_name, /* isStatic */ false})) {
       // Found a builtin method - store for CallExpression to use.
       // The actual type will be determined by CallExpression.
       outer_.setBuiltinMethodDecl(node, builtinDecl);

@@ -617,7 +617,6 @@ Value *ESTreeIRGen::getDefaultInitValue(flow::Type *type) {
     case flow::TypeKind::UntypedFunction:
     case flow::TypeKind::Class:
     case flow::TypeKind::ClassConstructor:
-    case flow::TypeKind::Array:
     case flow::TypeKind::Tuple:
     case flow::TypeKind::ExactObject:
       return Builder.getLiteralPositiveZero();
@@ -720,7 +719,6 @@ Type ESTreeIRGen::flowTypeToIRType(flow::TypeInfo *flowType) {
     }
     case flow::TypeKind::ClassConstructor:
       return Type::createObject();
-    case flow::TypeKind::Array:
     case flow::TypeKind::Tuple:
     case flow::TypeKind::ExactObject:
       return Type::createObject();

@@ -177,10 +177,6 @@ class FlowChecker::FindLoopingTypes {
     return result;
   }
 
-  bool isLooping(Type *, ArrayType *type) {
-    return isTypeLooping(type->getElement());
-  }
-
   bool isLooping(Type *, TupleType *type) {
     bool result = false;
     for (Type *t : type->getTypes()) {
@@ -1026,8 +1022,6 @@ class FlowChecker::DeclareScopeTypes {
     if (auto *unionType = llvh::dyn_cast<UnionType>(type->info)) {
       // Forward unions must be checked for loops and canonicalized if possible.
       completeForwardUnion(type, unionType, visited);
-    } else if (auto *array = llvh::dyn_cast<ArrayType>(type->info)) {
-      completeForwardType(array->getElement(), visited);
     } else if (auto *tuple = llvh::dyn_cast<TupleType>(type->info)) {
       for (Type *t : tuple->getTypes())
         completeForwardType(t, visited);

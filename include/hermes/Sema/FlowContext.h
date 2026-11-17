@@ -42,7 +42,6 @@ namespace flow {
 /// _HERMES_SEMA_FLOW_LITERAL_BASES.
 #define _HERMES_SEMA_FLOW_COMPLEX_TYPES                \
   _HERMES_SEMA_FLOW_DEFKIND(Union)                     \
-  _HERMES_SEMA_FLOW_DEFKIND(Array)                     \
   _HERMES_SEMA_FLOW_DEFKIND(Tuple)                     \
   _HERMES_SEMA_FLOW_DEFKIND(ExactObject)               \
   _HERMES_SEMA_FLOW_DEFKIND(UntypedFunction)           \
@@ -440,31 +439,6 @@ class UnionType : public SingleType<TypeKind::Union, TypeInfo> {
  private:
   // Iterate types_ and set the hasAny_ and hasMixed_ flags.
   void setHasAnyMixed();
-};
-
-class ArrayType : public SingleType<TypeKind::Array, TypeInfo> {
-  Type *element_ = nullptr;
-
- public:
-  /// Initialize a new instance.
-  explicit ArrayType(Type *element) : element_(element) {}
-
-  Type *getElement() const {
-    assert(isInitialized());
-    return element_;
-  }
-
-  /// Compare two instances of the same TypeKind.
-  int _compareImpl(const ArrayType *other, CompareState &state) const;
-  /// Compare two instances of the same TypeKind.
-  bool _equalsImpl(const ArrayType *other, CompareState &state) const;
-  /// Calculate the type-specific hash.
-  unsigned _hashImpl() const;
-
- private:
-  bool isInitialized() const {
-    return element_ != nullptr;
-  }
 };
 
 /// Array type used as a constraint during type argument inference.
@@ -1258,17 +1232,24 @@ class ClassConstructorType : public TypeWithId {
   }
 };
 
+/// Discriminator for the receiver of a builtin method (TypedLib functions
+/// declared with a "builtin" directive). populateBuiltinMethods registers
+/// methods whose 'this' is annotated T[], string or number under Array, String
+/// or Number. Only String and Number receivers are looked up when member
+/// accesses are checked (visitMemberString, visitMemberNumber); a method
+/// registered under Array is never found.
+enum class BuiltinReceiverKind : uint8_t { Array, String, Number };
+
 /// Key for looking up builtin methods.
 ///
 /// Methods with "builtin" directive are stored here, so they can be looked up
 /// when typechecking builtin method calls.
 struct BuiltinMethodKey {
-  /// The TypeKind of the 'this' parameter (e.g., TypeKind::Array for Array
-  /// methods).
+  /// The kind of the receiver ('this' parameter) of the builtin method.
   /// Note that we don't store a real Type here because it's easier to match
-  /// against builtin types with just the TypeKind, and we're only using this
-  /// key to lookup a small number of registered "builtin" methods.
-  TypeKind thisTypeKind;
+  /// against builtin types with just the receiver kind, and we're only using
+  /// this key to lookup a small number of registered "builtin" methods.
+  BuiltinReceiverKind receiverKind;
   /// The method name.
   UniqueString *name;
   /// Whether this is a static method (vs prototype/instance method).
@@ -1277,13 +1258,13 @@ struct BuiltinMethodKey {
   /// \return a hash value for the key.
   unsigned getHashValue() const {
     return llvh::hash_combine(
-        (uint8_t)thisTypeKind,
+        (uint8_t)receiverKind,
         llvh::hash_value(name),
         llvh::hash_value(isStatic));
   }
 
   bool operator==(const BuiltinMethodKey &other) const {
-    return thisTypeKind == other.thisTypeKind && name == other.name &&
+    return receiverKind == other.receiverKind && name == other.name &&
         isStatic == other.isStatic;
   }
 };
@@ -1292,11 +1273,13 @@ struct BuiltinMethodKey {
 struct BuiltinMethodKeyInfo {
   static inline BuiltinMethodKey getEmptyKey() {
     return {
-        (TypeKind)0, llvh::DenseMapInfo<UniqueString *>::getEmptyKey(), false};
+        BuiltinReceiverKind::Array,
+        llvh::DenseMapInfo<UniqueString *>::getEmptyKey(),
+        false};
   }
   static inline BuiltinMethodKey getTombstoneKey() {
     return {
-        (TypeKind)0,
+        BuiltinReceiverKind::Array,
         llvh::DenseMapInfo<UniqueString *>::getTombstoneKey(),
         false};
   }
@@ -1393,10 +1376,6 @@ class FlowContext {
   /// Create an initialized "maybe" type (void | null | type).
   UnionType *createPopulatedNullable(Type *type);
 
-  ArrayType *createArray(Type *element) {
-    assert(element);
-    return &allocArray_.emplace_back(element);
-  }
   InferencePlaceholderArrayType *createInferencePlaceholderArray(
       Type *element) {
     assert(element);

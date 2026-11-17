@@ -176,7 +176,7 @@ void FlowChecker::populateBuiltinMethods() {
   for (ESTree::FunctionDeclarationNode *funcDecl :
        semContext_.getBuiltinDeclarations()) {
     // Extract the 'this' parameter type for keying.
-    // We only need the TypeKind for lookup via findBuiltinMethod.
+    // We only need the receiver kind for lookup via findBuiltinMethod.
     if (funcDecl->_params.empty()) {
       sm_.error(
           funcDecl->getStartLoc(),
@@ -194,19 +194,19 @@ void FlowChecker::populateBuiltinMethods() {
       continue;
     }
 
-    // Determine the TypeKind from the AST structure without parsing.
+    // Determine the receiver kind from the AST structure without parsing.
     // This avoids creating types with placeholders.
     auto *typeAnnotation =
         llvh::cast<ESTree::TypeAnnotationNode>(firstParam->_typeAnnotation);
     ESTree::Node *innerType = typeAnnotation->_typeAnnotation;
 
-    TypeKind thisTypeKind = TypeKind::InferencePlaceholder;
+    BuiltinReceiverKind receiverKind;
     if (llvh::isa<ESTree::ArrayTypeAnnotationNode>(innerType)) {
-      thisTypeKind = TypeKind::Array;
+      receiverKind = BuiltinReceiverKind::Array;
     } else if (llvh::isa<ESTree::StringTypeAnnotationNode>(innerType)) {
-      thisTypeKind = TypeKind::String;
+      receiverKind = BuiltinReceiverKind::String;
     } else if (llvh::isa<ESTree::NumberTypeAnnotationNode>(innerType)) {
-      thisTypeKind = TypeKind::Number;
+      receiverKind = BuiltinReceiverKind::Number;
     } else {
       sm_.error(
           funcDecl->getStartLoc(),
@@ -214,9 +214,6 @@ void FlowChecker::populateBuiltinMethods() {
           "(only T[], string and number supported right now)");
       continue;
     }
-
-    assert(
-        thisTypeKind != TypeKind::InferencePlaceholder && "must find a type");
 
     // Generic builtins are not supported.
     if (funcDecl->_typeParameters) {
@@ -238,7 +235,7 @@ void FlowChecker::populateBuiltinMethods() {
 
     // Currently all builtin functions from TypedLib are non-static.
     BuiltinMethodKey key{
-        thisTypeKind,
+        receiverKind,
         id->_name,
         /* isStatic */ false};
     flowContext_.registerBuiltinMethod(key, funcDecl);

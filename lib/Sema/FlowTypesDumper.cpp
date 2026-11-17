@@ -229,12 +229,6 @@ void FlowTypesDumper::printTypeDescription(
       os << ')';
       break;
 
-    case TypeKind::Array:
-      os << '(';
-      printTypeRef(os, llvh::cast<ArrayType>(type)->getElement());
-      os << ')';
-      break;
-
     case TypeKind::InferencePlaceholderArray:
       os << '(';
       printTypeRef(

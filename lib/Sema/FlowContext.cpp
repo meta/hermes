@@ -176,12 +176,6 @@ static void messageStringImpl(
     return;
   }
 
-  if (auto *arrayType = llvh::dyn_cast<ArrayType>(type->info)) {
-    messageStringImpl(arrayType->getElement(), os, active);
-    os << "[]";
-    return;
-  }
-
   if (auto *tupleType = llvh::dyn_cast<TupleType>(type->info)) {
     bool first = true;
     os << '[';
@@ -279,8 +273,6 @@ llvh::StringRef TypeInfo::getKindName() const {
       return "class";
     case TypeKind::ClassConstructor:
       return "class constructor";
-    case TypeKind::Array:
-      return "array";
     case TypeKind::Tuple:
       return "tuple";
     case TypeKind::ExactObject:
@@ -613,18 +605,6 @@ unsigned UnionType::_hashImpl() const {
   assert(numNonLoopingTypes_ >= 0 && "types haven't been canonicalized yet");
   return (unsigned)llvh::hash_combine(
       (unsigned)TypeKind::Union, numNonLoopingTypes_);
-}
-
-int ArrayType::_compareImpl(const ArrayType *other, CompareState &state) const {
-  return element_->info->compare(other->element_->info, state);
-}
-
-bool ArrayType::_equalsImpl(const ArrayType *other, CompareState &state) const {
-  return element_->info->equals(other->element_->info, state);
-}
-
-unsigned ArrayType::_hashImpl() const {
-  return (unsigned)llvh::hash_combine((unsigned)TypeKind::Array);
 }
 
 int InferencePlaceholderArrayType::_compareImpl(
