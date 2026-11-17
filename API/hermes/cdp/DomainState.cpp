@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <string>
+#include <functional>
+#include <iostream>
 #include "DomainState.h"
 
 #include <cassert>
