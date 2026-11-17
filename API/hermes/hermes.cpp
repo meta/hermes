@@ -7,6 +7,8 @@
 
 #include <hermes/hermes.h>
 
+#include "JSONValue.h"
+
 #include "llvh/Support/Compiler.h"
 
 #include "hermes/ADT/ManagedChunkedList.h"
@@ -291,6 +293,7 @@ vm::ThreadRunner finalizerThreadRunner(const vm::RuntimeConfig &runtimeConfig) {
 
 class HermesRuntimeImpl final : public HermesRuntime,
                                 private IHermesTestHelpers,
+                                private jsi::IJSONValueFactory,
                                 private InstallHermesFatalErrorHandler,
                                 private jsi::Instrumentation,
                                 public ISetEventLoopControl
@@ -752,6 +755,13 @@ class HermesRuntimeImpl final : public HermesRuntime,
       std::string sourceURL);
 
   ICast *castInterface(const jsi::UUID &interfaceUUID) override;
+
+  jsi::Value createValueFromJSONTree(
+      const jsi::JSONValue &value) override;
+  jsi::Value createValueFromJSONTreeAndConsume(
+      jsi::JSONValue &value) override;
+  jsi::JSONValue createJSONTreeFromValue(
+      const jsi::Value &value) override;
 
 #ifdef JSI_UNSTABLE
   std::shared_ptr<jsi::Serialized> serialize(const jsi::Value &value) override;
@@ -1720,6 +1730,8 @@ jsi::ICast *HermesRuntimeImpl::castInterface(const jsi::UUID &interfaceUUID) {
     return static_cast<IHermes *>(this);
   } else if (interfaceUUID == IHermesSHUnit::uuid) {
     return static_cast<IHermesSHUnit *>(this);
+  } else if (interfaceUUID == jsi::IJSONValueFactory::uuid) {
+    return static_cast<jsi::IJSONValueFactory *>(this);
   }
 #ifdef JSI_UNSTABLE
   else if (interfaceUUID == ISerialization::uuid) {
@@ -1732,6 +1744,34 @@ jsi::ICast *HermesRuntimeImpl::castInterface(const jsi::UUID &interfaceUUID) {
     return static_cast<ISetEventLoopControl *>(this);
   }
   return nullptr;
+}
+
+jsi::Value HermesRuntimeImpl::createValueFromJSONTree(
+    const jsi::JSONValue &value) {
+  vm::GCScope gcScope(runtime_);
+  vm::JSONValueMaterializer materializer;
+  auto res = materializer.materialize(runtime_, value);
+  checkStatus(res.getStatus());
+  return valueFromHermesValue(*res);
+}
+
+jsi::Value HermesRuntimeImpl::createValueFromJSONTreeAndConsume(
+    jsi::JSONValue &value) {
+  vm::GCScope gcScope(runtime_);
+  vm::JSONValueMaterializer materializer;
+  auto res = materializer.materializeAndConsume(runtime_, value);
+  checkStatus(res.getStatus());
+  return valueFromHermesValue(*res);
+}
+
+jsi::JSONValue HermesRuntimeImpl::createJSONTreeFromValue(
+    const jsi::Value &value) {
+  vm::GCScope gcScope(runtime_);
+  vm::PinnedHermesValue numberStorage;
+  auto res = vm::createJSONValueFromHermesValue(
+      runtime_, vmHandleFromValue(value, &numberStorage));
+  checkStatus(res.getStatus());
+  return std::move(*res);
 }
 
 #ifdef JSI_UNSTABLE

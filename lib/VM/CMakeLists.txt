@@ -45,6 +45,7 @@ set(source_files
   JSWeakMapImpl.cpp
   JSWeakRef.cpp
   JSFinalizationRegistry.cpp
+  JSONValue.cpp
   LimitedStorageProvider.cpp
   DecoratedObject.cpp
   HostModel.cpp

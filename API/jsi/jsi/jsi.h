@@ -15,6 +15,8 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #ifndef JSI_EXPORT
@@ -203,6 +205,108 @@ class JSError;
 class TypedArray;
 class Uint8Array;
 
+/// A decoded JSON-compatible value tree that native code can use to ask a
+/// runtime to materialize a JavaScript value without reparsing JSON text.
+///
+/// Strings carry their decoded character encoding so runtimes can avoid
+/// unnecessary transcoding when the producer already has the runtime's
+/// preferred representation.
+struct JSI_EXPORT JSONValue {
+  enum class Kind { Null, Bool, Number, String, Array, Object };
+  enum class StringEncoding { ASCII, UTF8, UTF16 };
+
+  using Object = std::vector<std::pair<std::string, JSONValue>>;
+
+  Kind kind{Kind::Null};
+  bool boolValue{false};
+  double numberValue{0};
+  StringEncoding stringEncoding{StringEncoding::ASCII};
+  std::string stringValue;
+  std::u16string utf16StringValue;
+  std::vector<JSONValue> arrayValue;
+  Object objectValue;
+
+  static JSONValue null() {
+    return {};
+  }
+
+  static JSONValue boolean(bool value) {
+    JSONValue result;
+    result.kind = Kind::Bool;
+    result.boolValue = value;
+    return result;
+  }
+
+  static JSONValue number(double value) {
+    JSONValue result;
+    result.kind = Kind::Number;
+    result.numberValue = value;
+    return result;
+  }
+
+  static bool isASCII(std::string_view value) {
+    for (unsigned char c : value) {
+      if (c > 0x7f) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static JSONValue asciiString(std::string value) {
+    JSONValue result;
+    result.kind = Kind::String;
+    result.stringEncoding =
+        isASCII(value) ? StringEncoding::ASCII : StringEncoding::UTF8;
+    result.stringValue = std::move(value);
+    return result;
+  }
+
+  static JSONValue utf8String(std::string value) {
+    if (isASCII(value)) {
+      return asciiString(std::move(value));
+    }
+    JSONValue result;
+    result.kind = Kind::String;
+    result.stringEncoding = StringEncoding::UTF8;
+    result.stringValue = std::move(value);
+    return result;
+  }
+
+  static JSONValue utf16String(std::u16string value) {
+    JSONValue result;
+    result.kind = Kind::String;
+    result.stringEncoding = StringEncoding::UTF16;
+    result.utf16StringValue = std::move(value);
+    return result;
+  }
+
+  static JSONValue string(std::string value) {
+    return utf8String(std::move(value));
+  }
+
+  static JSONValue array(std::vector<JSONValue> value) {
+    JSONValue result;
+    result.kind = Kind::Array;
+    result.arrayValue = std::move(value);
+    return result;
+  }
+
+  static JSONValue object(Object value) {
+    JSONValue result;
+    result.kind = Kind::Object;
+    result.objectValue = std::move(value);
+    return result;
+  }
+
+  /// Create a JSONValue tree from a JavaScript value.
+  ///
+  /// This walks arrays and own enumerable object properties. Values that do
+  /// not have a JSONValue representation, such as functions, symbols, bigints,
+  /// and cyclic objects, throw a JSIException.
+  static JSONValue createFromValue(IRuntime& runtime, const Value& value);
+};
+
 /// A function which has this type can be registered as a function
 /// callable from JavaScript using Function::createFromHostFunction().
 /// When the function is called, args will point to the arguments, and
@@ -328,6 +432,32 @@ class JSI_EXPORT ISerialization : public ICast {
 };
 
 #endif // JSI_UNSTABLE
+
+/// Optional interface for runtimes that can efficiently materialize a decoded
+/// JSONValue tree into a JavaScript value.
+class JSI_EXPORT IJSONValueFactory : public ICast {
+ public:
+  static constexpr jsi::UUID uuid{
+      0x69b0d272,
+      0x65fa,
+      0x4c9a,
+      0x9d83,
+      0x1c85a5a610ce};
+
+  /// Materialize \p value without mutating it.
+  virtual Value createValueFromJSONTree(const JSONValue& value) = 0;
+
+  /// Materialize \p value and allow the runtime to consume string storage.
+  ///
+  /// After this returns, \p value must be treated as consumed.
+  virtual Value createValueFromJSONTreeAndConsume(JSONValue& value) = 0;
+
+  /// Create a JSONValue tree from a JavaScript value.
+  virtual JSONValue createJSONTreeFromValue(const Value& value) = 0;
+
+ protected:
+  ~IJSONValueFactory() = default;
+};
 
 /// An interface that provides various functionalities of the JS runtime.
 /// The APIs must not be called from multiple threads concurrently. It is the

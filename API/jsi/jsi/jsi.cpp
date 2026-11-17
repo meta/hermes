@@ -273,6 +273,16 @@ MutableBuffer::~MutableBuffer() = default;
 
 PreparedJavaScript::~PreparedJavaScript() = default;
 
+JSONValue JSONValue::createFromValue(IRuntime& runtime, const Value& value) {
+  auto* factory = static_cast<IJSONValueFactory*>(
+      runtime.castInterface(IJSONValueFactory::uuid));
+  if (!factory) {
+    throw JSINativeException(
+        "Runtime does not implement jsi::IJSONValueFactory");
+  }
+  return factory->createJSONTreeFromValue(value);
+}
+
 Value HostObject::get(Runtime&, const PropNameID&) {
   return Value();
 }
