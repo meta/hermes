@@ -1438,6 +1438,34 @@ cons.forEach(function(TypedArray) {
 });
 /// @}
 
+/// @name TypedArray.prototype.toSorted
+/// @{
+cons.forEach(function(TypedArray) {
+  var arr = new TypedArray([ 5, 1, 2, 4, 0, 3 ]);
+
+  assert.arrayEqual(arr.toSorted(), [ 0, 1, 2, 3, 4, 5 ]);
+  assert.arrayEqual(
+      arr.toSorted(
+          (a, b) => a < b ? -1
+              : a > b     ? 1
+                          : 0),
+      [ 0, 1, 2, 3, 4, 5 ]);
+  assert.arrayEqual(
+      arr.toSorted(
+          (a, b) => a < b ? 1
+              : a > b     ? -1
+                          : 0),
+      [ 5, 4, 3, 2, 1, 0 ]);
+
+  assert.throws(function() {
+    arr.toSorted(1);
+  }, TypeError);
+  assert.throws(function() {
+    arr.toSorted("test");
+  }, TypeError);
+});
+/// @}
+
 /// @name Exception cases
 /// @{
 
