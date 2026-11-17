@@ -101,6 +101,13 @@ android {
   // Allow using prefab so that we can import libfbjni.so.
   buildFeatures {
     prefab true
+    prefabPublishing true
+  }
+
+  prefab {
+    libhermes {
+      headers "${rootProject.ext.outputDir}/include"
+    }
   }
 
   dependencies {
@@ -114,6 +121,14 @@ android {
     exclude "**/libc++_shared.so"
     exclude "**/libjsi.so"
     exclude "**/libfbjni.so"
+  }
+
+  libraryVariants.all{variant ->
+    def taskName = "prefab${variant.name.capitalize()}Package"
+    def task = tasks.findByName(taskName)
+    if(task!=null){
+      task.dependsOn(":copyApiHeaders",":copyJsiHeaders",":copyPublicHeaders")
+    }
   }
 
   afterEvaluate {
