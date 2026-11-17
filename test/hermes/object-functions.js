@@ -573,3 +573,32 @@ function testObjectAssignModifications() {
 }
 testObjectAssignModifications()
 //CHECK-NEXT: {"a":10,"c":32}
+
+print('groupBy');
+// CHECK-LABEL: groupBy
+
+var obj = Object.groupBy([1, 2, 3, 4, 5, 6, 7], function(key) { return key % 2; });
+print(JSON.stringify(obj));
+//CHECK-NEXT: {"0":[2,4,6],"1":[1,3,5,7]}
+
+var obj = Object.groupBy([1, 2, 3, 4, 5, 6, 7], function(key) { return key % 3; });
+print(JSON.stringify(obj));
+//CHECK-NEXT: {"0":[3,6],"1":[1,4,7],"2":[2,5]}
+
+var obj = Object.groupBy([1, 2, 3, 4, 5, 6, 7], function(key) { return key % 1; });
+print(JSON.stringify(obj));
+//CHECK-NEXT: {"0":[1,2,3,4,5,6,7]}
+
+var obj = Object.groupBy([1, 2, 3, 4], function(key) { return key; });
+print(JSON.stringify(obj));
+//CHECK-NEXT: {"1":[1],"2":[2],"3":[3],"4":[4]}
+
+var team = [
+    {name: 'Peter', age: 15},
+    {name: 'Mike', age: 20},
+    {name: 'John', age: 22},
+];
+
+var obj = Object.groupBy(team, function(p) { return p.age < 18 ? 'underage' : 'adult'; });
+print(JSON.stringify(obj));
+//CHECK-NEXT: {"underage":[{"name":"Peter","age":15}],"adult":[{"name":"Mike","age":20},{"name":"John","age":22}]}
