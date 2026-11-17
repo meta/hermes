@@ -63,8 +63,285 @@ be omitted):
 | P2-S8 | Migrate test fixtures | P2-S1 | done | |
 | P2-S8.5 | Migrate IRPrinter (Dumper) off TLS Type printing | P2-S1 | done | |
 | P2-S9 | Remove TLS infrastructure | P2-S8.5 | done | |
+| P3-S1 | ClassInstance factory, side array, accessors | P1-S8 | done | |
+| P3-S2 | Id-aware nominal subtyping (isSubclass) | P3-S1 | done | |
+| P3-S3 | Id-aware disjoint/intersect/union | P3-S2 | done | |
+| P3-S4 | Pretty-print ClassInstance | P3-S1 | done | |
+| P3-S5 | Lower Flow ClassType to ClassInstance (live) | P3-S3 | done | merged with P3-S6 |
+| P3-S6 | Consumer audit: codegen/verifier treat refined as object | P3-S5 | done | landed with P3-S5 |
+| P3-S7 | Full regression + lit baselines | P3-S6 | done | |
+| P3-S8 | Update progress tracking | P3-S7 | done | |
+| P4-T1 | Array factory, interning, reserve/fill, accessor | P3-S8 | done | |
+| P4-T2 | Function factory, `paramArrays_`, interning, reserve/fill, accessors | P4-T1 | done | |
+| P4-T3 | Type algebra for Array/Function | P4-T2 | done | tests only; algebra already id-aware |
+| P4-T4 | Pretty-print Array and Function | P4-T2 | done | |
+| P4-T5 | Lower `Array<T>` to `array(T)` (non-recursive) | P4-T3 | done | needed `flow::ArrayType` deletion + ClassType provenance |
+| P4-T6 | Lower TypedFunction and ClassConstructor to `function(...)` | P4-T5 | done | via `Function::functionType_` |
+| P4-T7..T10 | Looping path, audit, regression, progress | P4-T6 | done | superseded by remaining-plan A1–A5 |
+| P4-A1 | Lower recursive array and function types | P4-T6 | done | lazy reservation + Flow-equality dedup |
+| P4-A2 | Cycle-safe, lossless type printing | P4-A1 | done | `^N` back-references |
+| P4-A3 | Consumer audit for Array/Function | P4-A1 | done | 5 commits; SH negative-check miscompile fixed |
+| P4-A3b | D9: intersecting unrelated types; narrow compatible functions on store | P4-A3 | done | added during execution |
+| P4-A4 | Full regression and baselines | P4-A3b | done | combined with P5-B7; no baseline changes |
+| P4-A5 | Record Phase 4 progress | P4-A4 | done | combined with P5-B7 |
+| P5-B1 | Tuple factory, interning, reserve/fill, accessors | P4-A1 | done | |
+| P5-B2 | ExactObject factory, interning, reserve/fill, accessors; D7/D8 | P5-B1 | done | plus fix: copy aliasing inputs in class/function fill |
+| P5-B3 | Algebra and printing for Tuple/ExactObject | P5-B2 | done | no algebra code change |
+| P5-B4 | Lower Tuple and ExactObject | P5-B3 | done | |
+| P5-B5 | Allocation typing for Tuple/ExactObject literals | P5-B4 | done | plus ObjectStackPromotion looks through narrows |
+| P5-B6 | Totality pass | P5-B5 | done | found and fixed one union-intersection bug |
+| P5-B7 | Regression, baselines, progress | P5-B6 | done | |
+| R1 | Codex review: fix sets 1–3 | P5-B7 | done | folded into the squashed commits; see "Codex review" |
 
 ## Context Notes
+
+### Codex review (2026-11-07)
+An external reviewer (Codex) reviewed every commit of the stack
+(`/data/users/tmikov/irtype/work/codex/findings-r1.md`). The fixes were
+made as three fix sets (tests and accessor docs; lowering tests and one fix;
+comments and docs) and were folded into the squashed commits on 2026-11-08
+(see "Commit stack" in HANDOFF.md).
+- **Outcomes**: the BLOCKER (exec test passes without the lowering) was
+  refuted: the same commit's `IRGen/flow/tuple-object-type.js` baseline
+  fails without it. Class lowering now lowers a class's superclass
+  before reserving the class and passes it to
+  `reserveClassInstance(superClass)`; before, the reserved class had no
+  superclass while its fields were lowered, so class unions inside cached
+  structural types were not normalized and depended on lowering order.
+  Accepted limitation: the
+  fill-from-own-entries tests cannot fail on libstdc++ when the defensive
+  copy is removed (it tolerates the self-range `vector::insert`); only a
+  `_GLIBCXX_DEBUG` build detects it. The commit-message findings were
+  corrected in the squash; the `phase4-plan.md` header path is left as is.
+- **Green bar after fix set 3**: `HermesIRTests` 125; full lit 4544
+  expected passes, 6 expected failures, 345 unsupported, 0 unexpected.
+
+### Phase 5: Tuple + ExactObject, wired live
+See [remaining-plan.md](remaining-plan.md) Part B and
+[phase3-5-design.md](phase3-5-design.md) (D7, D8, D9).
+- **What was done**: `TypeContext` gained interned `createTuple` (key: the
+  ordered element ids, neither sorted nor deduplicated) and
+  `createExactObject` (key: the ordered `(name, type id)` pairs; field order
+  is significant), each with `reserve*`/`fill*` for recursive shapes and an
+  accessor (`getTupleElements`, `getExactObjectFields`). Exact-object fields
+  share `fieldArrays_` with class fields. Printing: `tuple(a, b)` and
+  `exactObject(x: a, y: b)` (empty forms `tuple()`, `exactObject()`), with
+  the payload printing of all four structural kinds factored into
+  `printStructuralPayload` and covered by the `^N` cycle guard. Flow
+  `TupleType` lowers to `tuple(...)` (`lowerTupleType`) and an indexer-free
+  `ExactObjectType` to `exactObject(...)` (`lowerExactObjectType`), both
+  through Phase 4's lazy reservation, so `type Tree = null | {val: number,
+  left: Tree, right: Tree}` and recursive tuple aliases terminate. Typed tuple
+  literals, object literals and object rest bindings are trusted-narrowed
+  to their lowered type right after allocation (`genTupleFromElements`,
+  `genTypedObjectExpr`, `emitDestructuringTypedObject`), so no runtime cast
+  is emitted where they meet their Flow type.
+- **Decisions**:
+-- D7: an exact object with an indexer lowers to `object` (an open key set
+   is not a closed field list). Its key/value types are not lowered, so a
+   cycle through an indexer is cut there. Documented at the lowering site.
+-- D8: field variance is not part of the IR type or its intern key;
+   `{+x: number}`, `{-x: number}` and `{x: number}` share one id. Usage
+   constraint: for a `WriteOnly` field the Flow type is a lower bound, so no
+   consumer may type a loaded value from an IR `ExactObject` payload.
+   Documented at `createExactObject` and the lowering site.
+-- D9 (shared with Phase 4, recorded there) governs every intersection of
+   two distinct structural types.
+-- `FlowTypeStructuralInfo::getHashValue` mixes in tuple elements and object
+   field names/types: Flow's own `hash()` uses only the tuple length or the
+   field count. Equality stays Flow's co-inductive `equals`, which also
+   distinguishes variance; that is finer than IR identity and harmless (a
+   non-recursive pair still interns to one id; a recursive pair gets two
+   ids, which is sound under D4).
+-- `ObjectStackPromotion` treats an allocation and every
+   `UnionNarrowTrustedInst` reachable from it through chains of narrows as
+   one object (`collectObjectAliases`). This restores scalar replacement
+   of non-escaping typed object/tuple literals and of class instances,
+   which had regressed in Phase 3 when class allocations were narrowed.
+- **Fixes found on the way**:
+-- `fillClassInstance`/`fillFunction` appended inputs that may point into
+   their own side array (`std::vector::insert` self-range, undefined
+   behavior that libstdc++ 11 happens to tolerate); they now copy first,
+   as `fillTuple`/`fillExactObject` do.
+-- The totality test found that `intersectTy` of a union and one of its
+   own subsets returned the whole union (D9 kept the unrelated arms).
+   `intersectTy` now returns `b` when `isSubsetOf(b, a)`; D9's text says
+   a subset operand is returned exactly.
+- **Tests**: `TypeContextTest` construction/interning, reserve/fill
+  self-reference, fill-from-own-fields, printing (incl. recursive) and
+  algebra tests for both kinds; `TypeAlgebraTotalityTest` (8 laws over all
+  1764 ordered pairs of a 42-type sample (37 at B6, extended in the review),
+  including a reserved-then-filled
+  self-referential entry of each structural kind); lit
+  `IRGen/flow/tuple-object-type.js`,
+  `IRGen/flow/exact-object-variance-indexer.js` (pins D7 and D8),
+  `shermes/tuple-object-type-exec.js`,
+  `Optimizer/flow/tuple-object-literal-type.js`,
+  `Optimizer/flow/object-stack-promotion-narrow.js`. Baselines regenerated
+  in B4/B5 (`object` → `tuple(...)`/`exactObject(...)`, allocation narrows)
+  and in the stack-promotion commit (three class tests scalar-replaced
+  again).
+- **Green bar (end of Phase 5, combined A4/B7 run)**: full build of every
+  target except `mermes` (see Issues); `HermesIRTests` 121,
+  `HermesVMRuntimeTests` 405, the other unittest binaries all pass; full
+  lit 4537 expected passes, 6 expected failures, 345 unsupported,
+  0 unexpected; `update-lit` changes nothing.
+- **Deviations from the plan**: B5 shipped only allocation typing; its
+  failing-test-first `StoreFrameInst` test was already covered by B4's
+  `tuple-object-type-exec.js` (typed static fields, captured typed locals).
+  B5's re-run of A3's exact-`Object` search was done in B7: the only
+  exact-`Object` kind switch outside `TypeContext` is
+  `nameOfFunctionCheckingForType` in `lib/BCGen/SH/SH.cpp`, which already
+  lists all five refined kinds. B6 sampled more types than the plan listed
+  (empty/uninit, the number family, reserved recursive entries, `AnyType`).
+- **Issues**: the program wrapper's `exports` argument `{}` is now typed
+  `exactObject()`, so it is behind a narrow in every typed IRGen dump. A
+  rest binding whose Flow type equals a recursive alias is narrowed twice
+  (allocation, then to the alias's reserved id; sound, redundant; fixed in
+  the publication review, 2026-11-10).
+  `mermes` (`tools/facebook/mermes`) does not link: it lacks
+  `hermesHBCBackend` (unresolved `LowerArgumentsArray`,
+  `ConsecutiveStringStorage`); its CMake file and those sources are not
+  touched by this work.
+
+### Phase 4: Array + Function (+ ClassConstructor), wired live
+See [phase4-plan.md](phase4-plan.md) (tasks 1–6) and
+[remaining-plan.md](remaining-plan.md) Part A, which superseded its tasks
+7–10: their `isLooping`-based routing cannot see cycles through `Array<T>`,
+a nominal class specialization.
+- **What was done**:
+-- `TypeContext`: interned `createArray` (key: element id) and
+   `createFunction` (key: the full shallow signature; params in a new
+   `paramArrays_`), `reserve*`/`fill*`, accessors. The existing id-aware
+   algebra already handled both kinds (tests only).
+-- Flow: the dead `flow::ArrayType` was deleted; builtin methods are keyed
+   by a new `BuiltinReceiverKind`. `ClassType` records the generic class it
+   was specialized from (`genericClassDecl_`), `isArrayClassType` is derived
+   from it, and the wrapper-keyed array side table was dropped.
+-- Lowering: `Array<T>` specializations lower to `array(T)`
+   (`lowerArrayClassType`); `TypedFunction` and the `ClassConstructor` of a
+   class with an explicit constructor signature to `function(...)`
+   (`lowerTypedFunction`; other class constructors stay `object`).
+   `Function::functionType_` carries a typed function's IR type, and
+   `CreateFunctionInst` and TypeInference take the closure type from it, so
+   closures type-check into function-typed slots without narrows.
+-- A1, recursive types: lazy reservation. `beginStructuralLowering` marks a
+   Flow type in progress (`loweringInProgress_`); reaching it again while
+   its children are lowered reserves an IR entry; when the children are
+   done the entry is filled, or, if nothing was reserved, the interning
+   factory is used. Results go to `loweredStructuralTypes_`. Both maps are
+   keyed by `FlowTypeStructuralInfo` (Flow's co-inductive `TypeInfo::equals`
+   plus a hash that mixes in the children), because the identity check
+   showed that a Flow type that is a different object equal to a recursive
+   alias otherwise gets an unrelated id and fails `StoreFrameInst`
+   verification. Equal mutually recursive aliases share one entry.
+-- A2, printing: `printType`/`printLeaf` print union payloads by their
+   arms (`array(string|number)`, not `array(union)`) and carry a stack of
+   the arrays and functions being printed (Phase 5 adds tuples and exact
+   objects); reaching one again prints `^N`, N counting enclosing
+   structural types from the innermost (1). `type F =
+   (x: number) => F` prints `function(^1)`; `type Json = number | string |
+   Json[]` prints `string|number|array(string|number|^1)`. A bare
+   `array(...)` was rejected as ambiguous (`M = M[][]` vs `N[]` with
+   `N = N[]`). Functions still print only their return type.
+-- A3, consumer audit: the SH `_typeCastHelper` emitted a negative check
+   (throw if any rejected arm matches) even when a rejected and an accepted
+   arm can both be objects, so `-O` threw on every valid object (a real
+   miscompile, reproduced from typed JS); it now checks the accepted arms in
+   that case. Typed array literals and `$SHBuiltin.objectKeys/Values/
+   Entries` are trusted-narrowed to `array(T)` at allocation. The narrow of
+   the `Array<T>` prototype back to `object` was removed (nothing constrains
+   that operand). The Auditor counts every subset of `object` as object.
+   `function-type-flow.js` gained an IR check of the pass-through.
+-- A3b (added during execution): D9, then `narrowToFlowType` emits a
+   trusted narrow for structurally compatible refined types instead of
+   passing the value through unchanged, which fixes storing a
+   contravariantly compatible function into a typed static field (found by
+   A1).
+- **Decisions**:
+-- D9 (approved 2026-11-07): `intersectTy(a, b)` of two overlapping leaves
+   with no subtype relation (two distinct structural types, or a class and
+   a structural type) returns `a`, approximating the meet from above;
+   NoType approximated it from below and miscompiled (a valid function
+   failed a `-O` cast). The result is a subset of `a` only, so callers pass
+   the type they keep first; union operands keep `a`'s arm first.
+-- Reserved entries: kind and id are valid immediately, the payload only
+   after fill; the algebra reads only kind and id of the structural refined
+   kinds, which is what makes passing unfilled structural entries to
+   `unionTy` safe. A class is reserved with its superclass
+   (`reserveClassInstance(superClass)`), the one class payload the algebra
+   reads (`isSubclass`); its name and fields are valid only after fill.
+-- The `InstSimplify` `===`/`!==` fold uses `areDisjoint` instead of an
+   empty intersection, so two distinct function types (which can alias at
+   runtime) are not proved unequal (D2).
+- **Rebase-era changes** (made while rebasing onto master on 2026-11-06,
+  inside the existing diffs): D112825921 adds `BuiltinReceiverKind::Number`,
+  which master's number-receiver builtins needed (the diff originally had
+  only `Array` and `String`); D112825909 removes `registerArrayClassType`
+  together with the side table it fed; the function-lowering diff (now in
+  D112825918) added a `narrowToFlowType` pass-through for structurally
+  compatible refined types (replaced in A3b by a trusted narrow).
+- **Tests**: `TypeContextTest` Array/Function construction, algebra and
+  printing, `ReservedUnfilledEntriesInAlgebra`, `RecursiveTypesAreObjects`,
+  `RecursiveTypePrint`, `IntersectOverlappingUnrelatedReturnsFirst`; lit
+  `IRGen/flow/function-type.js`, `IRGen/flow/recursive-type.js`,
+  `shermes/recursive-type-exec.js`, `shermes/checked-cast-refined.js`,
+  `Optimizer/flow/array-literal-type.js`,
+  `shermes/intersect-unrelated-function-types.js`,
+  `shermes/function-type-static-field.js` and its nullable variant.
+  Baselines regenerated for `object` → `array(...)`/`function(...)`,
+  union-payload printing, and allocation narrows replacing casts.
+- **Green bar**: see Phase 5 (the A4 and B7 regression runs were combined).
+- **Issues**: at `-O`, after a class instance is scalar-replaced, the load
+  of its prototype from the frame stays behind unused. Home objects
+  (`?P.prototype`, `?Array.prototype`) print as `classInstance()` with an
+  empty name (`-dump-ir` and `-dump-lir`). Unproven doubt: whether
+  co-inductive dedup can give different IR ids depending on which of two
+  equal Flow types is lowered first.
+
+### Phase 3: ClassInstance, wired live
+See [phase3-5-design.md](phase3-5-design.md) (decisions D1–D6) and
+[phase3-plan.md](phase3-plan.md).
+- **What was done**: Flow `class` types now lower to a live, nominal
+  `ClassInstance` IR type instead of collapsing to `Object`. `TypeContext`
+  gained `createClassInstance`/`reserveClassInstance`/`fillClassInstance`, a
+  `fieldArrays_` side array, and class accessors; `ExactObjectField` now holds a
+  `Type`. Subtyping/disjoint/intersect/union became id-aware (so nominal
+  classes that share the `ClassInstance` kind are distinguished) via
+  `isLeafSubtypeById`/`areLeafTypesDisjointById`/`isSubclass`. `flowTypeToIRType`
+  lowers `ClassType` with an identity-cached reserve→fill (handles self- and
+  mutually-recursive classes); `emitTypedClassAllocation` trusted-narrows its
+  allocation to the class instance type so the home object, static object, and
+  instances are fully typed.
+- **Decisions**:
+-- Shallow subtyping (D4): classes nominal via the superclass chain; Array/Tuple
+   invariant; Function/ExactObject by id. `areDisjoint` stays conservative for
+   structural refined kinds (D5). Factored so deep structural subtyping can be
+   added later without touching call sites.
+-- ClassInstance stores its fields (D6); entries are non-interned (one per
+   declaration).
+-- Soundness invariant (D2): codegen/verifier treat every refined object kind
+   exactly like `Object` (sound since `refined <: object`); precise runtime
+   class checks are deferred to a later phase. The consumer audit relaxed
+   exact-`isObjectType()` checks to `isSubsetOf(t, Object)` in the IRVerifier,
+   SH backend (type-check emission + PrStore fast path), InstSimplify, and
+   IREval, weakened the `LoadParentNoTrapsInst` ctor assert (no `TypeContext`
+   there; the verifier does the real check), and mapped refined kinds to
+   `_sh_ljs_is_object` in SH type-check codegen. These relaxations are
+   behavior-preserving for pre-existing non-refined types.
+- **Issues**: P3-S5 and P3-S6 are coupled — the live lowering can't leave a
+  green tree without the consumer audit — so they landed in one commit.
+- **Tests**: `TypeContextTest` unit tests for construction, nominal
+  subtyping/algebra, recursive (self-referential) classes, and printing; a new
+  `test/IRGen/flow/class-instance-type.js` lit test; ~26 `%FileCheckOrRegen`
+  baselines regenerated (object → `classInstance(...)`). Full suite green:
+  HermesIRTests (92), HermesVMRuntimeTests (350), full lit (4286, 0 unexpected
+  failures).
+- **Notes for next phase**: Phase 4 (Array + Function, + ClassConstructor →
+  Function) adds the structural interner (non-looping dedup + the looping
+  reserve/fill batch path). Candidate cleanups surfaced here: let
+  `AllocFastArrayInst` (and similar) accept refined object kinds directly to
+  drop the trusted-narrow-back-to-object workaround.
 
 ### P2-S1: Foundation — accessors and conventions
 - **Files**: modified `include/hermes/IR/IRBuilder.h`, `lib/IRGen/ESTreeIRGen.h`, `include/hermes/IR/TypeContext.h`, `lib/IR/TypeContext.cpp`, `unittests/IR/TypeContextTest.cpp`.

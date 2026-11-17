@@ -407,6 +407,24 @@ Runtime type checks by category:
 The specific encoding of runtime type descriptors is an implementation detail
 to be determined when codegen support is added.
 
+**Dependency on subtyping (added 2026-11-11, decision D10 in
+`phase3-5-design.md`).** A precise runtime check must accept every value the
+language accepts, so for each kind the runtime check and the IR subtype
+relation must be the language's assignability relation. Phases 3–5 implemented
+shallow subtyping (functions and exact objects equal only to themselves), so:
+- `ClassInstance` checks can be precise as soon as descriptors exist: the
+  relation is nominal and already exact.
+- `Function` checks must apply the variance rules above to signature
+  descriptors; an identity check would reject a closure of a compatible
+  signature. `ExactObject` checks need field variance, which the IR currently
+  drops. Both require deep structural subtyping first.
+- `Array` checks need an element type the runtime does not have today, and
+  untyped functions have no signature metadata at all. Values without
+  descriptors need a strategy (a checking wrapper, per-use checks, or
+  rejection) decided together with deep subtyping.
+- The compiler's `isSubsetOf` must imply that the runtime check passes, or
+  redundant-cast elimination becomes unsound.
+
 ## Representation (Implementation Sketch)
 
 The following is a sketch — specific encoding decisions are deferred until
@@ -626,6 +644,11 @@ duplicating complex cycle-handling logic.
 
 - Generate compact runtime type descriptors from IR types.
 - Codegen emits type checks using descriptors.
+- Ordering constraint (D10 in `phase3-5-design.md`): only nominal class
+  checks can land before deep structural subtyping. Precise checks of
+  functions, exact objects, arrays and tuples require deep structural
+  subtyping (and a strategy for values without descriptors) first; on the
+  shallow relation they would reject valid values.
 
 ### Phase 8: Exploitation in optimization
 
