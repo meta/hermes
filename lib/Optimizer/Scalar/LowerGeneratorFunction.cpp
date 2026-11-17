@@ -283,14 +283,20 @@ void LowerToStateMachine::moveLocalsToOuter() {
     paramReplacements.insert({jsParam, outerVar});
     if (i == 0) {
       // The 'this' param already exists in outer_, so no need to
-      // create a new JSDynamicParam.
+      // create a new JSDynamicParam. IRGen types it from the same function
+      // node in both functions.
+      JSDynamicParam *outerThis = outer_->getJSDynamicParams()[0];
+      assert(
+          outerThis->getType() == jsParam->getType() &&
+          "outer and inner 'this' types must match");
       builder_.createStoreFrameInst(
-          newOuterScope_,
-          builder_.createLoadParamInst(outer_->getJSDynamicParams()[0]),
-          outerVar);
+          newOuterScope_, builder_.createLoadParamInst(outerThis), outerVar);
     } else {
+      // The outer function receives the arguments, so its parameters take
+      // the types IRGen gave the inner ones.
       auto *outerJSParam =
           builder_.createJSDynamicParam(outer_, jsParam->getName());
+      outerJSParam->setType(jsParam->getType());
       builder_.createStoreFrameInst(
           newOuterScope_, builder_.createLoadParamInst(outerJSParam), outerVar);
     }

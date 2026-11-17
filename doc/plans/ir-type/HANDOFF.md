@@ -361,10 +361,13 @@ base master commit, before this stack:
 - `01a1c623-6e9a`: a call to a typed async or generator function is typed
   with the annotated return type (a promise held in a `number` binding;
   a generator call fails verification at `-O`).
-- `01a1c623-71c5`: a typed async function with typed parameters fails IR
-  verification after `LowerGeneratorFunction`.
 - `01a1c623-7516`: `new Array<number>()` allocates a typed object, not an
   array; `push` on it aborts.
+
+Fixed after the review, following `typed-mode-bugs-plan.md`:
+- `01a1c623-71c5` (typed parameters of async and generator functions
+  failed IR verification after `LowerGeneratorFunction`): fixed by "Keep
+  param types when lowering generators".
 
 The redundant double narrow of an object rest binding whose type equals a
 recursive alias is fixed: FlowChecker records the rest type on the
