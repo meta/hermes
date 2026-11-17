@@ -17,13 +17,29 @@ STATISTIC(ObjsEliminated, "Object allocations eliminated");
 namespace hermes {
 namespace {
 
+/// Collect \p alloc, followed by every UnionNarrowTrustedInst reachable from it
+/// through a chain of UnionNarrowTrustedInsts, into \p aliases. A trusted
+/// narrow only changes the static type of its operand, so each collected value
+/// is the object allocated by \p alloc, whoever emitted the narrow: IRGen's
+/// narrow of a typed allocation, its narrow of a value stored into a binding of
+/// a structurally compatible type, or any other. Every narrow appears after its
+/// operand.
+void collectObjectAliases(
+    BaseAllocObjectLiteralInst *alloc,
+    llvh::SmallVectorImpl<Instruction *> &aliases) {
+  aliases.push_back(alloc);
+  for (size_t i = 0; i < aliases.size(); ++i)
+    for (Instruction *U : aliases[i]->getUsers())
+      if (llvh::isa<UnionNarrowTrustedInst>(U))
+        aliases.push_back(U);
+}
+
 /// Try to promote the given object to a series of AllocStackInsts if it does
-/// not escape its enclosing function. If successful, \p alloc and all of its
-/// users are eliminated and replaced with stack operations. For now, this only
-/// handles objects with constant key properties, that are accessed with known
-/// existing properties.
+/// not escape its enclosing function. If successful, \p alloc, its trusted
+/// narrows (see collectObjectAliases) and all of their users are eliminated
+/// and replaced with stack operations. For now, this only handles objects with
+/// constant key properties, that are accessed with known existing properties.
 /// \p alloc the object to promote
-/// \p stores are known to always execute without any other intervening users
 /// \p destroyer is used to eliminate instructions
 bool tryPromoteObject(
     BaseAllocObjectLiteralInst *alloc,
@@ -85,14 +101,29 @@ bool tryPromoteObject(
   const bool isTypedObject = llvh::isa<AllocTypedObjectInst>(alloc) ||
       llvh::isa<AllocTypedNonEnumObjectInst>(alloc);
 
-  for (auto *U : alloc->getUsers()) {
+  // The object is used through the allocation and through its trusted narrows
+  // (e.g. to the type of a typed object literal or class instance).
+  llvh::SmallVector<Instruction *, 4> aliases;
+  collectObjectAliases(alloc, aliases);
+  /// \return true if \p V is the allocated object.
+  auto isAlias = [&aliases](Value *V) -> bool {
+    return llvh::is_contained(aliases, V);
+  };
+  // The users of the object, other than the narrows in aliases.
+  llvh::SmallVector<Instruction *, 8> users;
+  for (Instruction *A : aliases)
+    for (Instruction *U : A->getUsers())
+      if (!llvh::isa<UnionNarrowTrustedInst>(U))
+        users.push_back(U);
+
+  for (auto *U : users) {
     // Loading from the object does not escape.
     if ([[maybe_unused]] auto *L = llvh::dyn_cast<PrLoadInst>(U)) {
-      assert(L->getObject() == alloc && "Load from a different object");
+      assert(isAlias(L->getObject()) && "Load from a different object");
       continue;
     }
     if ([[maybe_unused]] auto *LP = llvh::dyn_cast<TypedLoadParentInst>(U)) {
-      assert(LP->getObject() == alloc && "Load from a different object");
+      assert(isAlias(LP->getObject()) && "Load from a different object");
       // The parent must be specified in the AllocObjectLiteralInst for us to
       // guarantee that a LoadStack for it will be preceded by a StoreStack.
       if (llvh::isa<EmptySentinel>(alloc->getParentObject()))
@@ -103,8 +134,8 @@ bool tryPromoteObject(
     // Storing into the object is fine, but storing the object anywhere
     // (including into itself) means we cannot elide the allocation.
     if (auto *S = llvh::dyn_cast<PrStoreInst>(U)) {
-      if (S->getStoredValue() != alloc) {
-        assert(S->getObject() == alloc && "Unknown usage of object.");
+      if (!isAlias(S->getStoredValue())) {
+        assert(isAlias(S->getObject()) && "Unknown usage of object.");
         continue;
       }
     }
@@ -115,7 +146,7 @@ bool tryPromoteObject(
       // behavior.
       if (isTypedObject)
         return false;
-      if (SP->getStoredValue() == alloc)
+      if (isAlias(SP->getStoredValue()))
         return false;
       if (!isInLayout(SP->getProperty()))
         return false;
@@ -127,7 +158,7 @@ bool tryPromoteObject(
       // runtime.
       if (isTypedObject)
         return false;
-      if (SOP->getStoredValue() == alloc)
+      if (isAlias(SOP->getStoredValue()))
         return false;
       if (!isInLayout(SOP->getProperty()))
         return false;
@@ -191,7 +222,7 @@ bool tryPromoteObject(
         return stackLocs[objLayout[conversionMapping[LN]]];
       };
 
-  for (auto *U : alloc->getUsers()) {
+  for (auto *U : users) {
     builder.setLocation(U->getLocation());
     builder.setInsertionPoint(U);
     destroyer.add(U);
@@ -245,7 +276,10 @@ bool tryPromoteObject(
     llvm_unreachable("Unhandled instruction");
   }
   ObjsEliminated++;
-  destroyer.add(alloc);
+  // Destroy the narrows after their users and before their operands; the
+  // allocation is aliases[0].
+  for (Instruction *A : llvh::reverse(aliases))
+    destroyer.add(A);
 
   return true;
 }

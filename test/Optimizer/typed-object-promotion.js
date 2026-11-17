@@ -51,14 +51,8 @@ print(foo.x, foo.y);
 // CHECK-NEXT:  %21 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %22 = UnionNarrowTrustedInst (:classInstance()) %21: object
 // CHECK-NEXT:        StorePropertyStrictInst %22: classInstance(), %20: function(undefined), "prototype": string
-// CHECK-NEXT:  %24 = AllocTypedObjectInst (:object) %22: classInstance(), "x": string, 0: number, "y": string, 0: number
-// CHECK-NEXT:  %25 = UnionNarrowTrustedInst (:classInstance(Foo)) %24: object
-// CHECK-NEXT:        PrStoreInst 1: number, %25: classInstance(Foo), 0: number, "x": string, true: boolean
-// CHECK-NEXT:        PrStoreInst 2: number, %25: classInstance(Foo), 1: number, "y": string, true: boolean
-// CHECK-NEXT:  %28 = TryLoadGlobalPropertyInst (:any) globalObject: object, "print": string
-// CHECK-NEXT:  %29 = PrLoadInst (:number) %25: classInstance(Foo), 0: number, "x": string
-// CHECK-NEXT:  %30 = PrLoadInst (:number) %25: classInstance(Foo), 1: number, "y": string
-// CHECK-NEXT:  %31 = CallInst (:any) %28: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %29: number, %30: number
+// CHECK-NEXT:  %24 = TryLoadGlobalPropertyInst (:any) globalObject: object, "print": string
+// CHECK-NEXT:  %25 = CallInst (:any) %24: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 1: number, 2: number
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

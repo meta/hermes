@@ -51,18 +51,8 @@ print(p1.x, p2.x);
 // CHECK-NEXT:  %21 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %22 = UnionNarrowTrustedInst (:classInstance()) %21: object
 // CHECK-NEXT:        StorePropertyStrictInst %22: classInstance(), %20: function(undefined), "prototype": string
-// CHECK-NEXT:  %24 = AllocTypedObjectInst (:object) %22: classInstance(), "x": string, 0: number, "y": string, 0: number
-// CHECK-NEXT:  %25 = UnionNarrowTrustedInst (:classInstance(Point)) %24: object
-// CHECK-NEXT:        PrStoreInst 1: number, %25: classInstance(Point), 0: number, "x": string, true: boolean
-// CHECK-NEXT:        PrStoreInst 2: number, %25: classInstance(Point), 1: number, "y": string, true: boolean
-// CHECK-NEXT:  %28 = AllocTypedObjectInst (:object) %22: classInstance(), "x": string, 0: number, "y": string, 0: number
-// CHECK-NEXT:  %29 = UnionNarrowTrustedInst (:classInstance(Point)) %28: object
-// CHECK-NEXT:        PrStoreInst 3: number, %29: classInstance(Point), 0: number, "x": string, true: boolean
-// CHECK-NEXT:        PrStoreInst 4: number, %29: classInstance(Point), 1: number, "y": string, true: boolean
-// CHECK-NEXT:  %32 = TryLoadGlobalPropertyInst (:any) globalObject: object, "print": string
-// CHECK-NEXT:  %33 = PrLoadInst (:number) %25: classInstance(Point), 0: number, "x": string
-// CHECK-NEXT:  %34 = PrLoadInst (:number) %29: classInstance(Point), 0: number, "x": string
-// CHECK-NEXT:  %35 = CallInst (:any) %32: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %33: number, %34: number
+// CHECK-NEXT:  %24 = TryLoadGlobalPropertyInst (:any) globalObject: object, "print": string
+// CHECK-NEXT:  %25 = CallInst (:any) %24: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 1: number, 3: number
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

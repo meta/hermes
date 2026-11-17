@@ -64,23 +64,8 @@ new Foo();
 // CHECK-NEXT:  %28 = UnionNarrowTrustedInst (:classInstance()) %27: object
 // CHECK-NEXT:  %29 = CreateFunctionInst (:function(undefined)) %21: environment, %VS0: any, %Foo(): functionCode
 // CHECK-NEXT:        StorePropertyStrictInst %28: classInstance(), %29: function(undefined), "prototype": string
-// CHECK-NEXT:  %31 = LIRAllocTypedObjectFromBufferInst (:object) %28: classInstance(), "o0": string, uninit: uninit, "o1": string, uninit: uninit, "o2": string, uninit: uninit
-// CHECK-NEXT:  %32 = UnionNarrowTrustedInst (:classInstance(Foo)) %31: object
-// CHECK-NEXT:  %33 = LIRAllocTypedObjectFromBufferInst (:object) %23: classInstance(), "i": string, 0: number
-// CHECK-NEXT:  %34 = UnionNarrowTrustedInst (:classInstance(O)) %33: object
-// CHECK-NEXT:  %35 = LIRLoadConstInst (:number) 7: number
-// CHECK-NEXT:        PrStoreInst %35: number, %34: classInstance(O), 0: number, "i": string, true: boolean
-// CHECK-NEXT:        PrStoreInst %34: classInstance(O), %32: classInstance(Foo), 0: number, "o0": string, false: boolean
-// CHECK-NEXT:  %38 = LIRAllocTypedObjectFromBufferInst (:object) %23: classInstance(), "i": string, 0: number
-// CHECK-NEXT:  %39 = UnionNarrowTrustedInst (:classInstance(O)) %38: object
-// CHECK-NEXT:        PrStoreInst %35: number, %39: classInstance(O), 0: number, "i": string, true: boolean
-// CHECK-NEXT:        PrStoreInst %39: classInstance(O), %32: classInstance(Foo), 1: number, "o1": string, false: boolean
-// CHECK-NEXT:  %42 = LIRAllocTypedObjectFromBufferInst (:object) %23: classInstance(), "i": string, 0: number
-// CHECK-NEXT:  %43 = UnionNarrowTrustedInst (:classInstance(O)) %42: object
-// CHECK-NEXT:        PrStoreInst %35: number, %43: classInstance(O), 0: number, "i": string, true: boolean
-// CHECK-NEXT:        PrStoreInst %43: classInstance(O), %32: classInstance(Foo), 2: number, "o2": string, false: boolean
-// CHECK-NEXT:  %46 = LIRLoadConstInst (:undefined) undefined: undefined
-// CHECK-NEXT:        ReturnInst %46: undefined
+// CHECK-NEXT:  %31 = LIRLoadConstInst (:undefined) undefined: undefined
+// CHECK-NEXT:        ReturnInst %31: undefined
 // CHECK-NEXT:function_end
 
 // CHECK:function Array(): undefined
