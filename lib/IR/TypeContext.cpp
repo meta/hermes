@@ -9,6 +9,7 @@
 #include "hermes/Support/HermesSafeMath.h"
 
 #include "hermes/IR/IR.h"
+#include "hermes/Platform/Unicode/CharacterProperties.h"
 
 #include "llvh/Support/MathExtras.h"
 #include "llvh/Support/raw_ostream.h"
@@ -185,6 +186,24 @@ bool areLeafKindsDisjoint(TypeKind a, TypeKind b) {
   return true;
 }
 
+/// Print the exact-object field name \p name: as is if it is an ASCII
+/// identifier, otherwise as a double-quoted string with backslash escapes
+/// (e.g. a key 'a-b' prints as "a-b").
+void printFieldName(llvh::raw_ostream &OS, llvh::StringRef name) {
+  bool isIdentifier = !name.empty() &&
+      isASCIIIdentifierStart((unsigned char)name.front()) &&
+      llvh::all_of(name.drop_front(), [](char c) {
+        return isASCIIIdentifierContinue((unsigned char)c);
+      });
+  if (isIdentifier) {
+    OS << name;
+    return;
+  }
+  OS << '"';
+  OS.write_escaped(name, /* UseHexEscapes */ true);
+  OS << '"';
+}
+
 /// \return the display name of a leaf kind. Matches the strings used by
 /// the old Type::print().
 llvh::StringRef kindName(TypeKind k) {
@@ -348,6 +367,101 @@ Type TypeContext::createArray(Type elem) {
 Type TypeContext::getArrayElementType(Type t) const {
   assert(getKind(t) == TypeKind::Array && "not an Array");
   return Type{entries_[t.id_].array.elemTypeId};
+}
+
+Type TypeContext::reserveTuple() {
+  uint32_t id = entries_.size();
+  TypeEntry e{}; // primMask defaults to kNotMaskable
+  e.kind = TypeKind::Tuple;
+  e.tuple.elemOffset = 0;
+  e.tuple.elemCount = 0;
+  entries_.push_back(e);
+  return Type{id};
+}
+
+void TypeContext::fillTuple(Type t, llvh::ArrayRef<Type> elems) {
+  assert(t.id_ < entries_.size() && "Type ID out of range");
+  TypeEntry &e = entries_[t.id_];
+  assert(e.kind == TypeKind::Tuple && "not a Tuple entry");
+  // Copy first: elems may point into typeArrays_, which the append below can
+  // reallocate.
+  llvh::SmallVector<Type, 8> copy(elems.begin(), elems.end());
+  e.tuple.elemOffset = safePossiblyNarrowingCast<uint32_t>(
+      typeArrays_.size(), "type array offset overflow");
+  e.tuple.elemCount = safePossiblyNarrowingCast<uint16_t>(
+      copy.size(), "too many tuple elements");
+  typeArrays_.insert(typeArrays_.end(), copy.begin(), copy.end());
+}
+
+Type TypeContext::createTuple(llvh::ArrayRef<Type> elems) {
+  TupleInternKey key;
+  for (Type elem : elems)
+    key.elems.push_back(elem.id_);
+
+  auto it = tupleInternTable_.find(key);
+  if (it != tupleInternTable_.end())
+    return Type{it->second};
+
+  Type t = reserveTuple();
+  fillTuple(t, elems);
+  tupleInternTable_[std::move(key)] = t.id_;
+  return t;
+}
+
+llvh::ArrayRef<Type> TypeContext::getTupleElements(Type t) const {
+  assert(getKind(t) == TypeKind::Tuple && "not a Tuple");
+  const auto &tup = entries_[t.id_].tuple;
+  return llvh::ArrayRef<Type>(
+      typeArrays_.data() + tup.elemOffset, tup.elemCount);
+}
+
+Type TypeContext::reserveExactObject() {
+  uint32_t id = entries_.size();
+  TypeEntry e{}; // primMask defaults to kNotMaskable
+  e.kind = TypeKind::ExactObject;
+  e.exactObject.fieldOffset = 0;
+  e.exactObject.fieldCount = 0;
+  entries_.push_back(e);
+  return Type{id};
+}
+
+void TypeContext::fillExactObject(
+    Type t,
+    llvh::ArrayRef<ExactObjectField> fields) {
+  assert(t.id_ < entries_.size() && "Type ID out of range");
+  TypeEntry &e = entries_[t.id_];
+  assert(e.kind == TypeKind::ExactObject && "not an ExactObject entry");
+  // Copy first: fields may point into fieldArrays_, which the append below
+  // can reallocate.
+  llvh::SmallVector<ExactObjectField, 8> copy(fields.begin(), fields.end());
+  e.exactObject.fieldOffset = safePossiblyNarrowingCast<uint32_t>(
+      fieldArrays_.size(), "field array offset overflow");
+  e.exactObject.fieldCount = safePossiblyNarrowingCast<uint16_t>(
+      copy.size(), "too many exact object fields");
+  fieldArrays_.insert(fieldArrays_.end(), copy.begin(), copy.end());
+}
+
+Type TypeContext::createExactObject(llvh::ArrayRef<ExactObjectField> fields) {
+  ExactObjectInternKey key;
+  for (const ExactObjectField &f : fields)
+    key.fields.push_back({f.name, f.type.id_});
+
+  auto it = exactObjectInternTable_.find(key);
+  if (it != exactObjectInternTable_.end())
+    return Type{it->second};
+
+  Type t = reserveExactObject();
+  fillExactObject(t, fields);
+  exactObjectInternTable_[std::move(key)] = t.id_;
+  return t;
+}
+
+llvh::ArrayRef<ExactObjectField> TypeContext::getExactObjectFields(
+    Type t) const {
+  assert(getKind(t) == TypeKind::ExactObject && "not an ExactObject");
+  const auto &obj = entries_[t.id_].exactObject;
+  return llvh::ArrayRef<ExactObjectField>(
+      fieldArrays_.data() + obj.fieldOffset, obj.fieldCount);
 }
 
 Type TypeContext::reserveFunction() {
@@ -575,27 +689,63 @@ void TypeContext::printLeaf(
     OS << ')';
     return;
   }
-  if (k == TypeKind::Array || k == TypeKind::Function) {
+  if (k == TypeKind::Array || k == TypeKind::Function || k == TypeKind::Tuple ||
+      k == TypeKind::ExactObject) {
     // A type already being printed closes a cycle: print a back-reference to
-    // it, counting enclosing arrays and functions from the innermost one.
+    // it, counting enclosing structural types from the innermost one.
     auto it = std::find(enclosing.rbegin(), enclosing.rend(), id);
     if (it != enclosing.rend()) {
       OS << '^' << (it - enclosing.rbegin()) + 1;
       return;
     }
     enclosing.push_back(id);
-    if (k == TypeKind::Array) {
-      OS << "array(";
-      printType(OS, entries_[id].array.elemTypeId, enclosing);
-    } else {
-      OS << "function(";
-      printType(OS, entries_[id].function.returnTypeId, enclosing);
-    }
+    OS << kindName(k) << '(';
+    printStructuralPayload(OS, id, enclosing);
     OS << ')';
     enclosing.pop_back();
     return;
   }
   OS << kindName(k);
+}
+
+void TypeContext::printStructuralPayload(
+    llvh::raw_ostream &OS,
+    uint32_t id,
+    llvh::SmallVectorImpl<uint32_t> &enclosing) const {
+  const TypeEntry &entry = entries_[id];
+  switch (entry.kind) {
+    case TypeKind::Array:
+      printType(OS, entry.array.elemTypeId, enclosing);
+      return;
+    case TypeKind::Function:
+      printType(OS, entry.function.returnTypeId, enclosing);
+      return;
+    case TypeKind::Tuple: {
+      bool first = true;
+      for (Type elem : getTupleElements(Type{id})) {
+        if (!first)
+          OS << ", ";
+        first = false;
+        printType(OS, elem.id_, enclosing);
+      }
+      return;
+    }
+    case TypeKind::ExactObject: {
+      bool first = true;
+      for (const ExactObjectField &field : getExactObjectFields(Type{id})) {
+        if (!first)
+          OS << ", ";
+        first = false;
+        if (field.name.isValid())
+          printFieldName(OS, field.name.str());
+        OS << ": ";
+        printType(OS, field.type.id_, enclosing);
+      }
+      return;
+    }
+    default:
+      llvm_unreachable("not a structural refined kind");
+  }
 }
 
 void TypeContext::printType(

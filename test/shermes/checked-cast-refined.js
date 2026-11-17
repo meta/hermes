@@ -37,12 +37,18 @@ function rejectClass(sel: number): A | number | string {
 // IR-LABEL: function rejectClass(
 // IR: CheckedTypeCastInst (:string|number|classInstance(A)) %{{.*}}: string|number|classInstance(A)|classInstance(B),
 
-// The rejected arm is the plain object that absorbs A.
+// The rejected arm is the plain object that absorbs A. An object type with an
+// indexer lowers to plain object (D7), while the literal `{}` has type
+// exactObject(), so the plain object comes from a cast of an untyped value.
+function makeDict(): {[string]: number} {
+  'noinline';
+  return JSON.parse('{}');
+}
 function rejectObject(sel: number): A | number | string {
   'noinline';
   let v: any;
   if (sel === 0) v = new A();
-  else if (sel === 1) v = {};
+  else if (sel === 1) v = makeDict();
   else if (sel === 2) v = 1;
   else v = 's';
   return v;

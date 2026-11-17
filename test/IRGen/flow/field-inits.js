@@ -62,10 +62,11 @@ function f(i: number): number {
 // CHECK-NEXT:       StoreStackInst undefined: undefined, %1: any
 // CHECK-NEXT:  %3 = CreateFunctionInst (:object) %0: environment, %VS0: any, %""(): functionCode
 // CHECK-NEXT:  %4 = AllocObjectLiteralInst (:object) empty: any
-// CHECK-NEXT:  %5 = CallInst [njsf] (:any) %3: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %4: object
-// CHECK-NEXT:       StoreStackInst %5: any, %1: any
-// CHECK-NEXT:  %7 = LoadStackInst (:any) %1: any
-// CHECK-NEXT:       ReturnInst %7: any
+// CHECK-NEXT:  %5 = UnionNarrowTrustedInst (:exactObject()) %4: object
+// CHECK-NEXT:  %6 = CallInst [njsf] (:any) %3: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %5: exactObject()
+// CHECK-NEXT:       StoreStackInst %6: any, %1: any
+// CHECK-NEXT:  %8 = LoadStackInst (:any) %1: any
+// CHECK-NEXT:       ReturnInst %8: any
 // CHECK-NEXT:function_end
 
 // CHECK:scope %VS1 [exports: any, A: any, B: any, C0: any, C1: any, f: any, <fieldInitFuncVar:A>: object, ?A.prototype: classInstance(), <fieldInitFuncVar:B>: object, ?B.prototype: classInstance(), <fieldInitFuncVar:C0>: object, ?C0.prototype: classInstance(), <fieldInitFuncVar:C1>: object, ?C1.prototype: classInstance()]

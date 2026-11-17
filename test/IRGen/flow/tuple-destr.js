@@ -37,29 +37,31 @@ return function main() {
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.i]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.j]: any
 // CHECK-NEXT:  %10 = AllocObjectLiteralInst (:object) empty: any, "0": string, 2: number, "1": string, "asdf": string
-// CHECK-NEXT:        StoreFrameInst %1: environment, %10: object, [%VS1.inner]: any
-// CHECK-NEXT:  %12 = LoadFrameInst (:any) %1: environment, [%VS1.inner]: any
-// CHECK-NEXT:  %13 = CheckedTypeCastInst (:object) %12: any, type(object)
-// CHECK-NEXT:  %14 = AllocObjectLiteralInst (:object) empty: any, "0": string, 1: number, "1": string, true: boolean, "2": string, %13: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %14: object, [%VS1.outer]: any
-// CHECK-NEXT:  %16 = LoadFrameInst (:any) %1: environment, [%VS1.outer]: any
-// CHECK-NEXT:  %17 = CheckedTypeCastInst (:object) %16: any, type(object)
-// CHECK-NEXT:  %18 = PrLoadInst (:number) %17: object, 0: number, "0": string
-// CHECK-NEXT:        StoreFrameInst %1: environment, %18: number, [%VS1.x]: any
-// CHECK-NEXT:  %20 = PrLoadInst (:boolean) %17: object, 1: number, "1": string
-// CHECK-NEXT:        StoreFrameInst %1: environment, %20: boolean, [%VS1.y]: any
-// CHECK-NEXT:  %22 = PrLoadInst (:object) %17: object, 2: number, "2": string
-// CHECK-NEXT:  %23 = PrLoadInst (:number) %22: object, 0: number, "0": string
-// CHECK-NEXT:        StoreFrameInst %1: environment, %23: number, [%VS1.a]: any
-// CHECK-NEXT:  %25 = PrLoadInst (:string) %22: object, 1: number, "1": string
-// CHECK-NEXT:        StoreFrameInst %1: environment, %25: string, [%VS1.b]: any
+// CHECK-NEXT:  %11 = UnionNarrowTrustedInst (:tuple(number, string)) %10: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %11: tuple(number, string), [%VS1.inner]: any
+// CHECK-NEXT:  %13 = LoadFrameInst (:any) %1: environment, [%VS1.inner]: any
+// CHECK-NEXT:  %14 = CheckedTypeCastInst (:tuple(number, string)) %13: any, type(tuple(number, string))
+// CHECK-NEXT:  %15 = AllocObjectLiteralInst (:object) empty: any, "0": string, 1: number, "1": string, true: boolean, "2": string, %14: tuple(number, string)
+// CHECK-NEXT:  %16 = UnionNarrowTrustedInst (:tuple(number, boolean, tuple(number, string))) %15: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %16: tuple(number, boolean, tuple(number, string)), [%VS1.outer]: any
+// CHECK-NEXT:  %18 = LoadFrameInst (:any) %1: environment, [%VS1.outer]: any
+// CHECK-NEXT:  %19 = CheckedTypeCastInst (:tuple(number, boolean, tuple(number, string))) %18: any, type(tuple(number, boolean, tuple(number, string)))
+// CHECK-NEXT:  %20 = PrLoadInst (:number) %19: tuple(number, boolean, tuple(number, string)), 0: number, "0": string
+// CHECK-NEXT:        StoreFrameInst %1: environment, %20: number, [%VS1.x]: any
+// CHECK-NEXT:  %22 = PrLoadInst (:boolean) %19: tuple(number, boolean, tuple(number, string)), 1: number, "1": string
+// CHECK-NEXT:        StoreFrameInst %1: environment, %22: boolean, [%VS1.y]: any
+// CHECK-NEXT:  %24 = PrLoadInst (:tuple(number, string)) %19: tuple(number, boolean, tuple(number, string)), 2: number, "2": string
+// CHECK-NEXT:  %25 = PrLoadInst (:number) %24: tuple(number, string), 0: number, "0": string
+// CHECK-NEXT:        StoreFrameInst %1: environment, %25: number, [%VS1.a]: any
+// CHECK-NEXT:  %27 = PrLoadInst (:string) %24: tuple(number, string), 1: number, "1": string
+// CHECK-NEXT:        StoreFrameInst %1: environment, %27: string, [%VS1.b]: any
 // CHECK-NEXT:        StoreFrameInst %1: environment, undefined: undefined, [%VS1.i]: any
 // CHECK-NEXT:        StoreFrameInst %1: environment, undefined: undefined, [%VS1.j]: any
-// CHECK-NEXT:  %29 = LoadFrameInst (:any) %1: environment, [%VS1.inner]: any
-// CHECK-NEXT:  %30 = CheckedTypeCastInst (:object) %29: any, type(object)
-// CHECK-NEXT:  %31 = PrLoadInst (:number) %30: object, 0: number, "0": string
-// CHECK-NEXT:        StoreFrameInst %1: environment, %31: number, [%VS1.i]: any
-// CHECK-NEXT:  %33 = PrLoadInst (:string) %30: object, 1: number, "1": string
-// CHECK-NEXT:        StoreFrameInst %1: environment, %33: string, [%VS1.j]: any
+// CHECK-NEXT:  %31 = LoadFrameInst (:any) %1: environment, [%VS1.inner]: any
+// CHECK-NEXT:  %32 = CheckedTypeCastInst (:tuple(number, string)) %31: any, type(tuple(number, string))
+// CHECK-NEXT:  %33 = PrLoadInst (:number) %32: tuple(number, string), 0: number, "0": string
+// CHECK-NEXT:        StoreFrameInst %1: environment, %33: number, [%VS1.i]: any
+// CHECK-NEXT:  %35 = PrLoadInst (:string) %32: tuple(number, string), 1: number, "1": string
+// CHECK-NEXT:        StoreFrameInst %1: environment, %35: string, [%VS1.j]: any
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end

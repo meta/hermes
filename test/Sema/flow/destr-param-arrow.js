@@ -251,7 +251,7 @@ const cORest: ({a: number, b: number}) => number =
 // CHECK-NEXT:                        Property
 // CHECK-NEXT:                            Id 'a'
 // CHECK-NEXT:                            Id 'a' [D:E:%d.28 'a'] : number
-// CHECK-NEXT:                        RestElement
+// CHECK-NEXT:                        RestElement : %object.10
 // CHECK-NEXT:                            Id 'rest' [D:E:%d.29 'rest'] : %object.10
 // CHECK-NEXT:                    BlockStatement
 // CHECK-NEXT:                        ReturnStatement

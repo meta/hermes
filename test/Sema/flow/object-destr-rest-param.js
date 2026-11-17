@@ -81,7 +81,7 @@ function fr({a, ...restReg}: {a: number, b: number}) {
 // CHECK-NEXT:                Property
 // CHECK-NEXT:                    Id 'a'
 // CHECK-NEXT:                    Id 'a' [D:E:%d.8 'a'] : number
-// CHECK-NEXT:                RestElement
+// CHECK-NEXT:                RestElement : %object.6
 // CHECK-NEXT:                    Id 'restReg' [D:E:%d.9 'restReg'] : %object.6
 // CHECK-NEXT:            BlockStatement
 // CHECK-NEXT:                ReturnStatement

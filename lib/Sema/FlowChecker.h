@@ -1679,6 +1679,8 @@ inline bool FlowChecker::expandObjectDestructuring(
       }
       Type *restType =
           flowContext_.createType(flowContext_.createExactObject(restFields));
+      // IRGen types the object it allocates for the rest binding from this.
+      setNodeType(rest, restType);
       onChild(rest->_argument, restType);
       break;
     }

@@ -29,19 +29,21 @@ return function main() {
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.tx]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.t2]: any
 // CHECK-NEXT:  %5 = AllocObjectLiteralInst (:object) empty: any, "x": string, 3: number
-// CHECK-NEXT:       StoreFrameInst %1: environment, %5: object, [%VS1.t]: any
-// CHECK-NEXT:  %7 = LoadFrameInst (:any) %1: environment, [%VS1.t]: any
-// CHECK-NEXT:  %8 = CheckedTypeCastInst (:object) %7: any, type(object)
-// CHECK-NEXT:  %9 = PrLoadInst (:number) %8: object, 0: number, "x": string
-// CHECK-NEXT:        StoreFrameInst %1: environment, %9: number, [%VS1.tx]: any
-// CHECK-NEXT:  %11 = LoadFrameInst (:any) %1: environment, [%VS1.t]: any
-// CHECK-NEXT:  %12 = CheckedTypeCastInst (:object) %11: any, type(object)
-// CHECK-NEXT:        PrStoreInst 5: number, %12: object, 0: number, "x": string, true: boolean
-// CHECK-NEXT:  %14 = LoadFrameInst (:any) %1: environment, [%VS1.t]: any
-// CHECK-NEXT:  %15 = CheckedTypeCastInst (:object) %14: any, type(object)
-// CHECK-NEXT:  %16 = PrLoadInst (:number) %15: object, 0: number, "x": string
-// CHECK-NEXT:  %17 = AllocObjectLiteralInst (:object) empty: any, "x": string, 4: number, "y": string, 0: number
-// CHECK-NEXT:        PrStoreInst %16: number, %17: object, 1: number, "y": string, true: boolean
-// CHECK-NEXT:        StoreFrameInst %1: environment, %17: object, [%VS1.t2]: any
+// CHECK-NEXT:  %6 = UnionNarrowTrustedInst (:exactObject(x: number)) %5: object
+// CHECK-NEXT:       StoreFrameInst %1: environment, %6: exactObject(x: number), [%VS1.t]: any
+// CHECK-NEXT:  %8 = LoadFrameInst (:any) %1: environment, [%VS1.t]: any
+// CHECK-NEXT:  %9 = CheckedTypeCastInst (:exactObject(x: number)) %8: any, type(exactObject(x: number))
+// CHECK-NEXT:  %10 = PrLoadInst (:number) %9: exactObject(x: number), 0: number, "x": string
+// CHECK-NEXT:        StoreFrameInst %1: environment, %10: number, [%VS1.tx]: any
+// CHECK-NEXT:  %12 = LoadFrameInst (:any) %1: environment, [%VS1.t]: any
+// CHECK-NEXT:  %13 = CheckedTypeCastInst (:exactObject(x: number)) %12: any, type(exactObject(x: number))
+// CHECK-NEXT:        PrStoreInst 5: number, %13: exactObject(x: number), 0: number, "x": string, true: boolean
+// CHECK-NEXT:  %15 = LoadFrameInst (:any) %1: environment, [%VS1.t]: any
+// CHECK-NEXT:  %16 = CheckedTypeCastInst (:exactObject(x: number)) %15: any, type(exactObject(x: number))
+// CHECK-NEXT:  %17 = PrLoadInst (:number) %16: exactObject(x: number), 0: number, "x": string
+// CHECK-NEXT:  %18 = AllocObjectLiteralInst (:object) empty: any, "x": string, 4: number, "y": string, 0: number
+// CHECK-NEXT:        PrStoreInst %17: number, %18: object, 1: number, "y": string, true: boolean
+// CHECK-NEXT:  %20 = UnionNarrowTrustedInst (:exactObject(x: number, y: number)) %18: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %20: exactObject(x: number, y: number), [%VS1.t2]: any
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end

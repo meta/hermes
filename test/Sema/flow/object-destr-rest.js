@@ -91,7 +91,7 @@ function f(x: any) {
 // CHECK-NEXT:                    Property
 // CHECK-NEXT:                        Id 'a'
 // CHECK-NEXT:                        Id 'a' [D:E:%d.3 'a'] : number
-// CHECK-NEXT:                    RestElement
+// CHECK-NEXT:                    RestElement : %object.4
 // CHECK-NEXT:                        Id 'rest1' [D:E:%d.4 'rest1'] : %object.4
 // CHECK-NEXT:        VariableDeclaration
 // CHECK-NEXT:            VariableDeclarator
@@ -100,7 +100,7 @@ function f(x: any) {
 // CHECK-NEXT:                    Property
 // CHECK-NEXT:                        Id 'a'
 // CHECK-NEXT:                        Id 'aa' [D:E:%d.5 'aa'] : number
-// CHECK-NEXT:                    RestElement
+// CHECK-NEXT:                    RestElement : %object.4
 // CHECK-NEXT:                        Id 'rest2' [D:E:%d.6 'rest2'] : %object.4
 // CHECK-NEXT:        VariableDeclaration
 // CHECK-NEXT:            VariableDeclarator
@@ -115,7 +115,7 @@ function f(x: any) {
 // CHECK-NEXT:                    Property
 // CHECK-NEXT:                        Id 'c'
 // CHECK-NEXT:                        Id 'c3' [D:E:%d.9 'c3'] : boolean
-// CHECK-NEXT:                    RestElement
+// CHECK-NEXT:                    RestElement : %object.5
 // CHECK-NEXT:                        Id 'rest3' [D:E:%d.10 'rest3'] : %object.5
 // CHECK-NEXT:        FunctionDeclaration : %function.3
 // CHECK-NEXT:            Id 'f' [D:E:%d.11 'f']

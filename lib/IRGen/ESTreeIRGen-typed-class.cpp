@@ -641,7 +641,9 @@ std::pair<Value *, Type> ESTreeIRGen::getClassMemberVarInit(flow::Type *type) {
 
 unsigned FlowTypeStructuralInfo::getHashValue(const flow::TypeInfo *t) {
   // TypeInfo::hash reads only t's own node, so every function signature of
-  // one arity hashes alike. Mix in the children's hashes to spread them.
+  // one arity hashes alike, as does every tuple of one length and every
+  // object with one number of fields. Mix in the children's hashes (and the
+  // field names, which TypeInfo::equals compares) to spread them.
   unsigned h = t->hash();
   if (auto *ft = llvh::dyn_cast<flow::TypedFunctionType>(t)) {
     h = (unsigned)llvh::hash_combine(h, ft->getReturnType()->info->hash());
@@ -649,6 +651,14 @@ unsigned FlowTypeStructuralInfo::getHashValue(const flow::TypeInfo *t) {
       h = (unsigned)llvh::hash_combine(h, ft->getThisParam()->info->hash());
     for (const flow::TypedFunctionType::Param &p : ft->getParams())
       h = (unsigned)llvh::hash_combine(h, p.type->info->hash());
+  } else if (auto *tt = llvh::dyn_cast<flow::TupleType>(t)) {
+    for (const flow::Type *elem : tt->getTypes())
+      h = (unsigned)llvh::hash_combine(h, elem->info->hash());
+  } else if (auto *ot = llvh::dyn_cast<flow::ExactObjectType>(t)) {
+    for (const flow::ExactObjectType::Field &f : ot->getFields()) {
+      h = (unsigned)llvh::hash_combine(
+          h, f.name.getUnderlyingPointer(), f.type->info->hash());
+    }
   }
   return h;
 }
@@ -677,8 +687,8 @@ llvh::Optional<Type> ESTreeIRGen::beginStructuralLowering(
   // Reached again while lowering the children of key (or of a type equal to
   // it): the type is recursive. Reserve an entry for it, to be filled when its
   // lowering finishes. Only the kind and the id of the reserved entry are
-  // valid until then, which is all the type algebra reads from an Array or
-  // Function entry.
+  // valid until then, which is all the type algebra reads from an Array,
+  // Function, Tuple or ExactObject entry.
   if (it->second == Type::createNoType())
     it->second = (getTypeContext().*reserve)();
   return it->second;
@@ -749,6 +759,54 @@ Type ESTreeIRGen::lowerArrayClassType(flow::ClassType *arrayClass) {
     return recordStructuralLowering(key, tc.createArray(elem));
   tc.fillArray(reserved, elem);
   return recordStructuralLowering(key, reserved);
+}
+
+Type ESTreeIRGen::lowerTupleType(flow::TupleType *tt) {
+  if (llvh::Optional<Type> known =
+          beginStructuralLowering(tt, &TypeContext::reserveTuple))
+    return *known;
+
+  llvh::SmallVector<Type, 4> elems;
+  for (flow::Type *elem : tt->getTypes())
+    elems.push_back(flowTypeToIRType(elem));
+
+  TypeContext &tc = getTypeContext();
+  Type reserved = finishStructuralLowering(tt);
+  if (reserved == Type::createNoType())
+    return recordStructuralLowering(tt, tc.createTuple(elems));
+  tc.fillTuple(reserved, elems);
+  return recordStructuralLowering(tt, reserved);
+}
+
+Type ESTreeIRGen::lowerExactObjectType(flow::ExactObjectType *ot) {
+  // D7 (phase3-5-design.md): an object type with an indexer, e.g.
+  // {[string]: number}, lowers to Object. An indexer describes an open key
+  // set, which the closed, ordered field list of an IR ExactObject cannot
+  // represent. Its key and value types are not lowered, so a recursive type
+  // that cycles through an indexer is cut here.
+  if (ot->hasIndexer())
+    return Type::createObject();
+
+  if (llvh::Optional<Type> known =
+          beginStructuralLowering(ot, &TypeContext::reserveExactObject))
+    return *known;
+
+  // D8 (phase3-5-design.md): the FieldVariance of each field is dropped, so
+  // {+x: number}, {-x: number} and {x: number} lower to the same IR type.
+  // As a consequence, the IR field types are not an upper bound on what an
+  // object of this type holds: Flow lets {x: number | string} flow into
+  // {-x: number}. Nothing may type a value loaded from such an object by the
+  // field types of its IR type; IRGen types member loads by the Flow type.
+  llvh::SmallVector<ExactObjectField, 4> fields;
+  for (const flow::ExactObjectType::Field &f : ot->getFields())
+    fields.push_back(ExactObjectField{f.name, flowTypeToIRType(f.type)});
+
+  TypeContext &tc = getTypeContext();
+  Type reserved = finishStructuralLowering(ot);
+  if (reserved == Type::createNoType())
+    return recordStructuralLowering(ot, tc.createExactObject(fields));
+  tc.fillExactObject(reserved, fields);
+  return recordStructuralLowering(ot, reserved);
 }
 
 Type ESTreeIRGen::flowTypeToIRType(flow::Type *flowType) {
@@ -851,8 +909,9 @@ Type ESTreeIRGen::flowTypeToIRType(flow::TypeInfo *flowType) {
       return lowerTypedFunction(ct->getConstructorTypeInfo());
     }
     case flow::TypeKind::Tuple:
+      return lowerTupleType(llvh::cast<flow::TupleType>(flowType));
     case flow::TypeKind::ExactObject:
-      return Type::createObject();
+      return lowerExactObjectType(llvh::cast<flow::ExactObjectType>(flowType));
     case flow::TypeKind::Generic:
     case flow::TypeKind::InferencePlaceholder:
     case flow::TypeKind::InferencePlaceholderArray:

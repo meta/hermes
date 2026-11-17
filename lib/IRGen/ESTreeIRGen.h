@@ -636,8 +636,9 @@ class ESTreeIRGen {
   /// resolve without infinite recursion.
   llvh::DenseMap<const flow::ClassType *, Type> loweredClassTypes_;
 
-  /// Structural Flow types (Array<T> class specializations and typed function
-  /// signatures) whose lowering to an IR type has started but not finished.
+  /// Structural Flow types (Array<T> class specializations, typed function
+  /// signatures, tuples and exact objects without an indexer) whose lowering
+  /// to an IR type has started but not finished.
   /// The value is NoType until lowering reaches the same type again (or a
   /// type Flow considers equal to it), which means the type is recursive;
   /// then it is the IR entry reserved to break the cycle, which is filled
@@ -965,6 +966,15 @@ class ESTreeIRGen {
   /// \pre flowContext_.isArrayClassType(arrayClass).
   Type lowerArrayClassType(flow::ClassType *arrayClass);
 
+  /// Lower the Flow tuple type \p tt to an IR Tuple type: interned, unless an
+  /// element type refers back to the tuple.
+  Type lowerTupleType(flow::TupleType *tt);
+
+  /// Lower the Flow object type \p ot to an IR ExactObject type: interned,
+  /// unless a field type refers back to the object. An object type with an
+  /// indexer lowers to Object (D7), and field variance is dropped (D8).
+  Type lowerExactObjectType(flow::ExactObjectType *ot);
+
   /// Start lowering the structural Flow type \p key (see loweringInProgress_).
   /// \return the IR Type to use for \p key if it is already known: the
   ///   finished lowering of a type equal to \p key, or, if a type equal to
@@ -1048,9 +1058,12 @@ class ESTreeIRGen {
       flow::Type *arrayType);
 
   /// Convert the given list of elements in \p list into an object with
-  /// properties at the element indices given by the tuple type, so PrLoad can
-  /// be used to retrieve elements.
-  Value *genTupleFromElements(ESTree::NodeList &list);
+  /// properties at the element indices given by the tuple type \p tupleType,
+  /// so PrLoad can be used to retrieve elements. The result is narrowed to the
+  /// lowered \p tupleType.
+  Value *genTupleFromElements(
+      ESTree::NodeList &list,
+      flow::TupleType *tupleType);
 
   /// Convert the \p input into an array, spreading SpreadElements
   /// using for-or iteration semantics.

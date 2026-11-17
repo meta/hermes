@@ -27,12 +27,13 @@ return function main() {
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.d]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.r]: any
 // CHECK-NEXT:  %4 = AllocObjectLiteralInst (:object) empty: any, "a": string, 1: number
-// CHECK-NEXT:       StoreFrameInst %1: environment, %4: object, [%VS1.d]: any
-// CHECK-NEXT:  %6 = AllocObjectLiteralInst (:object) empty: any
-// CHECK-NEXT:  %7 = LoadFrameInst (:any) %1: environment, [%VS1.d]: any
-// CHECK-NEXT:  %8 = CheckedTypeCastInst (:object) %7: any, type(object)
-// CHECK-NEXT:  %9 = CallBuiltinInst (:any) [HermesBuiltin.copyDataProperties]: number, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %6: object, %8: object
-// CHECK-NEXT:        DefineOwnPropertyInst "s": string, %6: object, "x": string, true: boolean
-// CHECK-NEXT:        StoreFrameInst %1: environment, %6: object, [%VS1.r]: any
+// CHECK-NEXT:  %5 = UnionNarrowTrustedInst (:exactObject(a: number)) %4: object
+// CHECK-NEXT:       StoreFrameInst %1: environment, %5: exactObject(a: number), [%VS1.d]: any
+// CHECK-NEXT:  %7 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:  %8 = LoadFrameInst (:any) %1: environment, [%VS1.d]: any
+// CHECK-NEXT:  %9 = CheckedTypeCastInst (:object) %8: any, type(object)
+// CHECK-NEXT:  %10 = CallBuiltinInst (:any) [HermesBuiltin.copyDataProperties]: number, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %7: object, %9: object
+// CHECK-NEXT:        DefineOwnPropertyInst "s": string, %7: object, "x": string, true: boolean
+// CHECK-NEXT:        StoreFrameInst %1: environment, %7: object, [%VS1.r]: any
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end

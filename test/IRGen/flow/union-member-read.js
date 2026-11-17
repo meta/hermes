@@ -32,42 +32,42 @@ function slotOf(p: {tag: string, x: number} | {x: number, tag: string}): string 
 
 // CHECK:scope %VS1 [s: any]
 
-// CHECK:function tagOf(s: object): any [typed]
+// CHECK:function tagOf(s: exactObject(tag: string, radius: number)|exactObject(tag: string, side: number)): any [typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS1: any, %0: environment
-// CHECK-NEXT:  %2 = LoadParamInst (:object) %s: object
-// CHECK-NEXT:       StoreFrameInst %1: environment, %2: object, [%VS1.s]: any
+// CHECK-NEXT:  %2 = LoadParamInst (:exactObject(tag: string, radius: number)|exactObject(tag: string, side: number)) %s: exactObject(tag: string, radius: number)|exactObject(tag: string, side: number)
+// CHECK-NEXT:       StoreFrameInst %1: environment, %2: exactObject(tag: string, radius: number)|exactObject(tag: string, side: number), [%VS1.s]: any
 // CHECK-NEXT:  %4 = LoadFrameInst (:any) %1: environment, [%VS1.s]: any
-// CHECK-NEXT:  %5 = CheckedTypeCastInst (:object) %4: any, type(object)
-// CHECK-NEXT:  %6 = PrLoadInst (:string) %5: object, 0: number, "tag": string
+// CHECK-NEXT:  %5 = CheckedTypeCastInst (:exactObject(tag: string, radius: number)|exactObject(tag: string, side: number)) %4: any, type(exactObject(tag: string, radius: number)|exactObject(tag: string, side: number))
+// CHECK-NEXT:  %6 = PrLoadInst (:string) %5: exactObject(tag: string, radius: number)|exactObject(tag: string, side: number), 0: number, "tag": string
 // CHECK-NEXT:       ReturnInst %6: string
 // CHECK-NEXT:function_end
 
 // CHECK:scope %VS2 [p: any]
 
-// CHECK:function valueOf(p: object): any [typed]
+// CHECK:function valueOf(p: exactObject(k: string)|exactObject(k: number)): any [typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS2: any, %0: environment
-// CHECK-NEXT:  %2 = LoadParamInst (:object) %p: object
-// CHECK-NEXT:       StoreFrameInst %1: environment, %2: object, [%VS2.p]: any
+// CHECK-NEXT:  %2 = LoadParamInst (:exactObject(k: string)|exactObject(k: number)) %p: exactObject(k: string)|exactObject(k: number)
+// CHECK-NEXT:       StoreFrameInst %1: environment, %2: exactObject(k: string)|exactObject(k: number), [%VS2.p]: any
 // CHECK-NEXT:  %4 = LoadFrameInst (:any) %1: environment, [%VS2.p]: any
-// CHECK-NEXT:  %5 = CheckedTypeCastInst (:object) %4: any, type(object)
-// CHECK-NEXT:  %6 = PrLoadInst (:string|number) %5: object, 0: number, "k": string
+// CHECK-NEXT:  %5 = CheckedTypeCastInst (:exactObject(k: string)|exactObject(k: number)) %4: any, type(exactObject(k: string)|exactObject(k: number))
+// CHECK-NEXT:  %6 = PrLoadInst (:string|number) %5: exactObject(k: string)|exactObject(k: number), 0: number, "k": string
 // CHECK-NEXT:       ReturnInst %6: string|number
 // CHECK-NEXT:function_end
 
 // CHECK:scope %VS3 [p: any]
 
-// CHECK:function slotOf(p: object): any [typed]
+// CHECK:function slotOf(p: exactObject(tag: string, x: number)|exactObject(x: number, tag: string)): any [typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS3: any, %0: environment
-// CHECK-NEXT:  %2 = LoadParamInst (:object) %p: object
-// CHECK-NEXT:       StoreFrameInst %1: environment, %2: object, [%VS3.p]: any
+// CHECK-NEXT:  %2 = LoadParamInst (:exactObject(tag: string, x: number)|exactObject(x: number, tag: string)) %p: exactObject(tag: string, x: number)|exactObject(x: number, tag: string)
+// CHECK-NEXT:       StoreFrameInst %1: environment, %2: exactObject(tag: string, x: number)|exactObject(x: number, tag: string), [%VS3.p]: any
 // CHECK-NEXT:  %4 = LoadFrameInst (:any) %1: environment, [%VS3.p]: any
-// CHECK-NEXT:  %5 = CheckedTypeCastInst (:object) %4: any, type(object)
-// CHECK-NEXT:  %6 = LoadPropertyInst (:string) %5: object, "tag": string
+// CHECK-NEXT:  %5 = CheckedTypeCastInst (:exactObject(tag: string, x: number)|exactObject(x: number, tag: string)) %4: any, type(exactObject(tag: string, x: number)|exactObject(x: number, tag: string))
+// CHECK-NEXT:  %6 = LoadPropertyInst (:string) %5: exactObject(tag: string, x: number)|exactObject(x: number, tag: string), "tag": string
 // CHECK-NEXT:       ReturnInst %6: string
 // CHECK-NEXT:function_end

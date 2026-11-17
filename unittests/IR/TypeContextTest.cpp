@@ -1171,6 +1171,49 @@ TEST_F(TypeContextTest, ArrayConstructionAndInterning) {
   EXPECT_NE(arrNum, arrStr);
 }
 
+/// Each interning factory allocates a type table entry only on a cache miss:
+/// after repeated hits, the next allocated entry immediately follows the
+/// interned one.
+TEST_F(TypeContextTest, FactoriesAllocateOnlyOnCacheMiss) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+  Identifier x = strTab.getIdentifier("x");
+  Type num = Type::createNumber();
+  Type str = Type::createString();
+  FunctionParam params[] = {{num.getRawId(), /*isOptional*/ false}};
+
+  Type arr = ctx.createArray(num);
+  for (int i = 0; i < 3; ++i)
+    EXPECT_EQ(ctx.createArray(num), arr);
+  EXPECT_EQ(ctx.reserveArray().getRawId(), arr.getRawId() + 1);
+
+  Type tup = ctx.createTuple({num, str});
+  for (int i = 0; i < 3; ++i)
+    EXPECT_EQ(ctx.createTuple({num, str}), tup);
+  EXPECT_EQ(ctx.reserveTuple().getRawId(), tup.getRawId() + 1);
+
+  Type obj = ctx.createExactObject({{x, num}});
+  for (int i = 0; i < 3; ++i)
+    EXPECT_EQ(ctx.createExactObject({{x, num}}), obj);
+  EXPECT_EQ(ctx.reserveExactObject().getRawId(), obj.getRawId() + 1);
+
+  Type fn = ctx.createFunction(
+      str, Type::createNoType(), Type::createNoType(), params, false, false);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_EQ(
+        ctx.createFunction(
+            str,
+            Type::createNoType(),
+            Type::createNoType(),
+            params,
+            false,
+            false),
+        fn);
+  }
+  EXPECT_EQ(ctx.reserveFunction().getRawId(), fn.getRawId() + 1);
+}
+
 TEST_F(TypeContextTest, ArrayReserveFillSelfReference) {
   TypeContext ctx;
   // Simulate a recursive array whose element is the array itself:
@@ -1179,6 +1222,176 @@ TEST_F(TypeContextTest, ArrayReserveFillSelfReference) {
   ctx.fillArray(a, a);
   EXPECT_EQ(ctx.getKind(a), TypeKind::Array);
   EXPECT_EQ(ctx.getArrayElementType(a), a);
+}
+
+/// \return the element types of Tuple \p t in \p ctx, copied into a vector.
+std::vector<Type> tupleElements(const TypeContext &ctx, Type t) {
+  llvh::ArrayRef<Type> elems = ctx.getTupleElements(t);
+  return std::vector<Type>(elems.begin(), elems.end());
+}
+
+TEST_F(TypeContextTest, TupleConstructionAndInterning) {
+  TypeContext ctx;
+  Type num = Type::createNumber();
+  Type str = Type::createString();
+
+  // [number, string]
+  Type numStr = ctx.createTuple({num, str});
+  EXPECT_EQ(ctx.getKind(numStr), TypeKind::Tuple);
+  EXPECT_EQ(tupleElements(ctx, numStr), (std::vector<Type>{num, str}));
+
+  // Interned: same element types in the same order => same id.
+  EXPECT_EQ(ctx.createTuple({num, str}), numStr);
+
+  // Order matters: [string, number] is a different tuple.
+  Type strNum = ctx.createTuple({str, num});
+  EXPECT_NE(strNum, numStr);
+  EXPECT_EQ(tupleElements(ctx, strNum), (std::vector<Type>{str, num}));
+
+  // Repeated elements are kept: [number] and [number, number] differ.
+  Type one = ctx.createTuple({num});
+  Type two = ctx.createTuple({num, num});
+  EXPECT_NE(one, two);
+  EXPECT_EQ(tupleElements(ctx, two), (std::vector<Type>{num, num}));
+
+  // The empty tuple [] is interned too.
+  Type empty = ctx.createTuple({});
+  EXPECT_EQ(ctx.getKind(empty), TypeKind::Tuple);
+  EXPECT_TRUE(ctx.getTupleElements(empty).empty());
+  EXPECT_EQ(ctx.createTuple({}), empty);
+  EXPECT_NE(empty, one);
+}
+
+TEST_F(TypeContextTest, TupleReserveFillSelfReference) {
+  TypeContext ctx;
+  Type num = Type::createNumber();
+  // Simulate a recursive tuple whose second element is the tuple itself:
+  //   type T = [number, T]
+  Type t = ctx.reserveTuple();
+  ctx.fillTuple(t, {num, t});
+  EXPECT_EQ(ctx.getKind(t), TypeKind::Tuple);
+  EXPECT_EQ(tupleElements(ctx, t), (std::vector<Type>{num, t}));
+
+  // A reserved entry is not interned: building the same element list again
+  // creates a separate tuple, whose second element is the reserved one.
+  Type u = ctx.createTuple({num, t});
+  EXPECT_NE(u, t);
+  EXPECT_EQ(tupleElements(ctx, u), (std::vector<Type>{num, t}));
+}
+
+/// A field of an ExactObject as a comparable (name, type) pair.
+using FieldPair = std::pair<Identifier, Type>;
+
+/// \return the fields of ExactObject \p t in \p ctx, as (name, type) pairs.
+std::vector<FieldPair> objectFields(const TypeContext &ctx, Type t) {
+  std::vector<FieldPair> res;
+  for (const ExactObjectField &f : ctx.getExactObjectFields(t))
+    res.emplace_back(f.name, f.type);
+  return res;
+}
+
+TEST_F(TypeContextTest, ExactObjectConstructionAndInterning) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+  Identifier x = strTab.getIdentifier("x");
+  Identifier y = strTab.getIdentifier("y");
+  Type num = Type::createNumber();
+  Type str = Type::createString();
+
+  // {x: number, y: string}
+  Type xy = ctx.createExactObject({{x, num}, {y, str}});
+  EXPECT_EQ(ctx.getKind(xy), TypeKind::ExactObject);
+  EXPECT_EQ(
+      objectFields(ctx, xy), (std::vector<FieldPair>{{x, num}, {y, str}}));
+
+  // Interned: same names and types in the same order => same id.
+  EXPECT_EQ(ctx.createExactObject({{x, num}, {y, str}}), xy);
+
+  // Field order matters: {y: string, x: number} is a different type.
+  Type yx = ctx.createExactObject({{y, str}, {x, num}});
+  EXPECT_NE(yx, xy);
+  EXPECT_EQ(
+      objectFields(ctx, yx), (std::vector<FieldPair>{{y, str}, {x, num}}));
+
+  // Same names, different types: {x: string, y: number} differs.
+  EXPECT_NE(ctx.createExactObject({{x, str}, {y, num}}), xy);
+
+  // Same types, different names: {x: number} and {y: number} differ.
+  Type xNum = ctx.createExactObject({{x, num}});
+  Type yNum = ctx.createExactObject({{y, num}});
+  EXPECT_NE(xNum, yNum);
+
+  // A prefix is a different type: {x: number} and {x: number, y: string}.
+  EXPECT_NE(xNum, xy);
+
+  // The empty object {} is interned too.
+  Type empty = ctx.createExactObject({});
+  EXPECT_EQ(ctx.getKind(empty), TypeKind::ExactObject);
+  EXPECT_TRUE(ctx.getExactObjectFields(empty).empty());
+  EXPECT_EQ(ctx.createExactObject({}), empty);
+  EXPECT_NE(empty, xNum);
+
+  // An exact object with the same fields as a class is not that class.
+  ExactObjectField classFields[] = {{x, num}};
+  Type cls = ctx.createClassInstance(
+      Type::createNoType(), strTab.getIdentifier("C"), classFields);
+  EXPECT_NE(ctx.createExactObject(classFields), cls);
+  EXPECT_EQ(ctx.createExactObject(classFields), xNum);
+}
+
+TEST_F(TypeContextTest, ExactObjectReserveFillSelfReference) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+  Identifier left = strTab.getIdentifier("left");
+  Identifier right = strTab.getIdentifier("right");
+
+  // type Tree = null | {left: Tree, right: Tree}
+  // The object is reserved first so that the union, and through it the
+  // object's own fields, can refer to it.
+  Type node = ctx.reserveExactObject();
+  Type tree = ctx.unionTy(Type::createNull(), node);
+  ctx.fillExactObject(node, {{left, tree}, {right, tree}});
+
+  EXPECT_EQ(ctx.getKind(node), TypeKind::ExactObject);
+  EXPECT_EQ(
+      objectFields(ctx, node),
+      (std::vector<FieldPair>{{left, tree}, {right, tree}}));
+  EXPECT_EQ(ctx.getKind(tree), TypeKind::Union);
+  EXPECT_TRUE(ctx.isSubsetOf(node, tree));
+  EXPECT_EQ(ctx.unionTy(Type::createNull(), node), tree);
+
+  // A reserved entry is not interned: building the same field list again
+  // creates a separate object, whose fields refer to the reserved one.
+  Type other = ctx.createExactObject({{left, tree}, {right, tree}});
+  EXPECT_NE(other, node);
+  EXPECT_EQ(
+      objectFields(ctx, other),
+      (std::vector<FieldPair>{{left, tree}, {right, tree}}));
+}
+
+TEST_F(TypeContextTest, ExactObjectFillFromOwnFields) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+  Identifier a = strTab.getIdentifier("a");
+  Identifier b = strTab.getIdentifier("b");
+  Type num = Type::createNumber();
+  Type str = Type::createString();
+
+  Type prev = ctx.createExactObject({{a, num}, {b, str}});
+  // Build a chain of objects, each filled with the fields of the previous one
+  // read straight out of the context. The fields being appended point into
+  // the side array they are appended to, which grows and reallocates many
+  // times along the chain.
+  for (unsigned i = 0; i < 64; ++i) {
+    Type cur = ctx.reserveExactObject();
+    ctx.fillExactObject(cur, ctx.getExactObjectFields(prev));
+    EXPECT_EQ(
+        objectFields(ctx, cur), (std::vector<FieldPair>{{a, num}, {b, str}}));
+    prev = cur;
+  }
 }
 
 TEST_F(TypeContextTest, FunctionConstructionAndInterning) {
@@ -1219,29 +1432,70 @@ TEST_F(TypeContextTest, FunctionConstructionAndInterning) {
       false,
       false);
   EXPECT_EQ(fn, fn2);
+}
 
-  // Differ by isAsync => different id.
-  Type fnAsync = ctx.createFunction(
-      Type::createBoolean(),
-      Type::createObject(),
-      Type::createNoType(),
-      params,
-      /*isAsync*/ true,
-      false);
-  EXPECT_NE(fn, fnAsync);
+/// A function type is interned by its whole signature: changing any single
+/// component gives a distinct type, and every accessor returns the stored
+/// component, including a present rest param and true async/generator flags.
+TEST_F(TypeContextTest, FunctionInterningBySignatureComponent) {
+  TypeContext ctx;
+  Type num = Type::createNumber();
+  Type str = Type::createString();
+  Type boolean = Type::createBoolean();
+  Type obj = Type::createObject();
+  Type none = Type::createNoType();
+  uint32_t numId = num.getRawId();
+  uint32_t strId = str.getRawId();
 
-  // Differ by a param optional flag => different id.
-  FunctionParam params2[] = {
-      {Type::createNumber().getRawId(), false},
-      {Type::createString().getRawId(), /*isOptional*/ false}};
-  Type fn3 = ctx.createFunction(
-      Type::createBoolean(),
-      Type::createObject(),
-      Type::createNoType(),
-      params2,
-      false,
-      false);
-  EXPECT_NE(fn, fn3);
+  // async function* (this: object, a: number, b?: string, ...rest: string):
+  // boolean
+  FunctionParam params[] = {{numId, false}, {strId, /*isOptional*/ true}};
+  Type base = ctx.createFunction(
+      boolean, obj, str, params, /*isAsync*/ true, /*isGenerator*/ true);
+  EXPECT_EQ(ctx.getFunctionReturn(base), boolean);
+  EXPECT_EQ(ctx.getFunctionThis(base), obj);
+  EXPECT_EQ(ctx.getFunctionRest(base), str);
+  EXPECT_TRUE(ctx.getFunctionIsAsync(base));
+  EXPECT_TRUE(ctx.getFunctionIsGenerator(base));
+  llvh::ArrayRef<FunctionParam> got = ctx.getFunctionParams(base);
+  ASSERT_EQ(got.size(), 2u);
+  EXPECT_EQ(got[0].typeId, numId);
+  EXPECT_FALSE(got[0].isOptional);
+  EXPECT_EQ(got[1].typeId, strId);
+  EXPECT_TRUE(got[1].isOptional);
+
+  // Each variant differs from base in exactly one component.
+  FunctionParam otherType[] = {{numId, false}, {numId, true}};
+  FunctionParam otherOptional[] = {{numId, false}, {strId, false}};
+  FunctionParam swapped[] = {{strId, true}, {numId, false}};
+  FunctionParam fewer[] = {{numId, false}};
+  FunctionParam more[] = {{numId, false}, {strId, true}, {strId, true}};
+  struct Variant {
+    const char *what;
+    Type type;
+  };
+  Variant variants[] = {
+      {"return", ctx.createFunction(num, obj, str, params, true, true)},
+      {"this", ctx.createFunction(boolean, none, str, params, true, true)},
+      {"rest", ctx.createFunction(boolean, obj, none, params, true, true)},
+      {"param type",
+       ctx.createFunction(boolean, obj, str, otherType, true, true)},
+      {"param optional",
+       ctx.createFunction(boolean, obj, str, otherOptional, true, true)},
+      {"param order",
+       ctx.createFunction(boolean, obj, str, swapped, true, true)},
+      {"fewer params",
+       ctx.createFunction(boolean, obj, str, fewer, true, true)},
+      {"more params", ctx.createFunction(boolean, obj, str, more, true, true)},
+      {"isAsync", ctx.createFunction(boolean, obj, str, params, false, true)},
+      {"isGenerator",
+       ctx.createFunction(boolean, obj, str, params, true, false)},
+  };
+  for (const Variant &v : variants)
+    EXPECT_NE(v.type, base) << v.what;
+
+  // Only the identical signature hits the cache.
+  EXPECT_EQ(ctx.createFunction(boolean, obj, str, params, true, true), base);
 }
 
 TEST_F(TypeContextTest, FunctionReserveFillSelfReference) {
@@ -1317,11 +1571,16 @@ TEST_F(TypeContextTest, ReservedUnfilledEntriesInAlgebra) {
 
   Type reservedArr = ctx.reserveArray();
   Type reservedFn = ctx.reserveFunction();
-  // Unfilled: the payloads still hold NoType.
-  ASSERT_TRUE(ctx.getArrayElementType(reservedArr).isNoType());
-  ASSERT_TRUE(ctx.getFunctionReturn(reservedFn).isNoType());
+  Type reservedTup = ctx.reserveTuple();
+  Type reservedObj = ctx.reserveExactObject();
+  // Only the kind of an unfilled entry may be read; its payload is valid
+  // only after the fill.
+  ASSERT_EQ(ctx.getKind(reservedArr), TypeKind::Array);
+  ASSERT_EQ(ctx.getKind(reservedFn), TypeKind::Function);
+  ASSERT_EQ(ctx.getKind(reservedTup), TypeKind::Tuple);
+  ASSERT_EQ(ctx.getKind(reservedObj), TypeKind::ExactObject);
 
-  for (Type r : {reservedArr, reservedFn}) {
+  for (Type r : {reservedArr, reservedFn, reservedTup, reservedObj}) {
     Type u = ctx.unionTy(numStr, r);
     EXPECT_EQ(ctx.countKinds(u), 3u);
     EXPECT_TRUE(ctx.isSubsetOf(r, u));
@@ -1346,6 +1605,20 @@ TEST_F(TypeContextTest, ReservedUnfilledEntriesInAlgebra) {
   ctx.fillArray(reservedArr, uArr);
   EXPECT_EQ(ctx.getArrayElementType(reservedArr), uArr);
   EXPECT_EQ(ctx.unionTy(numStr, reservedArr), uArr);
+
+  Type uTup = ctx.unionTy(numStr, reservedTup);
+  ctx.fillTuple(reservedTup, {uTup, uTup});
+  EXPECT_EQ(tupleElements(ctx, reservedTup), (std::vector<Type>{uTup, uTup}));
+  EXPECT_EQ(ctx.unionTy(numStr, reservedTup), uTup);
+
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  Identifier x = strTab.getIdentifier("x");
+  Type uObj = ctx.unionTy(numStr, reservedObj);
+  ctx.fillExactObject(reservedObj, {{x, uObj}});
+  EXPECT_EQ(
+      objectFields(ctx, reservedObj), (std::vector<FieldPair>{{x, uObj}}));
+  EXPECT_EQ(ctx.unionTy(numStr, reservedObj), uObj);
 }
 
 TEST_F(TypeContextTest, RecursiveTypesAreObjects) {
@@ -1395,6 +1668,25 @@ TEST_F(TypeContextTest, ArrayFunctionAlgebra) {
   // itself, not of Array<string>.
   EXPECT_TRUE(ctx.isSubsetOf(arrNum, arrNum));
   EXPECT_FALSE(ctx.isSubsetOf(arrNum, arrStr));
+
+  // Invariance, not covariance: Array<number> and Array<number|string> are
+  // not subtypes of each other although number <: number|string, and
+  // likewise for function types whose return types are comparable.
+  Type numOrStr = ctx.unionTy(Type::createNumber(), Type::createString());
+  Type arrNumOrStr = ctx.createArray(numOrStr);
+  EXPECT_FALSE(ctx.isSubsetOf(arrNum, arrNumOrStr));
+  EXPECT_FALSE(ctx.isSubsetOf(arrNumOrStr, arrNum));
+  Type fnNum = ctx.createFunction(
+      Type::createNumber(),
+      Type::createNoType(),
+      Type::createNoType(),
+      {},
+      false,
+      false);
+  Type fnNumOrStr = ctx.createFunction(
+      numOrStr, Type::createNoType(), Type::createNoType(), {}, false, false);
+  EXPECT_FALSE(ctx.isSubsetOf(fnNum, fnNumOrStr));
+  EXPECT_FALSE(ctx.isSubsetOf(fnNumOrStr, fnNum));
 
   // Conservative disjointness (D5): distinct structural refined types are NOT
   // declared disjoint; refined-vs-primitive IS disjoint.
@@ -1525,6 +1817,259 @@ TEST_F(TypeContextTest, RecursiveTypePrint) {
   Type twice = ctx.createArray(
       ctx.unionTy(arrNum, ctx.createArray(ctx.createArray(arrNum))));
   EXPECT_EQ(str(twice), "array(array(number)|array(array(array(number))))");
+}
+
+TEST_F(TypeContextTest, TupleExactObjectAlgebra) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+  Identifier x = strTab.getIdentifier("x");
+  Identifier y = strTab.getIdentifier("y");
+  Type num = Type::createNumber();
+  Type str = Type::createString();
+  Type obj = Type::createObject();
+
+  Type tupNumStr = ctx.createTuple({num, str});
+  Type tupStrNum = ctx.createTuple({str, num});
+  Type objXY = ctx.createExactObject({{x, num}, {y, str}});
+  Type objYX = ctx.createExactObject({{y, str}, {x, num}});
+  // The other structural kinds and a class, for cross-kind checks.
+  Type arrNum = ctx.createArray(num);
+  Type fnVoid = ctx.createFunction(
+      Type::createUndefined(),
+      Type::createNoType(),
+      Type::createNoType(),
+      {},
+      false,
+      false);
+  Type cls = ctx.createClassInstance(
+      Type::createNoType(), strTab.getIdentifier("C"), {});
+
+  for (Type t : {tupNumStr, objXY}) {
+    // Every refinement is a subtype of Object, and only of itself.
+    EXPECT_TRUE(ctx.isSubsetOf(t, obj));
+    EXPECT_FALSE(ctx.isSubsetOf(obj, t));
+    EXPECT_TRUE(ctx.isSubsetOf(t, t));
+
+    // Disjoint from every primitive, and from the primitive part of AnyType.
+    for (Type prim :
+         {num,
+          str,
+          Type::createBoolean(),
+          Type::createNull(),
+          Type::createUndefined(),
+          Type::createBigInt(),
+          Type::createSymbol(),
+          Type::createInt32()}) {
+      EXPECT_TRUE(ctx.areDisjoint(t, prim));
+      EXPECT_TRUE(ctx.areDisjoint(prim, t));
+      EXPECT_TRUE(ctx.intersectTy(t, prim).isNoType());
+      EXPECT_EQ(ctx.subtractTy(t, prim), t);
+    }
+    EXPECT_TRUE(ctx.areDisjoint(t, ctx.unionTy(num, str)));
+    EXPECT_FALSE(ctx.areDisjoint(t, obj));
+    EXPECT_FALSE(ctx.areDisjoint(t, Type::createAnyType()));
+
+    // Not a subtype of, and not disjoint from (D5), any other structural kind
+    // or a class.
+    for (Type other : {arrNum, fnVoid, cls}) {
+      EXPECT_FALSE(ctx.isSubsetOf(t, other));
+      EXPECT_FALSE(ctx.isSubsetOf(other, t));
+      EXPECT_FALSE(ctx.areDisjoint(t, other));
+      EXPECT_FALSE(ctx.areDisjoint(other, t));
+    }
+
+    // Union subsumption with Object.
+    EXPECT_EQ(ctx.unionTy(t, obj), obj);
+    EXPECT_EQ(ctx.unionTy(obj, t), obj);
+    Type numOrObj = ctx.unionTy(num, obj);
+    EXPECT_EQ(ctx.unionTy(t, numOrObj), numOrObj);
+    EXPECT_TRUE(ctx.isSubsetOf(t, numOrObj));
+    Type numOrT = ctx.unionTy(num, t);
+    EXPECT_EQ(ctx.countKinds(numOrT), 2u);
+    EXPECT_EQ(ctx.unionTy(numOrT, obj), numOrObj);
+
+    // Intersection and subtraction with Object and with a union holding it.
+    EXPECT_EQ(ctx.intersectTy(t, obj), t);
+    EXPECT_EQ(ctx.intersectTy(t, t), t);
+    EXPECT_EQ(ctx.intersectTy(numOrT, obj), t);
+    EXPECT_EQ(ctx.intersectTy(numOrT, num), num);
+    EXPECT_TRUE(ctx.subtractTy(t, obj).isNoType());
+    EXPECT_EQ(ctx.subtractTy(numOrT, obj), num);
+    EXPECT_EQ(ctx.subtractTy(numOrT, num), t);
+  }
+
+  // Shallow model (D4): a tuple or exact object is a subtype only of itself,
+  // even when another one has the same element or field types.
+  EXPECT_FALSE(ctx.isSubsetOf(tupNumStr, tupStrNum));
+  EXPECT_FALSE(ctx.isSubsetOf(tupNumStr, ctx.createTuple({num})));
+  EXPECT_FALSE(ctx.isSubsetOf(objXY, objYX));
+  EXPECT_FALSE(ctx.isSubsetOf(objXY, ctx.createExactObject({{x, num}})));
+  EXPECT_FALSE(ctx.isSubsetOf(tupNumStr, objXY));
+  EXPECT_FALSE(ctx.isSubsetOf(objXY, tupNumStr));
+
+  // Invariance, not covariance: comparable element or field types do not
+  // make the tuples or exact objects comparable.
+  Type numOrStr = ctx.unionTy(num, str);
+  Type tupNum = ctx.createTuple({num});
+  Type tupNumOrStr = ctx.createTuple({numOrStr});
+  EXPECT_FALSE(ctx.isSubsetOf(tupNum, tupNumOrStr));
+  EXPECT_FALSE(ctx.isSubsetOf(tupNumOrStr, tupNum));
+  Type objXNum = ctx.createExactObject({{x, num}});
+  Type objXNumOrStr = ctx.createExactObject({{x, numOrStr}});
+  EXPECT_FALSE(ctx.isSubsetOf(objXNum, objXNumOrStr));
+  EXPECT_FALSE(ctx.isSubsetOf(objXNumOrStr, objXNum));
+
+  // Conservative disjointness (D5): two distinct tuples or exact objects, or
+  // a tuple and an exact object, are not disjoint.
+  EXPECT_FALSE(ctx.areDisjoint(tupNumStr, tupStrNum));
+  EXPECT_FALSE(ctx.areDisjoint(objXY, objYX));
+  EXPECT_FALSE(ctx.areDisjoint(tupNumStr, objXY));
+
+  // A union of two distinct ones keeps both arms; Object subsumes both.
+  Type tupOrObj = ctx.unionTy(tupNumStr, objXY);
+  EXPECT_EQ(ctx.countKinds(tupOrObj), 2u);
+  EXPECT_TRUE(ctx.isSubsetOf(tupNumStr, tupOrObj));
+  EXPECT_TRUE(ctx.isSubsetOf(objXY, tupOrObj));
+  EXPECT_TRUE(ctx.isSubsetOf(tupOrObj, obj));
+  EXPECT_EQ(ctx.unionTy(tupOrObj, obj), obj);
+}
+
+TEST_F(TypeContextTest, TupleExactObjectPrint) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+  Identifier x = strTab.getIdentifier("x");
+  Identifier y = strTab.getIdentifier("y");
+  Type num = Type::createNumber();
+  Type str = Type::createString();
+  Type numStr = ctx.unionTy(num, str);
+
+  auto print = [&](Type t) {
+    std::string s;
+    llvh::raw_string_ostream os{s};
+    ctx.print(os, t);
+    return os.str();
+  };
+
+  EXPECT_EQ(print(ctx.createTuple({num, str})), "tuple(number, string)");
+  EXPECT_EQ(print(ctx.createTuple({num})), "tuple(number)");
+  EXPECT_EQ(print(ctx.createTuple({})), "tuple()");
+  EXPECT_EQ(
+      print(ctx.createExactObject({{x, num}, {y, str}})),
+      "exactObject(x: number, y: string)");
+  // Fields print in field order.
+  EXPECT_EQ(
+      print(ctx.createExactObject({{y, str}, {x, num}})),
+      "exactObject(y: string, x: number)");
+  EXPECT_EQ(print(ctx.createExactObject({})), "exactObject()");
+
+  // Elements and field types print their union arms, with the same "any"
+  // shorthand as a top-level union.
+  EXPECT_EQ(
+      print(ctx.createTuple({numStr, Type::createNull()})),
+      "tuple(string|number, null)");
+  EXPECT_EQ(
+      print(ctx.createExactObject(
+          {{x, numStr},
+           {y, ctx.unionTy(Type::createAnyType(), Type::createEmpty())}})),
+      "exactObject(x: string|number, y: any|empty)");
+
+  // Nested structural payloads, and a structural type as a union arm.
+  Type fnStr = ctx.createFunction(
+      str, Type::createNoType(), Type::createNoType(), {}, false, false);
+  Type nested = ctx.createTuple(
+      {ctx.createArray(num), ctx.createExactObject({{x, fnStr}})});
+  EXPECT_EQ(
+      print(nested), "tuple(array(number), exactObject(x: function(string)))");
+  EXPECT_EQ(
+      print(ctx.unionTy(nested, Type::createNull())),
+      "null|tuple(array(number), exactObject(x: function(string)))");
+}
+
+TEST_F(TypeContextTest, ExactObjectPrintQuotesNonIdentifierNames) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+  Type num = Type::createNumber();
+  auto print = [&](Type t) {
+    std::string s;
+    llvh::raw_string_ostream os{s};
+    ctx.print(os, t);
+    return os.str();
+  };
+  auto field = [&](const char *name) {
+    return ExactObjectField{strTab.getIdentifier(name), num};
+  };
+
+  // ASCII identifiers print as they are.
+  EXPECT_EQ(
+      print(ctx.createExactObject({field("$_a1"), field("Z")})),
+      "exactObject($_a1: number, Z: number)");
+  // Other keys print quoted, with backslash escapes.
+  EXPECT_EQ(
+      print(ctx.createExactObject({field("a-b"), field("1x"), field("")})),
+      "exactObject(\"a-b\": number, \"1x\": number, \"\": number)");
+  EXPECT_EQ(
+      print(ctx.createExactObject({field("q\"\\\n")})),
+      "exactObject(\"q\\\"\\\\\\n\": number)");
+}
+
+TEST_F(TypeContextTest, RecursiveTupleExactObjectPrint) {
+  hermes::BumpPtrAllocator alloc;
+  hermes::StringTable strTab{alloc};
+  TypeContext ctx;
+  Identifier left = strTab.getIdentifier("left");
+  Identifier right = strTab.getIdentifier("right");
+  Identifier kids = strTab.getIdentifier("kids");
+  Identifier f = strTab.getIdentifier("f");
+  Type num = Type::createNumber();
+
+  auto print = [&](Type t) {
+    std::string s;
+    llvh::raw_string_ostream os{s};
+    ctx.print(os, t);
+    return os.str();
+  };
+
+  // type T = [number, T]
+  Type t = ctx.reserveTuple();
+  ctx.fillTuple(t, {num, t});
+  EXPECT_EQ(print(t), "tuple(number, ^1)");
+
+  // type Tree = null | {left: Tree, right: Tree}
+  Type node = ctx.reserveExactObject();
+  Type tree = ctx.unionTy(Type::createNull(), node);
+  ctx.fillExactObject(node, {{left, tree}, {right, tree}});
+  EXPECT_EQ(print(node), "exactObject(left: null|^1, right: null|^1)");
+  EXPECT_EQ(print(tree), "null|exactObject(left: null|^1, right: null|^1)");
+
+  // type U = [number, U[]]: the back-reference skips the enclosing array.
+  Type u = ctx.reserveTuple();
+  ctx.fillTuple(u, {num, ctx.createArray(u)});
+  EXPECT_EQ(print(u), "tuple(number, array(^2))");
+
+  // type O = {kids: O[]}
+  Type o = ctx.reserveExactObject();
+  ctx.fillExactObject(o, {{kids, ctx.createArray(o)}});
+  EXPECT_EQ(print(o), "exactObject(kids: array(^2))");
+
+  // A cycle through all four structural kinds: N counts each of them.
+  //   type A = [{f: () => A}][]
+  Type fn = ctx.reserveFunction();
+  Type arr =
+      ctx.createArray(ctx.createTuple({ctx.createExactObject({{f, fn}})}));
+  ctx.fillFunction(
+      fn, arr, Type::createNoType(), Type::createNoType(), {}, false, false);
+  EXPECT_EQ(print(arr), "array(tuple(exactObject(f: function(^4))))");
+  EXPECT_EQ(print(fn), "function(array(tuple(exactObject(f: ^4))))");
+
+  // A non-recursive tuple repeated on two arms is not a cycle and prints in
+  // full both times.
+  Type tupNum = ctx.createTuple({num});
+  EXPECT_EQ(
+      print(ctx.createTuple({tupNum, tupNum})),
+      "tuple(tuple(number), tuple(number))");
 }
 
 } // anonymous namespace

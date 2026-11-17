@@ -41,10 +41,11 @@ let d: string = box.identity("hello");
 // CHECK-NEXT:       StoreStackInst undefined: undefined, %1: any
 // CHECK-NEXT:  %3 = CreateFunctionInst (:object) %0: environment, %VS0: any, %""(): functionCode
 // CHECK-NEXT:  %4 = AllocObjectLiteralInst (:object) empty: any
-// CHECK-NEXT:  %5 = CallInst [njsf] (:any) %3: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %4: object
-// CHECK-NEXT:       StoreStackInst %5: any, %1: any
-// CHECK-NEXT:  %7 = LoadStackInst (:any) %1: any
-// CHECK-NEXT:       ReturnInst %7: any
+// CHECK-NEXT:  %5 = UnionNarrowTrustedInst (:exactObject()) %4: object
+// CHECK-NEXT:  %6 = CallInst [njsf] (:any) %3: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %5: exactObject()
+// CHECK-NEXT:       StoreStackInst %6: any, %1: any
+// CHECK-NEXT:  %8 = LoadStackInst (:any) %1: any
+// CHECK-NEXT:       ReturnInst %8: any
 // CHECK-NEXT:function_end
 
 // CHECK:scope %VS1 [exports: any, Box: any, identity: empty|object, identity#1: empty|object, box: any, a: any, b: any, c: any, d: any, ?Box.prototype: classInstance()]

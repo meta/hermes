@@ -1417,8 +1417,18 @@ void ESTreeIRGen::emitDestructuringTypedObject(
             getTypeContext().isNonPtr(irType));
       }
 
+      // The allocation is typed as plain object; narrow the initialized object
+      // to the lowered type of the rest binding, so that it matches typed slots
+      // without a runtime cast. That type is the exact object of the remaining
+      // fields in source order, which FlowChecker::expandObjectDestructuring
+      // records on the rest element. Lowering it, rather than building the IR
+      // type from the fields, gives a rest type that equals a recursive alias
+      // the alias's IR type.
+      flow::Type *restType = flowContext_.findNodeType(rest);
+      assert(restType && "rest element of a typed object pattern is typed");
       LReference lref = createLRef(rest->_argument, declInit);
-      lref.emitStore(restObj);
+      lref.emitStore(Builder.createUnionNarrowTrustedInst(
+          restObj, flowTypeToIRType(restType)));
       break;
     }
 

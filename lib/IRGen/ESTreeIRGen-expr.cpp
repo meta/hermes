@@ -483,7 +483,9 @@ Value *ESTreeIRGen::genFastArrayFromElements(
   return array;
 }
 
-Value *ESTreeIRGen::genTupleFromElements(ESTree::NodeList &list) {
+Value *ESTreeIRGen::genTupleFromElements(
+    ESTree::NodeList &list,
+    flow::TupleType *tupleType) {
   AllocObjectLiteralInst::ObjectPropertyMap propMap{};
   size_t i = 0;
   for (ESTree::Node &node : list) {
@@ -491,7 +493,11 @@ Value *ESTreeIRGen::genTupleFromElements(ESTree::NodeList &list) {
         Builder.getLiteralString(llvh::Twine(i)), genExpression(&node));
     ++i;
   }
-  return Builder.createAllocObjectLiteralInst(propMap);
+  // The allocation is typed as plain object; narrow it to the lowered tuple
+  // type so that it matches typed slots without a runtime cast.
+  return Builder.createUnionNarrowTrustedInst(
+      Builder.createAllocObjectLiteralInst(propMap),
+      flowTypeToIRType(tupleType));
 }
 
 Value *ESTreeIRGen::genArrayExpr(ESTree::ArrayExpressionNode *Expr) {
@@ -500,8 +506,9 @@ Value *ESTreeIRGen::genArrayExpr(ESTree::ArrayExpressionNode *Expr) {
     return genFastArrayFromElements(
         Expr->_elements, flowContext_.getNodeTypeOrAny(Expr));
   // If the array literal is a tuple, produce a tuple object.
-  if (llvh::isa<flow::TupleType>(flowContext_.getNodeTypeOrAny(Expr)->info))
-    return genTupleFromElements(Expr->_elements);
+  if (auto *tupleType = llvh::dyn_cast<flow::TupleType>(
+          flowContext_.getNodeTypeOrAny(Expr)->info))
+    return genTupleFromElements(Expr->_elements, tupleType);
   return genArrayFromElements(Expr->_elements);
 }
 
@@ -2563,7 +2570,10 @@ Value *ESTreeIRGen::genTypedObjectExpr(
     }
   }
 
-  return result;
+  // The allocation is typed as plain object; narrow the initialized object to
+  // the lowered exactObject type so that it matches typed slots without a
+  // runtime cast.
+  return Builder.createUnionNarrowTrustedInst(result, flowTypeToIRType(type));
 }
 
 Value *ESTreeIRGen::genSequenceExpr(ESTree::SequenceExpressionNode *Sq) {

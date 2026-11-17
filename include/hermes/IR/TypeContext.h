@@ -305,6 +305,78 @@ struct UnionInternKeyInfo {
   }
 };
 
+/// Hashable key for interning tuple types: the element type ids, in order.
+/// Unlike UnionInternKey, the ids are neither sorted nor deduplicated, since
+/// the position and the count of the elements are part of a tuple type.
+struct TupleInternKey {
+  llvh::SmallVector<uint32_t, 4> elems;
+};
+
+/// DenseMap info for TupleInternKey.
+struct TupleInternKeyInfo {
+  static TupleInternKey getEmptyKey() {
+    TupleInternKey k;
+    k.elems.push_back(UINT32_MAX);
+    return k;
+  }
+  static TupleInternKey getTombstoneKey() {
+    TupleInternKey k;
+    k.elems.push_back(UINT32_MAX - 1);
+    return k;
+  }
+  static unsigned getHashValue(const TupleInternKey &k) {
+    return llvh::hash_combine_range(k.elems.begin(), k.elems.end());
+  }
+  static bool isEqual(const TupleInternKey &a, const TupleInternKey &b) {
+    return a.elems == b.elems;
+  }
+};
+
+/// Hashable key for interning exact object types: the name and the type id of
+/// every field, in order. Field order is significant, so {x, y} and {y, x}
+/// have different keys. Field variance is not part of the key (D8, see
+/// TypeContext::createExactObject).
+struct ExactObjectInternKey {
+  /// One field of the key.
+  struct Field {
+    Identifier name;
+    uint32_t typeId;
+  };
+  llvh::SmallVector<Field, 4> fields;
+};
+
+/// DenseMap info for ExactObjectInternKey.
+struct ExactObjectInternKeyInfo {
+  static ExactObjectInternKey getEmptyKey() {
+    ExactObjectInternKey k;
+    k.fields.push_back({Identifier{}, UINT32_MAX});
+    return k;
+  }
+  static ExactObjectInternKey getTombstoneKey() {
+    ExactObjectInternKey k;
+    k.fields.push_back({Identifier{}, UINT32_MAX - 1});
+    return k;
+  }
+  static unsigned getHashValue(const ExactObjectInternKey &k) {
+    llvh::hash_code h = llvh::hash_value(k.fields.size());
+    for (const ExactObjectInternKey::Field &f : k.fields)
+      h = llvh::hash_combine(h, f.name.getUnderlyingPointer(), f.typeId);
+    return (unsigned)h;
+  }
+  static bool isEqual(
+      const ExactObjectInternKey &a,
+      const ExactObjectInternKey &b) {
+    if (a.fields.size() != b.fields.size())
+      return false;
+    for (size_t i = 0, e = a.fields.size(); i < e; ++i) {
+      if (a.fields[i].name != b.fields[i].name ||
+          a.fields[i].typeId != b.fields[i].typeId)
+        return false;
+    }
+    return true;
+  }
+};
+
 /// Hashable key for interning function types. Captures the whole shallow
 /// signature: return/this/rest ids, the ordered params (id + optional), and
 /// the async/generator flags.
@@ -623,9 +695,9 @@ class TypeContext {
   /// Union.
   /// \warning The returned ArrayRef points into an internal vector. It is
   /// invalidated by any operation that creates a new union type (e.g.
-  /// unionTy, intersectTy, subtractTy), since that may reallocate the
-  /// underlying typeArrays_. Copy the arms into a local container before
-  /// calling such operations during iteration.
+  /// unionTy, intersectTy, subtractTy) and by any later tuple creation or
+  /// fill, since they may reallocate the underlying typeArrays_. Copy the arms
+  /// into a local container before calling such operations during iteration.
   llvh::ArrayRef<Type> getUnionArms(Type t) const;
 
   /// Create a nominal class instance type. NOT interned: each call returns a
@@ -662,9 +734,9 @@ class TypeContext {
   Identifier getClassName(Type t) const;
   /// \return the fields of class \p t.
   /// \warning The returned ArrayRef points into an internal vector. It is
-  /// invalidated by any later class creation, since that may reallocate the
-  /// underlying fieldArrays_. Copy the fields into a local container before
-  /// creating more class instances during iteration.
+  /// invalidated by any later class or exact object creation or fill, since
+  /// that may reallocate the underlying fieldArrays_. Copy the fields into a
+  /// local container before creating more such types during iteration.
   llvh::ArrayRef<ExactObjectField> getClassFields(Type t) const;
 
   /// \return true if class \p a is the same as or a subclass of class \p b.
@@ -690,6 +762,77 @@ class TypeContext {
 
   /// \return the element type of Array \p t.
   Type getArrayElementType(Type t) const;
+
+  /// Create a Tuple type with element types \p elems, in order. Interned: two
+  /// calls with the same element types in the same order return the same
+  /// Type. Allocates an entry only on a cache miss.
+  Type createTuple(llvh::ArrayRef<Type> elems);
+
+  /// Reserve an empty Tuple entry and return its Type. Used with fillTuple to
+  /// break cycles when lowering a recursive tuple type. The entry is NOT
+  /// interned. Its kind and id are valid immediately, so it may be passed to
+  /// the type algebra (unionTy, isSubsetOf, areDisjoint, ...) before it is
+  /// filled: the algebra reads only the kind and the id of a Tuple entry. Its
+  /// payload (the element types) is valid only after fillTuple, so accessors
+  /// and printing must not be applied to it before then.
+  Type reserveTuple();
+
+  /// Fill a previously reserved Tuple entry with element types \p elems, in
+  /// order. \p t must come from reserveTuple. \p elems may point into this
+  /// context (e.g. come from getTupleElements).
+  void fillTuple(Type t, llvh::ArrayRef<Type> elems);
+
+  /// \return the element types of Tuple \p t, in order.
+  /// \warning The returned ArrayRef points into an internal vector. It is
+  /// invalidated by any later tuple creation or fill and by any operation that
+  /// creates a new union type (e.g. unionTy, intersectTy, subtractTy), since
+  /// that may reallocate the underlying typeArrays_. Copy the elements into a
+  /// local container before calling such operations during iteration.
+  llvh::ArrayRef<Type> getTupleElements(Type t) const;
+
+  /// Create an ExactObject type with fields \p fields, in order. Interned by
+  /// the ordered list of (name, type id) pairs: two calls with the same field
+  /// names and types in the same order return the same Type. Field order is
+  /// significant, so {x: number, y: string} and {y: string, x: number} are
+  /// different types. Allocates an entry only on a cache miss. \p fields may
+  /// point into this context.
+  ///
+  /// An ExactObject is a closed field list; a Flow exact object with an
+  /// indexer is not represented by one (D7).
+  ///
+  /// Field variance is not part of the type (D8, phase3-5-design.md).
+  /// ExactObjectField has no variance and the intern key has none, so the
+  /// Flow types {+x: number}, {-x: number} and {x: number} all map to the same
+  /// Type. The IR has no use for it: ExactObject types are compared by id
+  /// only (D4), the IR never checks a write against a field type, and IRGen
+  /// types a field read from the Flow field type. Because of this, the field
+  /// types here are not an upper bound on the stored values (Flow lets
+  /// {x: number | string} flow into {-x: number}), so do not type a loaded
+  /// value from them. Adding deep structural subtyping, or any consumer of
+  /// these field types, requires adding variance to the entry and the key.
+  Type createExactObject(llvh::ArrayRef<ExactObjectField> fields);
+
+  /// Reserve an empty ExactObject entry and return its Type. Used with
+  /// fillExactObject to break cycles when lowering a recursive object type.
+  /// The entry is NOT interned. Its kind and id are valid immediately, so it
+  /// may be passed to the type algebra (unionTy, isSubsetOf, areDisjoint, ...)
+  /// before it is filled: the algebra reads only the kind and the id of an
+  /// ExactObject entry. Its payload (the fields) is valid only after
+  /// fillExactObject, so accessors and printing must not be applied to it
+  /// before then.
+  Type reserveExactObject();
+
+  /// Fill a previously reserved ExactObject entry with fields \p fields, in
+  /// order. \p t must come from reserveExactObject. \p fields may point into
+  /// this context (e.g. come from getExactObjectFields or getClassFields).
+  void fillExactObject(Type t, llvh::ArrayRef<ExactObjectField> fields);
+
+  /// \return the fields of ExactObject \p t, in order.
+  /// \warning The returned ArrayRef points into an internal vector. It is
+  /// invalidated by any later class or exact object creation or fill, since
+  /// that may reallocate the underlying fieldArrays_. Copy the fields into a
+  /// local container before creating more such types during iteration.
+  llvh::ArrayRef<ExactObjectField> getExactObjectFields(Type t) const;
 
   /// Create a Function type. Interned: two calls with an identical signature
   /// return the same Type. Allocates an entry only on a cache miss. \p thisTy
@@ -730,6 +873,10 @@ class TypeContext {
   /// \return the rest param type of Function \p t (NoType if absent).
   Type getFunctionRest(Type t) const;
   /// \return the params of Function \p t, in order.
+  /// \warning The returned ArrayRef points into an internal vector. It is
+  /// invalidated by any later function creation or fill, since that may
+  /// reallocate the underlying paramArrays_. Copy the params into a local
+  /// container before creating more function types during iteration.
   llvh::ArrayRef<FunctionParam> getFunctionParams(Type t) const;
   /// \return whether Function \p t is async.
   bool getFunctionIsAsync(Type t) const;
@@ -826,19 +973,26 @@ class TypeContext {
   /// Print the human-readable type name to \p OS. Leaf kinds print their name
   /// (e.g. "number"). Unions print pipe-separated arms (e.g. "number|string").
   /// NoType prints "notype". AnyType prints "any". A class instance prints
-  /// "classInstance(<name>)". An array prints "array(<element>)" and a
-  /// function prints "function(<return>)" (parameters are not printed); the
-  /// payload is printed recursively by these same rules, so a union payload
-  /// prints its arms (e.g. "array(string|number)").
+  /// "classInstance(<name>)". The structural kinds print their payload:
+  /// - an array prints "array(<element>)";
+  /// - a function prints "function(<return>)" (parameters are not printed);
+  /// - a tuple prints "tuple(<e1>, <e2>, ...)", and the empty tuple "tuple()";
+  /// - an exact object prints "exactObject(<name1>: <t1>, <name2>: <t2>, ...)"
+  ///   in field order, and the empty object "exactObject()".
+  /// Each payload type is printed recursively by these same rules, so a union
+  /// payload prints its arms (e.g. "array(string|number)",
+  /// "tuple(string|number, null)").
   ///
-  /// Printing terminates on recursive types. An array or function that is
-  /// reached again while its own payload is being printed prints as the
-  /// back-reference "^N", where N counts the enclosing arrays and functions
-  /// from the innermost one (N = 1) outwards to the one being referenced.
+  /// Printing terminates on recursive types. A structural type (array,
+  /// function, tuple or exact object) that is reached again while its own
+  /// payload is being printed prints as the back-reference "^N", where N
+  /// counts the enclosing structural types, of all four kinds, from the
+  /// innermost one (N = 1) outwards to the one being referenced.
   /// For example, `type A = A[]` prints "array(^1)",
-  /// `type F = () => F | null` prints "function(null|^1)", and
+  /// `type F = () => F | null` prints "function(null|^1)",
   /// `type M = M[][]` prints "array(array(^2))", which differs from the
-  /// "array(array(^1))" of `N[]` with `type N = N[]`.
+  /// "array(array(^1))" of `N[]` with `type N = N[]`, and
+  /// `type T = [number, T[]]` prints "tuple(number, array(^2))".
   void print(llvh::raw_ostream &OS, Type t) const;
 
   /// \return a range over the component types of \p t, suitable for
@@ -868,19 +1022,29 @@ class TypeContext {
 
   /// Append the printed form of the type with id \p id, in the format
   /// documented at print(), to \p OS. \p enclosing holds the ids of the
-  /// arrays and functions whose payload is currently being printed, outermost
-  /// first; it is used to print back-references and is restored on return.
+  /// structural types (arrays, functions, tuples and exact objects) whose
+  /// payload is currently being printed, outermost first; it is used to print
+  /// back-references and is restored on return.
   void printType(
       llvh::raw_ostream &OS,
       uint32_t id,
       llvh::SmallVectorImpl<uint32_t> &enclosing) const;
 
   /// Append the printed form of the single non-union, non-NoType type with id
-  /// \p id to \p OS, in the format documented at print(). If \p id is an
-  /// array or function already in \p enclosing (see printType()), print the
-  /// back-reference "^N" instead of its payload. Otherwise an array or
-  /// function is pushed onto \p enclosing while its payload is printed.
+  /// \p id to \p OS, in the format documented at print(). If \p id is a
+  /// structural type already in \p enclosing (see printType()), print the
+  /// back-reference "^N" instead of its payload. Otherwise a structural type
+  /// is pushed onto \p enclosing while its payload is printed.
   void printLeaf(
+      llvh::raw_ostream &OS,
+      uint32_t id,
+      llvh::SmallVectorImpl<uint32_t> &enclosing) const;
+
+  /// Append the payload of the array, function, tuple or exact object with id
+  /// \p id to \p OS: the text between the parentheses in the format
+  /// documented at print(). \p id must already be the innermost entry of
+  /// \p enclosing (see printType()).
+  void printStructuralPayload(
       llvh::raw_ostream &OS,
       uint32_t id,
       llvh::SmallVectorImpl<uint32_t> &enclosing) const;
@@ -898,13 +1062,14 @@ class TypeContext {
   /// Type table. Index 0 = NoType. Pre-allocated entries for primitives.
   std::vector<TypeEntry> entries_;
 
-  /// Side array storing union arm types (and in the future, tuple element
-  /// types). Type is layout-compatible with uint32_t (it wraps a uint32_t id).
+  /// Side array storing union arm types and tuple element types, referenced by
+  /// (armOffset, armCount) in Union entries and (elemOffset, elemCount) in
+  /// Tuple entries. Type is layout-compatible with uint32_t (it wraps a
+  /// uint32_t id).
   std::vector<Type> typeArrays_;
 
-  /// Side array storing class (and, later, exact-object) field descriptors,
-  /// referenced by (fieldOffset, fieldCount) in ClassInstance/ExactObject
-  /// entries.
+  /// Side array storing class and exact object field descriptors, referenced
+  /// by (fieldOffset, fieldCount) in ClassInstance/ExactObject entries.
   std::vector<ExactObjectField> fieldArrays_;
 
   /// Side array storing function parameters, referenced by
@@ -917,6 +1082,18 @@ class TypeContext {
   /// Intern table mapping an element type id to the canonical Array type id.
   /// Non-recursive arrays only; recursive arrays are built via reserve/fill.
   llvh::DenseMap<uint32_t, uint32_t> arrayInternTable_;
+
+  /// Intern table mapping an ordered element type id list to the canonical
+  /// Tuple id. Non-recursive tuples only; recursive tuples are built via
+  /// reserve/fill.
+  llvh::DenseMap<TupleInternKey, uint32_t, TupleInternKeyInfo>
+      tupleInternTable_;
+
+  /// Intern table mapping an ordered (name, type id) field list to the
+  /// canonical ExactObject id. Non-recursive objects only; recursive objects
+  /// are built via reserve/fill.
+  llvh::DenseMap<ExactObjectInternKey, uint32_t, ExactObjectInternKeyInfo>
+      exactObjectInternTable_;
 
   /// Intern table mapping a function signature to the canonical Function id.
   /// Non-recursive functions only; recursive functions are built via
