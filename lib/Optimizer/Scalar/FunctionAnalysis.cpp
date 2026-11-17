@@ -406,8 +406,9 @@ void analyzeFunctionCallsites(Function *F) {
   // Attempt to start from a position of knowing all callsites.
   F->getAttributesRef(M)._allCallsitesKnownInStrictMode = true;
 
-  if (F->isGlobalScope()) {
-    // global function is called by the runtime, so its callsites aren't known.
+  if (F->isGlobalScope() || M->findCJSModule(F)) {
+    // The global function and CommonJS module functions are called by the
+    // runtime, so their callsites aren't known.
     F->getAttributesRef(M)._allCallsitesKnownInStrictMode = false;
   }
 
