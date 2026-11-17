@@ -24,6 +24,10 @@ print('allSettled' in Promise);
 print('any' in Promise);
 // CHECK-NEXT: true
 
+print('withResolvers' in Promise);
+// CHECK-NEXT: true
+
+
 var promise = new Promise(function(res, rej) {
   res('success!');
 });
