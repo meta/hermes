@@ -134,6 +134,15 @@ Handle<JSObject> createMapConstructor(Runtime &runtime) {
       0,
       CellKind::JSMapKind);
 
+  // Map.xxx static functions
+  defineMethod(
+      runtime,
+      cons,
+      Predefined::getSymbolID(Predefined::groupBy),
+      nullptr,
+      mapGroupBy,
+      2);
+
   return cons;
 }
 
@@ -349,6 +358,117 @@ mapIteratorPrototypeNext(void *, Runtime &runtime, NativeArgs args) {
     return ExecutionStatus::EXCEPTION;
   }
   return *cr;
+}
+
+CallResult<HermesValue>
+mapGroupBy(void *, Runtime &runtime, NativeArgs args) {
+  GCScope gcScope{runtime};
+
+  Handle<> items = args.getArgHandle(0);
+  Handle<Callable> grouperFunc = args.dyncastArg<Callable>(1);
+
+  // 1. Perform ? RequireObjectCoercible(items).
+  if (LLVM_UNLIKELY(items->isNull() || items->isUndefined())) {
+    return runtime.raiseTypeError(
+        "groupBy first argument is not coercible to Object");
+  }
+
+  // 2. If IsCallable(callbackfn) is false, throw a TypeError exception.
+  if (LLVM_UNLIKELY(!grouperFunc)) {
+    return runtime.raiseTypeError(
+        "groupBy second argument must be callable");
+  }
+
+  // 4. Let iteratorRecord be ? GetIterator(items, sync).
+  auto iteratorRecordRes = getIterator(runtime, items);
+  if (LLVM_UNLIKELY(iteratorRecordRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  auto iteratorRecord = *iteratorRecordRes;
+
+  // 5. Let k be 0.
+  size_t k = 0;
+
+  auto O = runtime.makeHandle(JSMap::create(runtime, Handle<JSObject>::vmcast(&runtime.mapPrototype)));
+  JSMap::initializeStorage(O, runtime);
+  Handle<HermesValue> callbackThis = runtime.makeHandle(HermesValue::encodeUndefinedValue());
+
+  MutableHandle<> objectArrayHandle{runtime};
+  MutableHandle<HermesValue> groupKey{runtime};
+  MutableHandle<JSArray> targetGroupArray{runtime};
+  MutableHandle<> targetGroupIndex{runtime};
+  MutableHandle<JSObject> tmpHandle{runtime};
+  MutableHandle<> valueHandle{runtime};
+  auto marker = gcScope.createMarker();
+
+  // 6. Repeat,
+  // Check the length of the array after every iteration,
+  // to allow for the fact that the length could be modified during iteration.
+  for (;; k++) {
+    CallResult<Handle<JSObject>> nextRes = iteratorStep(runtime, iteratorRecord);
+    if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+
+    if (!*nextRes) {
+      // Done with iteration.
+      break;
+    }
+
+    tmpHandle = vmcast<JSObject>(nextRes->getHermesValue());
+    auto nextValueRes = JSObject::getNamed_RJS(
+        tmpHandle, runtime, Predefined::getSymbolID(Predefined::value));
+    if (LLVM_UNLIKELY(nextValueRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    valueHandle = runtime.makeHandle(std::move(*nextValueRes));
+
+    // compute key for current element
+    auto keyRes = Callable::executeCall2(grouperFunc, runtime, callbackThis, valueHandle.getHermesValue(), HermesValue::encodeTrustedNumberValue(k));
+    if (LLVM_UNLIKELY(keyRes == ExecutionStatus::EXCEPTION)) {
+      return iteratorCloseAndRethrow(runtime, iteratorRecord.iterator);
+    }
+
+    groupKey = runtime.makeHandle(std::move(*keyRes));
+
+    // make it a property key
+    auto propertyKeyRes = toPropertyKey(runtime, groupKey);
+    if (LLVM_UNLIKELY(propertyKeyRes == ExecutionStatus::EXCEPTION)) {
+      return iteratorCloseAndRethrow(runtime, iteratorRecord.iterator);
+    }
+    auto propertyKey = *propertyKeyRes;
+
+    // new group key, no array in object yet so create it
+    if (!JSMap::hasKey(O, runtime, propertyKey)) {
+      auto targetGroupArrayRes = JSArray::create(runtime, 0, 0);
+      if (LLVM_UNLIKELY(targetGroupArrayRes == ExecutionStatus::EXCEPTION)) {
+        return iteratorCloseAndRethrow(runtime, iteratorRecord.iterator);
+      }
+
+      targetGroupArray = std::move(*targetGroupArrayRes);
+
+      // group already created, get the array
+      JSMap::addValue(O, runtime, propertyKey, targetGroupArray);
+    } else {
+      objectArrayHandle = runtime.makeHandle(std::move(JSMap::getValue(O, runtime, propertyKey)));
+      targetGroupArray = Handle<JSArray>::dyn_vmcast(objectArrayHandle);
+    }
+
+    targetGroupIndex = HermesValue::encodeTrustedNumberValue(JSArray::getLength(*targetGroupArray, runtime));
+
+    if (LLVM_UNLIKELY(
+            JSObject::putComputed_RJS(
+                targetGroupArray, runtime,
+                targetGroupIndex, valueHandle, PropOpFlags().plusThrowOnError()) ==
+            ExecutionStatus::EXCEPTION)) {
+      return iteratorCloseAndRethrow(runtime, iteratorRecord.iterator);
+    }
+
+    gcScope.flushToMarker(marker);
+  }
+
+  // 8. Return O.
+  return O.getHermesValue();
 }
 } // namespace vm
 } // namespace hermes
