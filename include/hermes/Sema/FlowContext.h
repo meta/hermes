@@ -1048,6 +1048,11 @@ class ClassType : public TypeWithId {
   /// Used mostly for error reporting.
   llvh::SmallVector<Type *, 2> typeArgs_{};
 
+  /// The generic class Decl this class was specialized from, or nullptr if this
+  /// class is not a generic specialization. Identifies builtin generics (e.g.
+  /// Array<T>) without a name-based or side-table lookup.
+  sema::Decl *genericClassDecl_ = nullptr;
+
   /// Super class, nullptr if this class doesn't extend anything.
   Type *superClass_ = nullptr;
 
@@ -1066,7 +1071,8 @@ class ClassType : public TypeWithId {
   explicit ClassType(
       size_t id,
       Identifier className,
-      llvh::ArrayRef<Type *> typeArgs);
+      llvh::ArrayRef<Type *> typeArgs,
+      sema::Decl *genericClassDecl = nullptr);
 
   /// Initialize an empty (freshly created) instance. Note that fields are
   /// immutable after this.
@@ -1159,6 +1165,11 @@ class ClassType : public TypeWithId {
   /// \return the type arguments, empty if not a generic specialization.
   llvh::ArrayRef<Type *> getTypeArgs() const {
     return typeArgs_;
+  }
+
+  /// \return the generic class Decl this was specialized from, or nullptr.
+  sema::Decl *getGenericClassDecl() const {
+    return genericClassDecl_;
   }
 
   Type *getSuperClass() const {
@@ -1421,8 +1432,10 @@ class FlowContext {
   }
   ClassType *createClass(
       Identifier name,
-      llvh::ArrayRef<Type *> typeArgs = {}) {
-    return &allocClass_.emplace_back(allocClass_.size(), name, typeArgs);
+      llvh::ArrayRef<Type *> typeArgs = {},
+      sema::Decl *genericClassDecl = nullptr) {
+    return &allocClass_.emplace_back(
+        allocClass_.size(), name, typeArgs, genericClassDecl);
   }
   ClassConstructorType *createClassConstructor(Type *classType) {
     return &allocClassConstructor_.emplace_back(
@@ -1463,25 +1476,31 @@ class FlowContext {
     return it != builtinCallTargets_.end() ? it->second : nullptr;
   }
 
-  /// Register an Array<T> ClassType specialization with its element type.
-  /// This is idempotent — re-registering the same classType is a no-op.
-  void registerArrayClassType(Type *classType, Type *elementType) {
-    arrayClassTypes_.try_emplace(
-        llvh::cast<ClassType>(classType->info), elementType);
+  /// Record the generic Decl of the builtin Array<T> class (@Hermes.array).
+  void setArrayGenericClassDecl(sema::Decl *decl) {
+    arrayGenericClassDecl_ = decl;
   }
 
-  /// Check if a Type has ClassType info that is an Array<T> specialization.
+  /// \return the generic Decl of the builtin Array<T> class (@Hermes.array),
+  /// or nullptr if it has not been declared.
+  sema::Decl *getArrayGenericClassDecl() const {
+    return arrayGenericClassDecl_;
+  }
+
+  /// \return true if \p t is a specialization of the builtin Array<T> class.
   bool isArrayClassType(const Type *t) const {
-    auto *classType = t ? llvh::dyn_cast_or_null<ClassType>(t->info) : nullptr;
-    return classType && arrayClassTypes_.count(classType);
+    if (!t || !t->info)
+      return false;
+    auto *ct = llvh::dyn_cast<ClassType>(t->info);
+    return ct && arrayGenericClassDecl_ &&
+        ct->getGenericClassDecl() == arrayGenericClassDecl_;
   }
 
-  /// Return the element type for an Array<T> ClassType specialization.
-  /// \pre isArrayClassType(t) must be true.
+  /// \return the element type of an Array<T> specialization.
+  /// \pre isArrayClassType(t).
   Type *getArrayElementType(const Type *t) const {
-    auto it = arrayClassTypes_.find(llvh::cast<ClassType>(t->info));
-    assert(it != arrayClassTypes_.end() && "not an Array ClassType");
-    return it->second;
+    assert(isArrayClassType(t) && "not an Array ClassType");
+    return llvh::cast<ClassType>(t->info)->getTypeArgs()[0];
   }
 
  private:
@@ -1519,9 +1538,9 @@ class FlowContext {
       DenseMap<ESTree::CallExpressionNode *, ESTree::FunctionDeclarationNode *>
           builtinCallTargets_{};
 
-  /// Maps Array<T> ClassType specializations to their element Type.
-  /// Populated by FlowChecker during specialization, used by IRGen.
-  llvh::DenseMap<const ClassType *, Type *> arrayClassTypes_{};
+  /// The generic Decl of the builtin Array<T> class (@Hermes.array), or nullptr
+  /// before it is discovered. Used to identify Array specializations.
+  sema::Decl *arrayGenericClassDecl_ = nullptr;
 
   std::deque<Type> allocTypes_{};
 

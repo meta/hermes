@@ -3036,7 +3036,7 @@ Type *FlowChecker::parseGenericTypeAnnotation(
     if (td->genericClassDecl) {
       // Array<T> is equivalent to T[], so use the same code path which
       // properly handles inference placeholders.
-      if (td->genericClassDecl == arrayClassDecl_) {
+      if (td->genericClassDecl == flowContext_.getArrayGenericClassDecl()) {
         auto *typeArgsNode = llvh::cast<ESTree::TypeParameterInstantiationNode>(
             node->_typeParameters);
         if (typeArgsNode->_params.size() == 1) {
@@ -3876,17 +3876,6 @@ FlowChecker::specializeGenericWithParsedTypes(
     assert(flowContext_.findDeclType(newDecl) && "expected valid type");
   }
 
-  // Register Array<T> specializations here so every path that creates or
-  // reaches one is covered, including the Array body referencing its own
-  // in-flight specialization.
-  if (oldDecl == arrayClassDecl_) {
-    if (Type *classConsType = flowContext_.findDeclType(newDecl)) {
-      flowContext_.registerArrayClassType(
-          llvh::cast<ClassConstructorType>(classConsType->info)->getClassType(),
-          typeArgTypes[0]);
-    }
-  }
-
   return {newDecl, specialization};
 }
 
@@ -4084,7 +4073,8 @@ bool FlowChecker::inferPlaceholdersFromCallArgs(
 Type *FlowChecker::getSpecializedArrayClassType(
     Type *elementType,
     SMRange errorRange) {
-  if (!arrayClassDecl_) {
+  sema::Decl *arrayClassDecl = flowContext_.getArrayGenericClassDecl();
+  if (!arrayClassDecl) {
     return nullptr;
   }
   // Avoid specializing if the element type is not concrete (e.g., it is a
@@ -4095,7 +4085,7 @@ Type *FlowChecker::getSpecializedArrayClassType(
     return nullptr;
   }
   auto [newDecl, specialization] = specializeGenericWithParsedTypes(
-      arrayClassDecl_, errorRange, {elementType}, arrayClassDecl_->scope);
+      arrayClassDecl, errorRange, {elementType}, arrayClassDecl->scope);
   if (!newDecl)
     return nullptr;
   Type *classConsType = getDeclType(newDecl);
@@ -4337,7 +4327,7 @@ void FlowChecker::typecheckGenericClassSpecialization(
   assert(newDecl == getDecl(id) && "expected same decl");
   Type *classType = flowContext_.createType(
       flowContext_.createClass(
-          Identifier::getFromPointer(id->_name), typeArgTypes),
+          Identifier::getFromPointer(id->_name), typeArgTypes, oldDecl),
       specialization);
   Type *classConsType = flowContext_.createType(
       flowContext_.createClassConstructor(classType), specialization);

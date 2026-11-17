@@ -376,8 +376,6 @@ class FlowChecker : public ESTree::RecursionDepthTracker<FlowChecker> {
   /// bounds expansions like `class A<T> { m(): void { new A<T[]>(); } }`.
   unsigned genericClassDepth_ = 0;
 
-  /// The Decl for the generic Array<T> class, identified by @Hermes.array.
-  sema::Decl *arrayClassDecl_ = nullptr;
   /// The TypeDecl for the generic Array<T> class in the binding table.
   TypeDecl *arrayTypeDecl_ = nullptr;
 

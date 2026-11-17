@@ -443,8 +443,8 @@ class FlowChecker::DeclareScopeTypes {
           if (hermes::findDecorator(
                   classNode->_decorators,
                   {outer.kw_.identHermes, outer.kw_.identArray})) {
-            outer.arrayClassDecl_ = decl;
             outer.arrayTypeDecl_ = &entry->second;
+            outer.flowContext_.setArrayGenericClassDecl(decl);
           }
           continue;
         }

@@ -917,8 +917,11 @@ unsigned TypeWithId::_hashImpl() const {
 ClassType::ClassType(
     size_t id,
     Identifier className,
-    llvh::ArrayRef<Type *> typeArgs)
-    : TypeWithId(TypeKind::Class, id), className_(className) {
+    llvh::ArrayRef<Type *> typeArgs,
+    sema::Decl *genericClassDecl)
+    : TypeWithId(TypeKind::Class, id),
+      className_(className),
+      genericClassDecl_(genericClassDecl) {
   typeArgs_.append(typeArgs.begin(), typeArgs.end());
 }
 
