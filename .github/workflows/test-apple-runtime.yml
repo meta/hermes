@@ -1,0 +1,95 @@
+name: test-apple-runtime
+
+on:
+  workflow_call
+
+jobs:
+  test-apple-runtime:
+    runs-on: macos-15
+    env:
+      TERM: dumb
+      HERMES_WS_DIR: "/tmp/hermes"
+      HOMEBREW_NO_AUTO_UPDATE: 1
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - destination: platform=macOS
+            scheme: ApplePlatformsIntegrationMacTests
+            name: Test MacOS application
+          - destination: platform=iOS Simulator,name=iPhone 16
+            scheme: ApplePlatformsIntegrationMobileTests
+            name: Test iPhone application
+          - destination: platform=visionOS Simulator,OS=2.5,name=Apple Vision Pro
+            scheme: ApplePlatformsIntegrationVisionOSTests
+            name: Test Apple Vision application
+          - destination: platform=tvOS Simulator,name=Apple TV
+            scheme: ApplePlatformsIntegrationTVOSTests
+            name: Test Apple TV application
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup xcode
+        uses: ./.github/actions/setup-xcode
+      - name: Install CMake
+        uses: ./.github/actions/install-cmake
+      - name: Install dependencies
+        shell: bash
+        run: brew install ninja
+      # =============================== #
+      # Download visionOS SDK if Needed #
+      # =============================== #
+      - name: Download visionOS SDK
+        id: download-visionos-sdk
+        shell: bash
+        if: ${{ matrix.scheme == 'ApplePlatformsIntegrationVisionOSTests' }}
+        continue-on-error: true
+        run: xcodebuild -downloadPlatform visionOS
+
+      # The download is flaky. Sometimes it fails to connect. So we wait 5 sec and retry once.
+      - name: Try again to download visionOS SDK
+        if: ${{ matrix.scheme == 'ApplePlatformsIntegrationVisionOSTests' && steps.download-visionos-sdk.outcome == 'failure' }}
+        shell: bash
+        run: |
+          sleep 5
+          xcodebuild -downloadPlatform visionOS
+      # =========================== #
+      # Download tvOS SDK if Needed #
+      # =========================== #
+      - name: Download tvOS SDK
+        id: download-tvos-sdk
+        shell: bash
+        if: ${{ matrix.scheme == 'ApplePlatformsIntegrationTVOSTests' }}
+        continue-on-error: true
+        run: xcodebuild -downloadPlatform tvOS
+      # The download is flaky. Sometimes it fails to connect. So we wait 5 sec and retry once.
+      - name: Try again to download visionOS SDK
+        if: ${{ matrix.scheme == 'ApplePlatformsIntegrationTVOSTests' && steps.download-tvos-sdk.outcome == 'failure' }}
+        shell: bash
+        run: |
+          sleep 5
+          xcodebuild -downloadPlatform tvOS
+
+      - name: Use built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: .
+          name: hermes-darwin-bin-Debug
+      - name: Unzip artifacts
+        shell: bash
+        run: |
+          ls -l .
+          tar -xzv -f hermes-ios-Debug.tar.gz
+      - name: Run pod install on ApplePlatformsIntegrationTestApp
+        shell: bash
+        run: pod install
+        working-directory: test/ApplePlatformsIntegrationTestApp
+      - name: ${{ matrix.name }}
+        shell: bash
+        run: |-
+          xcodebuild test \
+            -workspace ApplePlatformsIntegrationTests.xcworkspace \
+            -configuration Debug \
+            -destination '${{ matrix.destination }}' \
+            -scheme ${{ matrix.scheme }}
+        working-directory: test/ApplePlatformsIntegrationTestApp
