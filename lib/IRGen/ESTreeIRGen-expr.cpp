@@ -3431,8 +3431,27 @@ Value *ESTreeIRGen::genNewExpr(ESTree::NewExpressionNode *N) {
     auto *RSI =
         emitResolveScopeInstIfNeeded(it->second.homeObjectVar->getParent());
     auto *proto = Builder.createLoadFrameInst(RSI, it->second.homeObjectVar);
-    Value *newInst = emitTypedClassAllocation(
-        classType, proto, /* propertiesEnumerable */ true);
+    Value *newInst;
+    if (flowContext_.derivesFromArrayClass(classType)) {
+      // Instances of Array<T> and of its subclasses are fast arrays. The
+      // FlowChecker rejects such classes with stored fields, so there is
+      // nothing to allocate besides the array. Narrow the allocation to the
+      // class's lowered type, as genFastArrayFromElements does.
+      assert(
+          classType->getNumLayoutSlots() == 0 &&
+          "a class deriving from Array cannot have stored fields");
+      assert(
+          (!flowContext_.isArrayClassType(classType) ||
+           (!classType->getConstructorType() && !classType->getSuperClass() &&
+            !classFieldInitInfo_.count(classType))) &&
+          "Array<T> must not need a constructor call");
+      newInst = Builder.createUnionNarrowTrustedInst(
+          Builder.createAllocFastArrayInst(Builder.getLiteralNumber(0), proto),
+          flowTypeToIRType(classType));
+    } else {
+      newInst = emitTypedClassAllocation(
+          classType, proto, /* propertiesEnumerable */ true);
+    }
 
     // Call the constructor, if necessary. There is always a constructor,
     // either explicit or implicit. We must invoke it if it has an explicit

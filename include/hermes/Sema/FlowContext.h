@@ -1532,6 +1532,15 @@ class FlowContext {
     return t && isArrayClassType(t->info);
   }
 
+  /// \return true if \p classType is a specialization of the builtin Array<T>
+  /// class or derives from one. Instances of such classes are fast arrays.
+  bool derivesFromArrayClass(const ClassType *classType) const {
+    for (const ClassType *cur = classType; cur; cur = cur->getSuperClassInfo())
+      if (isArrayClassType(cur))
+        return true;
+    return false;
+  }
+
   /// \return the element type of an Array<T> specialization.
   /// \pre isArrayClassType(info).
   Type *getArrayElementType(const TypeInfo *info) const {

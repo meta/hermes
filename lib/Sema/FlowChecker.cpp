@@ -530,6 +530,17 @@ class FlowChecker::ParseClassType {
             superClassType,
             nextFieldLayoutSlotIR,
             classConsType_);
+
+    // Instances of classes deriving from Array<T> are allocated as fast
+    // arrays, which cannot hold stored fields. The layout includes the
+    // inherited slots, so subclasses of a rejected class are rejected too.
+    auto *classTypeInfo = llvh::cast<ClassType>(classType->info);
+    if (classTypeInfo->getNumLayoutSlots() > 0 &&
+        outer_.flowContext_.derivesFromArrayClass(classTypeInfo)) {
+      outer_.sm_.error(
+          superClass ? superClass->getSourceRange() : body->getSourceRange(),
+          "ft: a class deriving from Array cannot have instance fields");
+    }
   }
 
  private:

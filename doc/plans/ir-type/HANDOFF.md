@@ -355,6 +355,10 @@ Open issues, filed in `dz/` (`dz show <id>`):
 - `01a1c623-8582`: `mermes` (`tools/facebook/mermes`) does not link (missing
   `hermesHBCBackend`). Not caused by this work; it makes a target-less
   `ninja` exit non-zero.
+- `01a1cbc6-2a5b`: `new` through an untyped callee (`new C()` with
+  `C: any`) of a typed class allocates a plain object, not the class's
+  typed layout or, for classes deriving from `Array`, a fast array;
+  predates this work.
 - `01a1cb5b-f083`: typed mode has no promise or generator types. For an
   async function or a generator, the return type of the Flow
   `TypedFunctionType` and of the IR `Function` type is the annotation (the
@@ -364,11 +368,6 @@ Open issues, filed in `dz/` (`dz show <id>`):
   subtyping must compare these return types as annotations (see the note
   after D10 in `phase3-5-design.md`).
 
-Bugs found while testing the review follow-ups, all also present on the
-base master commit, before this stack:
-- `01a1c623-7516`: `new Array<number>()` allocates a typed object, not an
-  array; `push` on it aborts.
-
 Fixed after the review, following `typed-mode-bugs-plan.md`:
 - `01a1c623-71c5` (typed parameters of async and generator functions
   failed IR verification after `LowerGeneratorFunction`): fixed by "Keep
@@ -377,6 +376,11 @@ Fixed after the review, following `typed-mode-bugs-plan.md`:
   with the annotated return type: a promise held in a `number` binding, and
   a generator call failed verification at `-O`): fixed by "Type
   async/generator calls as mixed/object".
+- `01a1c623-7516` (`new Array<number>()` allocated a typed object, not an
+  array, and `push` on it aborted): fixed by "Allocate fast arrays for new
+  Array<T>()". Instances of `Array<T>` and of classes deriving from it are
+  fast arrays; the FlowChecker rejects such classes with stored instance
+  fields.
 
 The redundant double narrow of an object rest binding whose type equals a
 recursive alias is fixed: FlowChecker records the rest type on the
