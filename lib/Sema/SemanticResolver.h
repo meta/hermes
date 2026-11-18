@@ -182,7 +182,8 @@ class SemanticResolver
   /// Extract the declared identifiers from a declaration AST node's "id" field.
   /// Normally that is just a single identifier, but it can be more in case of
   /// destructuring.
-  /// \return true if there were expressions encountered in the tree.
+  /// \return true if the tree contains an expression, such as a default value
+  /// or a computed property key (ES2026 15.1.2, ContainsExpression).
   bool extractDeclaredIdentsFromID(
       ESTree::Node *node,
       llvh::SmallVectorImpl<ESTree::IdentifierNode *> &idents);

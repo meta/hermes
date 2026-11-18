@@ -2414,6 +2414,7 @@ bool SemanticResolver::extractDeclaredIdentsFromID(
   if (auto *obj = llvh::dyn_cast<ObjectPatternNode>(node)) {
     for (auto &propNode : obj->_properties) {
       if (auto *prop = llvh::dyn_cast<PropertyNode>(&propNode)) {
+        containsExpr |= prop->_computed;
         containsExpr |= extractDeclaredIdentsFromID(prop->_value, idents);
       } else {
         auto *rest = cast<RestElementNode>(&propNode);

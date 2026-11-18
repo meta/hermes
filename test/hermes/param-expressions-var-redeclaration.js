@@ -79,6 +79,35 @@ class C {
 print(new C().m(1));
 // CHECK-NEXT: 2,1
 
+// A computed key in a destructured parameter is a parameter expression too.
+var get;
+function computed({[(get = () => x, 'x')]: x}) {
+  var x = 2;
+  return [x, get()].join();
+}
+print(computed({x: 1}));
+// CHECK-NEXT: 2,1
+
+function computedNested([{o: {[(get = () => x, 'x')]: x}}]) {
+  var x = 2;
+  return [x, get()].join();
+}
+print(computedNested([{o: {x: 1}}]));
+// CHECK-NEXT: 2,1
+
+function computedRest(...[{[(get = () => x, 'x')]: x}]) {
+  var x = 2;
+  return [x, get()].join();
+}
+print(computedRest({x: 1}));
+// CHECK-NEXT: 2,1
+
+function computedArguments({[arguments[1]]: x}) {
+  return x;
+}
+print(computedArguments({k: 1}, 'k'));
+// CHECK-NEXT: 1
+
 // Without parameter expressions, the body "var" is the parameter binding.
 function simple(x) {
   var x;
