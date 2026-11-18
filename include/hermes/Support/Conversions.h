@@ -8,10 +8,12 @@
 #ifndef HERMES_SUPPORT_CONVERSIONS_H
 #define HERMES_SUPPORT_CONVERSIONS_H
 
+#include "hermes/Support/FastStrToDouble.h"
 #include "hermes/Support/OptValue.h"
 #include "hermes/Support/sh_tryfast_fp_cvt.h"
 
 #include "llvh/ADT/ArrayRef.h"
+#include "llvh/ADT/SmallVector.h"
 #include "llvh/ADT/StringRef.h"
 #include "llvh/Support/Compiler.h"
 #include "llvh/Support/MathExtras.h"
@@ -290,6 +292,17 @@ OptValue<double> parseIntWithRadix(Iterable str, int radix) {
 
   // The largest value that fits in the 53-bit mantissa (2**53).
   const double MAX_MANTISSA = 9007199254740992.0;
+  if (result >= MAX_MANTISSA && radix == 10) {
+    // Above 2**53 the loop above rounds after every digit, but radix 10 may
+    // only zero digits after the 20th (ES2026 19.2.5, step 14), so round
+    // the exact value once with a correctly rounded decimal parser.
+    llvh::SmallVector<char, 32> digits;
+    for (auto c : str) {
+      if (!AllowNumericSeparator || c != '_')
+        digits.push_back(static_cast<char>(c));
+    }
+    return fastStrToDouble(llvh::ArrayRef<char>{digits}).value;
+  }
   if (result >= MAX_MANTISSA && llvh::isPowerOf2_32(radix)) {
     // If the result is too high, manually reconstruct the double if
     // the radix is 2, 4, 8, 16, 32.
