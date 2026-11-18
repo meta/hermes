@@ -1021,46 +1021,42 @@ CallResult<HermesValue> enumerableOwnProperties_RJS(
 namespace {
 
 /// Slots of the "0" and "1" properties of an entry tuple. Tuple element access
-/// reads these slots directly, so they must match what IRGen assigns to tuple
-/// literals: the first two named slots of an ordinary object.
+/// reads these slots directly, so they must match the slots of a tuple literal.
 constexpr SlotIndex kEntryTupleKeySlot = JSObject::numOverlapSlots<JSObject>();
 constexpr SlotIndex kEntryTupleValueSlot = kEntryTupleKeySlot + 1;
 
 /// Populate runtime.tupleEntryClass, the hidden class shared by every tuple
-/// returned by Object.entries, if it hasn't been created yet.
+/// returned by Object.entries, if it hasn't been created yet. Like tuple
+/// literals, entry tuples are typed objects, frozen to untyped code.
 /// \param clazz scratch handle used while building the class.
-static ExecutionStatus ensureTupleEntryClass(
+static void ensureTupleEntryClass(
     Runtime &runtime,
     MutableHandle<HiddenClass> clazz) {
   // The class records Object.prototype as its parent, which every entry tuple
   // uses.
   if (LLVM_LIKELY(runtime.tupleEntryClass.get()))
-    return ExecutionStatus::RETURNED;
+    return;
 
-  clazz = *runtime.getHiddenClassForPrototype(
-      runtime.objectPrototype.get(), runtime.classJSObject);
+  clazz = HiddenClass::createForTypedObject(
+      runtime, Handle<JSObject>::vmcast(&runtime.objectPrototype), 2);
   for (auto name : {Predefined::zero, Predefined::one}) {
-    auto added = HiddenClass::addProperty(
+    [[maybe_unused]] SlotIndex slot = HiddenClass::addNewTypedPublicProperty(
         clazz,
         runtime,
         Predefined::getSymbolID(name),
-        PropertyFlags::defaultNewNamedPropertyFlags());
-    if (LLVM_UNLIKELY(added == ExecutionStatus::EXCEPTION))
-      return ExecutionStatus::EXCEPTION;
+        /* propertiesEnumerable */ true);
     assert(
-        added->second ==
+        slot ==
             (name == Predefined::zero ? kEntryTupleKeySlot
                                       : kEntryTupleValueSlot) &&
         "entry tuple property landed in an unexpected slot");
-    clazz = *added->first;
   }
   runtime.tupleEntryClass = *clazz;
-  return ExecutionStatus::RETURNED;
 }
 
 /// Create the [key, value] tuple object returned by Object.entries in typed
 /// code. It must have the shape IRGen gives tuple literals: own properties
-/// "0" and "1", in that order, on an ordinary object.
+/// "0" and "1", in that order, on a typed object.
 /// ensureTupleEntryClass() must have been called first.
 /// \param tuple scratch handle keeping the new object alive; also the result.
 static void createEntryTuple(
@@ -1101,11 +1097,8 @@ CallResult<HermesValue> fastArrayPropsFastArray(
   LocalsRAII lraii(runtime, &lv);
   GCScopeMarkerRAII marker{runtime};
 
-  if (kind == EnumerableOwnPropertiesKind::KeyValue &&
-      LLVM_UNLIKELY(
-          ensureTupleEntryClass(runtime, lv.tupleClass) ==
-          ExecutionStatus::EXCEPTION))
-    return ExecutionStatus::EXCEPTION;
+  if (kind == EnumerableOwnPropertiesKind::KeyValue)
+    ensureTupleEntryClass(runtime, lv.tupleClass);
 
   const uint32_t length = obj->getLengthAsUint32(runtime);
   auto arrRes = FastArray::create(runtime, prototype, length);
@@ -1163,11 +1156,8 @@ CallResult<HermesValue> genericPropsFastArray(
   LocalsRAII lraii(runtime, &lv);
   GCScopeMarkerRAII marker{runtime};
 
-  if (kind == EnumerableOwnPropertiesKind::KeyValue &&
-      LLVM_UNLIKELY(
-          ensureTupleEntryClass(runtime, lv.tupleClass) ==
-          ExecutionStatus::EXCEPTION))
-    return ExecutionStatus::EXCEPTION;
+  if (kind == EnumerableOwnPropertiesKind::KeyValue)
+    ensureTupleEntryClass(runtime, lv.tupleClass);
 
   auto propsRes = enumerableOwnProperties_RJS(runtime, obj, kind);
   if (LLVM_UNLIKELY(propsRes == ExecutionStatus::EXCEPTION))
@@ -1275,11 +1265,8 @@ CallResult<HermesValue> objectPropsFastArray(
         });
   }
 
-  if (kind == EnumerableOwnPropertiesKind::KeyValue &&
-      LLVM_UNLIKELY(
-          ensureTupleEntryClass(runtime, lv.tupleClass) ==
-          ExecutionStatus::EXCEPTION))
-    return ExecutionStatus::EXCEPTION;
+  if (kind == EnumerableOwnPropertiesKind::KeyValue)
+    ensureTupleEntryClass(runtime, lv.tupleClass);
 
   auto arrRes = FastArray::create(runtime, prototype, props.size());
   if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION))

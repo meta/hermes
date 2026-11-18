@@ -102,12 +102,13 @@ DEFINE_VALUE_BUFFER_USER(NewObjectWithBufferLong)
 DEFINE_OPCODE_4(NewObjectWithBufferAndParent, Reg8, Reg8, UInt32, UInt32)
 DEFINE_VALUE_BUFFER_USER(NewObjectWithBufferAndParent)
 
-/// Create a typed object from a static map of values, for typed classes.
+/// Create a typed object from a static map of values, for typed classes,
+/// exact object literals and tuples.
 /// The result will have properties which are readonly from legacy JS,
 /// only mutable via PutOwnBySlotIdx, and some which may be private
 /// (only visible to GetOwnBySlotIdx via typed code).
 /// Arg1 is the destination.
-/// Arg2 is the parent.
+/// Arg2 is the parent, interpreted as in NewObjectWithParent.
 /// Arg3 is the index in the object shape table.
 /// Arg4 is the index in the object val buffer table.
 /// Arg5 is non-zero if properties should be non-enumerable.

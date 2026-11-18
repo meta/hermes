@@ -36,12 +36,12 @@ return function main() {
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.b]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.i]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.j]: any
-// CHECK-NEXT:  %10 = AllocObjectLiteralInst (:object) empty: any, "0": string, 2: number, "1": string, "asdf": string
+// CHECK-NEXT:  %10 = AllocTypedObjectInst (:object) empty: any, "0": string, 2: number, "1": string, "asdf": string
 // CHECK-NEXT:  %11 = UnionNarrowTrustedInst (:tuple(number, string)) %10: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %11: tuple(number, string), [%VS1.inner]: any
 // CHECK-NEXT:  %13 = LoadFrameInst (:any) %1: environment, [%VS1.inner]: any
 // CHECK-NEXT:  %14 = CheckedTypeCastInst (:tuple(number, string)) %13: any, type(tuple(number, string))
-// CHECK-NEXT:  %15 = AllocObjectLiteralInst (:object) empty: any, "0": string, 1: number, "1": string, true: boolean, "2": string, %14: tuple(number, string)
+// CHECK-NEXT:  %15 = AllocTypedObjectInst (:object) empty: any, "0": string, 1: number, "1": string, true: boolean, "2": string, %14: tuple(number, string)
 // CHECK-NEXT:  %16 = UnionNarrowTrustedInst (:tuple(number, boolean, tuple(number, string))) %15: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %16: tuple(number, boolean, tuple(number, string)), [%VS1.outer]: any
 // CHECK-NEXT:  %18 = LoadFrameInst (:any) %1: environment, [%VS1.outer]: any

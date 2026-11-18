@@ -1385,37 +1385,19 @@ void ESTreeIRGen::emitDestructuringTypedObject(
       // Allocate a new exact object containing the remaining fields, in the
       // same order as srcType. The order matches the rest binding's
       // ExactObjectType that FlowChecker constructed.
-      AllocObjectLiteralInst::ObjectPropertyMap propMap{};
-      llvh::SmallVector<size_t, 4> remainingSrcIdx{};
+      AllocTypedObjectInst::ObjectPropertyMap propMap{};
       for (size_t i = 0, e = srcType->getFields().size(); i < e; ++i) {
         if (consumed.test(i))
           continue;
         const auto &field = srcType->getFields()[i];
-        propMap.emplace_back(
-            Builder.getLiteralString(field.name),
-            getDefaultInitValue(field.type));
-        remainingSrcIdx.push_back(i);
-      }
-
-      Value *restObj = propMap.empty()
-          ? Builder.createAllocObjectLiteralInst()
-          : Builder.createAllocObjectLiteralInst(propMap);
-
-      for (size_t destIdx = 0, n = remainingSrcIdx.size(); destIdx < n;
-           ++destIdx) {
-        size_t srcIdx = remainingSrcIdx[destIdx];
-        const auto &field = srcType->getFields()[srcIdx];
         auto *nameLit = Builder.getLiteralString(field.name);
-        Type irType = flowTypeToIRType(field.type);
-        Value *loaded =
-            Builder.createPrLoadInst(source, srcIdx, nameLit, irType);
-        Builder.createPrStoreInst(
-            loaded,
-            restObj,
-            destIdx,
+        propMap.emplace_back(
             nameLit,
-            getTypeContext().isNonPtr(irType));
+            Builder.createPrLoadInst(
+                source, i, nameLit, flowTypeToIRType(field.type)));
       }
+      Value *restObj = Builder.createAllocTypedObjectInst(
+          propMap, Builder.getEmptySentinel());
 
       // The allocation is typed as plain object; narrow the initialized object
       // to the lowered type of the rest binding, so that it matches typed slots

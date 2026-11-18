@@ -70,7 +70,7 @@ print(widen(5).x, Store.o.x);
 // CHECK:function mkTuple(x: number): tuple(number, string) [allCallsitesKnownInStrictMode,typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = LoadParamInst (:number) %x: number
-// CHECK-NEXT:  %1 = AllocObjectLiteralInst (:object) empty: any, "0": string, %0: number, "1": string, "s": string
+// CHECK-NEXT:  %1 = AllocTypedObjectInst (:object) empty: any, "0": string, %0: number, "1": string, "s": string
 // CHECK-NEXT:  %2 = UnionNarrowTrustedInst (:tuple(number, string)) %1: object
 // CHECK-NEXT:       ReturnInst %2: tuple(number, string)
 // CHECK-NEXT:function_end
@@ -78,15 +78,14 @@ print(widen(5).x, Store.o.x);
 // CHECK:function mkObj(x: number): exactObject(x: number, y: string) [allCallsitesKnownInStrictMode,typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = LoadParamInst (:number) %x: number
-// CHECK-NEXT:  %1 = AllocObjectLiteralInst (:object) empty: any, "x": string, 0: number, "y": string, "s": string
-// CHECK-NEXT:       PrStoreInst %0: number, %1: object, 0: number, "x": string, true: boolean
-// CHECK-NEXT:  %3 = UnionNarrowTrustedInst (:exactObject(x: number, y: string)) %1: object
-// CHECK-NEXT:       ReturnInst %3: exactObject(x: number, y: string)
+// CHECK-NEXT:  %1 = AllocTypedObjectInst (:object) empty: any, "x": string, %0: number, "y": string, "s": string
+// CHECK-NEXT:  %2 = UnionNarrowTrustedInst (:exactObject(x: number, y: string)) %1: object
+// CHECK-NEXT:       ReturnInst %2: exactObject(x: number, y: string)
 // CHECK-NEXT:function_end
 
 // CHECK:function mkEmpty(): exactObject() [allCallsitesKnownInStrictMode,typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:  %0 = AllocTypedObjectInst (:object) empty: any
 // CHECK-NEXT:  %1 = UnionNarrowTrustedInst (:exactObject()) %0: object
 // CHECK-NEXT:       ReturnInst %1: exactObject()
 // CHECK-NEXT:function_end
@@ -94,13 +93,11 @@ print(widen(5).x, Store.o.x);
 // CHECK:function rest(o: exactObject(a: number, b: string, c: number)): exactObject(b: string, c: number) [allCallsitesKnownInStrictMode,typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = LoadParamInst (:exactObject(a: number, b: string, c: number)) %o: exactObject(a: number, b: string, c: number)
-// CHECK-NEXT:  %1 = AllocObjectLiteralInst (:object) empty: any, "b": string, "": string, "c": string, 0: number
-// CHECK-NEXT:  %2 = PrLoadInst (:string) %0: exactObject(a: number, b: string, c: number), 1: number, "b": string
-// CHECK-NEXT:       PrStoreInst %2: string, %1: object, 0: number, "b": string, false: boolean
-// CHECK-NEXT:  %4 = PrLoadInst (:number) %0: exactObject(a: number, b: string, c: number), 2: number, "c": string
-// CHECK-NEXT:       PrStoreInst %4: number, %1: object, 1: number, "c": string, true: boolean
-// CHECK-NEXT:  %6 = UnionNarrowTrustedInst (:exactObject(b: string, c: number)) %1: object
-// CHECK-NEXT:       ReturnInst %6: exactObject(b: string, c: number)
+// CHECK-NEXT:  %1 = PrLoadInst (:string) %0: exactObject(a: number, b: string, c: number), 1: number, "b": string
+// CHECK-NEXT:  %2 = PrLoadInst (:number) %0: exactObject(a: number, b: string, c: number), 2: number, "c": string
+// CHECK-NEXT:  %3 = AllocTypedObjectInst (:object) empty: any, "b": string, %1: string, "c": string, %2: number
+// CHECK-NEXT:  %4 = UnionNarrowTrustedInst (:exactObject(b: string, c: number)) %3: object
+// CHECK-NEXT:       ReturnInst %4: exactObject(b: string, c: number)
 // CHECK-NEXT:function_end
 
 // CHECK:scope %VS0 [o: empty|exactObject(x: string|number)]
@@ -108,10 +105,9 @@ print(widen(5).x, Store.o.x);
 // CHECK:function widen(n: number): exactObject(x: number) [allCallsitesKnownInStrictMode,typed]
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
-// CHECK-NEXT:  %1 = AllocObjectLiteralInst (:object) empty: any, "x": string, 0: number
-// CHECK-NEXT:       PrStoreInst 5: number, %1: object, 0: number, "x": string, true: boolean
-// CHECK-NEXT:  %3 = UnionNarrowTrustedInst (:exactObject(x: number)) %1: object
-// CHECK-NEXT:  %4 = UnionNarrowTrustedInst (:exactObject(x: string|number)) %3: exactObject(x: number)
-// CHECK-NEXT:       StoreFrameInst %0: environment, %4: exactObject(x: string|number), [%VS0.o]: empty|exactObject(x: string|number)
-// CHECK-NEXT:       ReturnInst %3: exactObject(x: number)
+// CHECK-NEXT:  %1 = AllocTypedObjectInst (:object) empty: any, "x": string, 5: number
+// CHECK-NEXT:  %2 = UnionNarrowTrustedInst (:exactObject(x: number)) %1: object
+// CHECK-NEXT:  %3 = UnionNarrowTrustedInst (:exactObject(x: string|number)) %2: exactObject(x: number)
+// CHECK-NEXT:       StoreFrameInst %0: environment, %3: exactObject(x: string|number), [%VS0.o]: empty|exactObject(x: string|number)
+// CHECK-NEXT:       ReturnInst %2: exactObject(x: number)
 // CHECK-NEXT:function_end

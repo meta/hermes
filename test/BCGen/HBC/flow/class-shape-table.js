@@ -14,7 +14,7 @@ class A {
 // Observe that the shape table has two entries.
 // Typed and untyped objects can't share shape table (and cache) entries.
 globalThis.a = new A();
-globalThis.b = ({x:1} as any);
+globalThis.b = ({x: 1}: {[string]: number});
 
 // Auto-generated content below. Please do not modify manually.
 

@@ -667,9 +667,9 @@ Effects | Does not read or write to memory.
 
 AllocTypedObjectInst | _
 --- | --- |
-Description | Allocates a new typed object on the heap. During lowering pass it will be lowered to either an AllocObjectInst or a LIRAllocObjectFromBufferInst.
+Description | Allocates a new typed object on the heap. During lowering pass it will be lowered to a LIRAllocTypedObjectFromBufferInst. An empty one with an EmptySentinel parent is not lowered and allocates a plain object.
 Example |  %0 = AllocTypedObjectInst %parent, "prop1" : string, 10 : number
-Arguments | %parent is the parent of the new object, and the other operands are alternating (Literal*, value*) pairs which represent the properties and their keys in the typed class.
+Arguments | %parent is the parent of the new object, or EmptySentinel for Object.prototype, and the other operands are alternating (Literal*, value*) pairs which represent the properties and their keys in the typed class.
 Semantics | The instruction creates a new JavaScript object on the heap with an initial list of properties, which may include 'uninit' values. Properties are enumerable.
 Effects | Does not read or write to memory.
 

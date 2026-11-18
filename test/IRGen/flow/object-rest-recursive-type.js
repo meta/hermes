@@ -57,16 +57,14 @@ print(d.b, dn === null ? 'null' : dn.b, s.b, s.next === null);
 // CHECK-NEXT:  %7 = CheckedTypeCastInst (:exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1))) %6: any, type(exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)))
 // CHECK-NEXT:  %8 = PrLoadInst (:number) %7: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 0: number, "a": string
 // CHECK-NEXT:       StoreFrameInst %1: environment, %8: number, [%VS1.a]: any
-// CHECK-NEXT:  %10 = AllocObjectLiteralInst (:object) empty: any, "b": string, "": string, "next": string, null: null
-// CHECK-NEXT:  %11 = PrLoadInst (:string) %7: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 1: number, "b": string
-// CHECK-NEXT:        PrStoreInst %11: string, %10: object, 0: number, "b": string, false: boolean
-// CHECK-NEXT:  %13 = PrLoadInst (:null|exactObject(b: string, next: null|^1)) %7: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 2: number, "next": string
-// CHECK-NEXT:        PrStoreInst %13: null|exactObject(b: string, next: null|^1), %10: object, 1: number, "next": string, false: boolean
-// CHECK-NEXT:  %15 = UnionNarrowTrustedInst (:exactObject(b: string, next: null|^1)) %10: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %15: exactObject(b: string, next: null|^1), [%VS1.r]: any
-// CHECK-NEXT:  %17 = LoadFrameInst (:any) %1: environment, [%VS1.r]: any
-// CHECK-NEXT:  %18 = CheckedTypeCastInst (:exactObject(b: string, next: null|^1)) %17: any, type(exactObject(b: string, next: null|^1))
-// CHECK-NEXT:        ReturnInst %18: exactObject(b: string, next: null|^1)
+// CHECK-NEXT:  %10 = PrLoadInst (:string) %7: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 1: number, "b": string
+// CHECK-NEXT:  %11 = PrLoadInst (:null|exactObject(b: string, next: null|^1)) %7: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 2: number, "next": string
+// CHECK-NEXT:  %12 = AllocTypedObjectInst (:object) empty: any, "b": string, %10: string, "next": string, %11: null|exactObject(b: string, next: null|^1)
+// CHECK-NEXT:  %13 = UnionNarrowTrustedInst (:exactObject(b: string, next: null|^1)) %12: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %13: exactObject(b: string, next: null|^1), [%VS1.r]: any
+// CHECK-NEXT:  %15 = LoadFrameInst (:any) %1: environment, [%VS1.r]: any
+// CHECK-NEXT:  %16 = CheckedTypeCastInst (:exactObject(b: string, next: null|^1)) %15: any, type(exactObject(b: string, next: null|^1))
+// CHECK-NEXT:        ReturnInst %16: exactObject(b: string, next: null|^1)
 // CHECK-NEXT:function_end
 
 // CHECK:scope %VS2 [o: any, a: any, r: any]
@@ -85,14 +83,12 @@ print(d.b, dn === null ? 'null' : dn.b, s.b, s.next === null);
 // CHECK-NEXT:  %9 = CheckedTypeCastInst (:exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1))) %8: any, type(exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)))
 // CHECK-NEXT:  %10 = PrLoadInst (:number) %9: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 0: number, "a": string
 // CHECK-NEXT:        StoreFrameInst %1: environment, %10: number, [%VS2.a]: any
-// CHECK-NEXT:  %12 = AllocObjectLiteralInst (:object) empty: any, "b": string, "": string, "next": string, null: null
-// CHECK-NEXT:  %13 = PrLoadInst (:string) %9: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 1: number, "b": string
-// CHECK-NEXT:        PrStoreInst %13: string, %12: object, 0: number, "b": string, false: boolean
-// CHECK-NEXT:  %15 = PrLoadInst (:null|exactObject(b: string, next: null|^1)) %9: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 2: number, "next": string
-// CHECK-NEXT:        PrStoreInst %15: null|exactObject(b: string, next: null|^1), %12: object, 1: number, "next": string, false: boolean
-// CHECK-NEXT:  %17 = UnionNarrowTrustedInst (:exactObject(b: string, next: null|^1)) %12: object
-// CHECK-NEXT:        StoreFrameInst %1: environment, %17: exactObject(b: string, next: null|^1), [%VS2.r]: any
-// CHECK-NEXT:  %19 = LoadFrameInst (:any) %1: environment, [%VS2.r]: any
-// CHECK-NEXT:  %20 = CheckedTypeCastInst (:exactObject(b: string, next: null|^1)) %19: any, type(exactObject(b: string, next: null|^1))
-// CHECK-NEXT:        ReturnInst %20: exactObject(b: string, next: null|^1)
+// CHECK-NEXT:  %12 = PrLoadInst (:string) %9: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 1: number, "b": string
+// CHECK-NEXT:  %13 = PrLoadInst (:null|exactObject(b: string, next: null|^1)) %9: exactObject(a: number, b: string, next: null|exactObject(b: string, next: null|^1)), 2: number, "next": string
+// CHECK-NEXT:  %14 = AllocTypedObjectInst (:object) empty: any, "b": string, %12: string, "next": string, %13: null|exactObject(b: string, next: null|^1)
+// CHECK-NEXT:  %15 = UnionNarrowTrustedInst (:exactObject(b: string, next: null|^1)) %14: object
+// CHECK-NEXT:        StoreFrameInst %1: environment, %15: exactObject(b: string, next: null|^1), [%VS2.r]: any
+// CHECK-NEXT:  %17 = LoadFrameInst (:any) %1: environment, [%VS2.r]: any
+// CHECK-NEXT:  %18 = CheckedTypeCastInst (:exactObject(b: string, next: null|^1)) %17: any, type(exactObject(b: string, next: null|^1))
+// CHECK-NEXT:        ReturnInst %18: exactObject(b: string, next: null|^1)
 // CHECK-NEXT:function_end

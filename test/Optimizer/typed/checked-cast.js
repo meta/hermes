@@ -43,7 +43,7 @@ exports.next = next
 // CHECK-NEXT:  %17 = AllocTypedNonEnumObjectInst (:object) null: null
 // CHECK-NEXT:  %18 = UnionNarrowTrustedInst (:classInstance()) %17: object
 // CHECK-NEXT:        StorePropertyStrictInst %18: classInstance(), %16: object, "prototype": string
-// CHECK-NEXT:  %20 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:  %20 = AllocTypedObjectInst (:object) empty: any
 // CHECK-NEXT:  %21 = UnionNarrowTrustedInst (:exactObject()) %20: object
 // CHECK-NEXT:  %22 = CreateFunctionInst (:function(classInstance(Cls))) empty: any, empty: any, %next(): functionCode
 // CHECK-NEXT:  %23 = CreateFunctionInst (:object) empty: any, empty: any, %Cls(): functionCode

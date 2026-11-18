@@ -105,6 +105,16 @@ SHLegacyValue _sh_ljs_get_bytecode_bigint(
   return *res;
 }
 
+/// \return the object parent for \p parent: none if null, Object.prototype
+/// if not an object.
+static Handle<JSObject> toParentHandle(
+    Runtime &runtime,
+    PinnedHermesValue *parent) {
+  return parent->isObject() ? Handle<JSObject>::vmcast(parent)
+      : parent->isNull()    ? Runtime::makeNullHandle<JSObject>()
+                         : Handle<JSObject>::vmcast(&runtime.objectPrototype);
+}
+
 SHLegacyValue _interpreter_create_object_from_buffer(
     SHRuntime *shr,
     SHCodeBlock *codeBlock,
@@ -131,16 +141,10 @@ SHLegacyValue _interpreter_create_object_from_buffer_with_parent(
     uint32_t shapeTableIndex,
     uint32_t valBufferOffset) {
   Runtime &runtime = getRuntime(shr);
-  auto *parentPHV = toPHV(parent);
-  Handle<JSObject> parentHandle = parentPHV->isObject()
-      ? Handle<JSObject>::vmcast(parentPHV)
-      : parentPHV->isNull()
-      ? Runtime::makeNullHandle<JSObject>()
-      : Handle<JSObject>::vmcast(&runtime.objectPrototype);
   CallResult<PseudoHandle<>> res = Interpreter::createObjectFromBuffer(
       runtime,
       (CodeBlock *)codeBlock,
-      parentHandle,
+      toParentHandle(runtime, toPHV(parent)),
       shapeTableIndex,
       valBufferOffset,
       /* isTyped */ ObjectAllocKind::Untyped);
@@ -160,7 +164,7 @@ SHLegacyValue _interpreter_create_typed_object_from_buffer(
   CallResult<PseudoHandle<>> res = Interpreter::createObjectFromBuffer(
       runtime,
       (CodeBlock *)codeBlock,
-      Handle<JSObject>::dyn_vmcast(Handle<>(toPHV(parent))),
+      toParentHandle(runtime, toPHV(parent)),
       shapeTableIndex,
       valBufferOffset,
       ObjectAllocKind::TypedEnumerable);
@@ -180,7 +184,7 @@ SHLegacyValue _interpreter_create_typed_non_enum_object_from_buffer(
   CallResult<PseudoHandle<>> res = Interpreter::createObjectFromBuffer(
       runtime,
       (CodeBlock *)codeBlock,
-      Handle<JSObject>::dyn_vmcast(Handle<>(toPHV(parent))),
+      toParentHandle(runtime, toPHV(parent)),
       shapeTableIndex,
       valBufferOffset,
       ObjectAllocKind::TypedNonEnumerable);
@@ -195,12 +199,7 @@ SHLegacyValue _interpreter_create_object_with_parent(
     CodeBlock *codeBlock,
     PinnedHermesValue *parent,
     uint32_t shapeTableIndex) {
-  auto *parentPHV = toPHV(parent);
-  Handle<JSObject> parentHandle = parentPHV->isObject()
-      ? Handle<JSObject>::vmcast(parentPHV)
-      : parentPHV->isNull()
-      ? Runtime::makeNullHandle<JSObject>()
-      : Handle<JSObject>::vmcast(&runtime.objectPrototype);
+  Handle<JSObject> parentHandle = toParentHandle(runtime, toPHV(parent));
   struct : public Locals {
     PinnedValue<HiddenClass> clazz;
     PinnedValue<JSObject> res;

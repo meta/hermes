@@ -2735,8 +2735,11 @@ tailCall:
             resPH = Interpreter::createObjectFromBuffer(
                 runtime,
                 curCodeBlock,
-                Handle<JSObject>::dyn_vmcast(
-                    Handle<>(&O2REG(NewTypedObjectWithBuffer))),
+                O2REG(NewTypedObjectWithBuffer).isObject()
+                    ? Handle<JSObject>::vmcast(&O2REG(NewTypedObjectWithBuffer))
+                    : O2REG(NewTypedObjectWithBuffer).isNull()
+                    ? Runtime::makeNullHandle<JSObject>()
+                    : Handle<JSObject>::vmcast(&runtime.objectPrototype),
                 ip->iNewTypedObjectWithBuffer.op3,
                 ip->iNewTypedObjectWithBuffer.op4,
                 nonEnumerable ? ObjectAllocKind::TypedNonEnumerable

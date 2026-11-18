@@ -30,7 +30,7 @@ return function main() {
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.x]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.y]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.z]: any
-// CHECK-NEXT:  %5 = AllocObjectLiteralInst (:object) empty: any, "0": string, 1: number, "1": string, true: boolean
+// CHECK-NEXT:  %5 = AllocTypedObjectInst (:object) empty: any, "0": string, 1: number, "1": string, true: boolean
 // CHECK-NEXT:  %6 = UnionNarrowTrustedInst (:tuple(number, boolean)) %5: object
 // CHECK-NEXT:       StoreFrameInst %1: environment, %6: tuple(number, boolean), [%VS1.x]: any
 // CHECK-NEXT:  %8 = LoadFrameInst (:any) %1: environment, [%VS1.x]: any

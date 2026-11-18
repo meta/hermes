@@ -165,6 +165,10 @@ bool LowerAllocObjectLiteral::lowerAllocObjectBuffer(
     return false;
   }
 
+  // LowerNumericProperties leaves the keys of typed objects as strings, even
+  // index-like ones, so every slot of a typed object is stored directly.
+  bool isTyped = !llvh::isa<AllocObjectLiteralInst>(allocInst);
+
   // Replace AllocObjectLiteral with lowered instruction.
   builder.setLocation(allocInst->getLocation());
   builder.setInsertionPointAfter(allocInst);
@@ -176,7 +180,7 @@ bool LowerAllocObjectLiteral::lowerAllocObjectBuffer(
 #ifndef NDEBUG
     if (auto *keyStr = llvh::dyn_cast<LiteralString>(propKey)) {
       assert(
-          !toArrayIndex(keyStr->getValue().str()).hasValue() &&
+          (isTyped || !toArrayIndex(keyStr->getValue().str()).hasValue()) &&
           "LiteralString that looks like an array index should have been converted to a number.");
     }
 #endif
@@ -220,16 +224,20 @@ bool LowerAllocObjectLiteral::lowerAllocObjectBuffer(
   builder.setLocation(allocInst->getLocation());
   builder.setInsertionPoint(allocInst);
 
+  // The typed allocation LIR requires an explicit parent. The runtime treats
+  // undefined as Object.prototype.
+  Value *parent = allocInst->getParentObject();
+  if (isTyped && llvh::isa<EmptySentinel>(parent))
+    parent = builder.getLiteralUndefined();
+
   Instruction *alloc;
   if (llvh::isa<AllocTypedNonEnumObjectInst>(allocInst)) {
-    alloc = builder.createLIRAllocTypedNonEnumObjectFromBufferInst(
-        allocInst->getParentObject(), propMap);
+    alloc =
+        builder.createLIRAllocTypedNonEnumObjectFromBufferInst(parent, propMap);
   } else if (llvh::isa<AllocTypedObjectInst>(allocInst)) {
-    alloc = builder.createLIRAllocTypedObjectFromBufferInst(
-        allocInst->getParentObject(), propMap);
+    alloc = builder.createLIRAllocTypedObjectFromBufferInst(parent, propMap);
   } else {
-    alloc = builder.createLIRAllocObjectFromBufferInst(
-        allocInst->getParentObject(), propMap);
+    alloc = builder.createLIRAllocObjectFromBufferInst(parent, propMap);
   }
 
   allocInst->replaceAllUsesWith(alloc);

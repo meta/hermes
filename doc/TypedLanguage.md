@@ -71,9 +71,9 @@ When instantiating a tuple, it is typically necessary to specify the type to avo
 var x: [number, string] = [1, "abc"];
 ```
 
-Tuples are plain objects with properties `"0"`, `"1"`, ..., not arrays, so
+Tuples are objects with properties `"0"`, `"1"`, ..., not arrays, so
 untyped code that expects an iterable (e.g. `new Map(Object.entries(o))`)
-does not accept them.
+does not accept them. Like object literals, they are frozen to untyped code.
 
 ### Objects
 
@@ -83,6 +83,8 @@ var obj: {a: number, b: string} = {a: 1, b: "xyz"};
 ```
 
 They must have exactly the set of properties listed in their type (no extra properties allowed). Properties must be in the same order as the type requires. This allows the compiler to make access extremely efficient.
+
+Object literals with exact types are frozen to untyped code, even when assigned to `any`: untyped code cannot add, delete or write their properties. The empty literal `{}` is an ordinary extensible object. Use an indexer type, e.g. `({a: 1}: {[string]: number})`, for an object that untyped code may modify.
 
 #### Variance
 

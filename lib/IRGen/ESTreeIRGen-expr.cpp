@@ -493,7 +493,7 @@ Value *ESTreeIRGen::genFastArrayFromElements(
 Value *ESTreeIRGen::genTupleFromElements(
     ESTree::NodeList &list,
     flow::TupleType *tupleType) {
-  AllocObjectLiteralInst::ObjectPropertyMap propMap{};
+  AllocTypedObjectInst::ObjectPropertyMap propMap{};
   size_t i = 0;
   for (ESTree::Node &node : list) {
     propMap.emplace_back(
@@ -503,7 +503,7 @@ Value *ESTreeIRGen::genTupleFromElements(
   // The allocation is typed as plain object; narrow it to the lowered tuple
   // type so that it matches typed slots without a runtime cast.
   return Builder.createUnionNarrowTrustedInst(
-      Builder.createAllocObjectLiteralInst(propMap),
+      Builder.createAllocTypedObjectInst(propMap, Builder.getEmptySentinel()),
       flowTypeToIRType(tupleType));
 }
 
@@ -2479,14 +2479,9 @@ Value *ESTreeIRGen::genObjectExpr(ESTree::ObjectExpressionNode *Expr) {
 Value *ESTreeIRGen::genTypedObjectExpr(
     ESTree::ObjectExpressionNode *Expr,
     flow::ExactObjectType *type) {
-  // Evaluate the value expressions and keep pointers to the vales.
-  // Mapping from property name to value and PrLoad index.
-  // If Value is nullptr, then the value was already emitted as part of the
-  // object literal and shouldn't be PrStored.
-  // The order of PrStores doesn't matter because they have no side effects,
-  // it just needs to be deterministic, so use MapVector for iteration.
-  llvh::SmallMapVector<Identifier, std::pair<Value *, size_t>, 8>
-      storedValues{};
+  // Evaluate the value expressions in source order. A later property
+  // overwrites an earlier one, but both are evaluated for side effects.
+  llvh::SmallDenseMap<Identifier, Value *, 8> storedValues{};
   llvh::SmallVector<char, 32> stringStorage{};
   for (auto &node : Expr->_properties) {
     if (auto *spread = llvh::dyn_cast<ESTree::SpreadElementNode>(&node)) {
@@ -2502,16 +2497,14 @@ Value *ESTreeIRGen::genTypedObjectExpr(
       Value *src = genExpression(spread->_argument);
       for (size_t i = 0, e = srcType->getFields().size(); i < e; ++i) {
         const auto &srcField = srcType->getFields()[i];
-        Value *loaded = Builder.createPrLoadInst(
+        assert(
+            type->findField(srcField.name).hasValue() &&
+            "Spread field must exist in destination type");
+        storedValues[srcField.name] = Builder.createPrLoadInst(
             src,
             i,
             Builder.getLiteralString(srcField.name),
             flowTypeToIRType(srcField.type));
-        auto optIndex = type->findField(srcField.name);
-        assert(
-            optIndex.hasValue() &&
-            "Spread field must exist in destination type");
-        storedValues[srcField.name] = {loaded, *optIndex};
       }
       continue;
     }
@@ -2524,63 +2517,21 @@ Value *ESTreeIRGen::genTypedObjectExpr(
     stringStorage.clear();
     Identifier propName = Builder.createIdentifier(
         propertyKeyAsString(stringStorage, prop->_key));
-
-    auto optIndex = type->findField(propName);
-    assert(optIndex.hasValue() && "Expected field to exist");
-
-    Value *storedValue = genExpression(prop->_value);
-    // Overwrite the previous value if there is one.
-    // We've already run the expression for side effects.
-    storedValues[propName] = {storedValue, *optIndex};
+    assert(type->findField(propName).hasValue() && "Expected field to exist");
+    storedValues[propName] = genExpression(prop->_value);
   }
 
-  // TODO: Have a specific instruction for allocating an object
-  // that uses the prop map, makes a sealed object, uses uninitialized fields
-  // instead of default init value, etc.
-
-  // Allocate the object with the correct property names.
-  AllocObjectLiteralInst::ObjectPropertyMap propMap{};
+  AllocTypedObjectInst::ObjectPropertyMap propMap{};
   propMap.reserve(type->getFields().size());
-  for (size_t i = 0, e = type->getFields().size(); i < e; ++i) {
-    const auto &field = type->getFields()[i];
+  for (const auto &field : type->getFields()) {
     auto it = storedValues.find(field.name);
     assert(
         it != storedValues.end() &&
         "Missing stored value in typechecked object literal");
-    // Use a literal if possible, otherwise use the default init value.
-    // Avoid putting non-literals here because we want to emit PrStore
-    // instead of DefineOwnPropertyInst.
-    Value *initValue = nullptr;
-    if (llvh::isa<Literal>(it->second.first)) {
-      initValue = it->second.first;
-      // Prevent emitting PrStore later for literals.
-      it->second.first = nullptr;
-      assert(it->second.second == i && "Stored value must have same index");
-    } else {
-      initValue = getDefaultInitValue(field.type);
-    }
-    propMap.emplace_back(Builder.getLiteralString(field.name), initValue);
+    propMap.emplace_back(Builder.getLiteralString(field.name), it->second);
   }
-
-  Value *result = propMap.empty()
-      ? Builder.createAllocObjectLiteralInst()
-      : Builder.createAllocObjectLiteralInst(propMap);
-
-  // Store the remaining non-literal properties.
-  for (const auto &[name, valueAndIdx] : storedValues) {
-    const auto &[storedValue, idx] = valueAndIdx;
-    if (storedValue) {
-      // We only put strings into propMap.
-      auto *name = llvh::cast<LiteralString>(propMap[idx].first);
-      Builder.createPrStoreInst(
-          storedValue,
-          result,
-          idx,
-          name,
-          getTypeContext().isNonPtr(
-              flowTypeToIRType(type->getFields()[idx].type)));
-    }
-  }
+  Value *result =
+      Builder.createAllocTypedObjectInst(propMap, Builder.getEmptySentinel());
 
   // The allocation is typed as plain object; narrow the initialized object to
   // the lowered exactObject type so that it matches typed slots without a

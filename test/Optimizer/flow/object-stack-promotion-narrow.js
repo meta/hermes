@@ -91,7 +91,10 @@ function storePropSelf(n: number): mixed {
   'noinline';
   const o: {x: mixed} = {x: n};
   const a: any = o;
-  a.x = o;
+  // Throws: typed object literals are frozen to untyped code.
+  try {
+    a.x = o;
+  } catch (e) {}
   return o.x;
 }
 
@@ -107,9 +110,8 @@ print(escapes(4), escapes(40));
 // EXEC-NEXT: 8 80
 print(chain(1), chain(10));
 // EXEC-NEXT: 102 102
-const po: any = storePropSelf(5);
-print(storeSelf(3), storeOther(4).o.x, po === po.x, defineOther(6, 'k').x.x);
-// EXEC-NEXT: 3 4 true 6
+print(storeSelf(3), storeOther(4).o.x, storePropSelf(5), defineOther(6, 'k').x.x);
+// EXEC-NEXT: 3 4 5 6
 
 })();
 
@@ -144,14 +146,13 @@ print(storeSelf(3), storeOther(4).o.x, po === po.x, defineOther(6, 'k').x.x);
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
 // CHECK-NEXT:  %1 = LoadParamInst (:number) %n: number
-// CHECK-NEXT:  %2 = AllocObjectLiteralInst (:object) empty: any, "x": string, 0: number
-// CHECK-NEXT:       PrStoreInst %1: number, %2: object, 0: number, "x": string, true: boolean
-// CHECK-NEXT:  %4 = UnionNarrowTrustedInst (:exactObject(x: number)) %2: object
-// CHECK-NEXT:  %5 = LoadFrameInst (:function(number)) %0: environment, [%VS0.sink]: function(number)
-// CHECK-NEXT:  %6 = CallInst [njsf] (:number) %5: function(number), %sink(): functionCode, true: boolean, empty: any, undefined: undefined, 0: number, %4: exactObject(x: number)
-// CHECK-NEXT:  %7 = PrLoadInst (:number) %4: exactObject(x: number), 0: number, "x": string
-// CHECK-NEXT:  %8 = FAddInst (:number) %6: number, %7: number
-// CHECK-NEXT:       ReturnInst %8: number
+// CHECK-NEXT:  %2 = AllocTypedObjectInst (:object) empty: any, "x": string, %1: number
+// CHECK-NEXT:  %3 = UnionNarrowTrustedInst (:exactObject(x: number)) %2: object
+// CHECK-NEXT:  %4 = LoadFrameInst (:function(number)) %0: environment, [%VS0.sink]: function(number)
+// CHECK-NEXT:  %5 = CallInst [njsf] (:number) %4: function(number), %sink(): functionCode, true: boolean, empty: any, undefined: undefined, 0: number, %3: exactObject(x: number)
+// CHECK-NEXT:  %6 = PrLoadInst (:number) %3: exactObject(x: number), 0: number, "x": string
+// CHECK-NEXT:  %7 = FAddInst (:number) %5: number, %6: number
+// CHECK-NEXT:       ReturnInst %7: number
 // CHECK-NEXT:function_end
 
 // CHECK:function chain(n: number): number [allCallsitesKnownInStrictMode,typed]
@@ -169,42 +170,44 @@ print(storeSelf(3), storeOther(4).o.x, po === po.x, defineOther(6, 'k').x.x);
 
 // CHECK:function storeSelf(n: number): number [allCallsitesKnownInStrictMode,typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = AllocObjectLiteralInst (:object) empty: any, "x": string, 0: number, "self": string, null: null
-// CHECK-NEXT:       PrStoreInst 3: number, %0: object, 0: number, "x": string, true: boolean
-// CHECK-NEXT:  %2 = UnionNarrowTrustedInst (:exactObject(x: number, self: any)) %0: object
-// CHECK-NEXT:       PrStoreInst %2: exactObject(x: number, self: any), %2: exactObject(x: number, self: any), 1: number, "self": string, false: boolean
-// CHECK-NEXT:  %4 = PrLoadInst (:number) %2: exactObject(x: number, self: any), 0: number, "x": string
-// CHECK-NEXT:       ReturnInst %4: number
+// CHECK-NEXT:  %0 = AllocTypedObjectInst (:object) empty: any, "x": string, 3: number, "self": string, null: null
+// CHECK-NEXT:  %1 = UnionNarrowTrustedInst (:exactObject(x: number, self: any)) %0: object
+// CHECK-NEXT:       PrStoreInst %1: exactObject(x: number, self: any), %1: exactObject(x: number, self: any), 1: number, "self": string, false: boolean
+// CHECK-NEXT:  %3 = PrLoadInst (:number) %1: exactObject(x: number, self: any), 0: number, "x": string
+// CHECK-NEXT:       ReturnInst %3: number
 // CHECK-NEXT:function_end
 
 // CHECK:function storeOther(n: number): exactObject(o: exactObject(x: number)) [allCallsitesKnownInStrictMode,typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = AllocObjectLiteralInst (:object) empty: any, "x": string, 0: number
-// CHECK-NEXT:       PrStoreInst 4: number, %0: object, 0: number, "x": string, true: boolean
-// CHECK-NEXT:  %2 = UnionNarrowTrustedInst (:exactObject(x: number)) %0: object
-// CHECK-NEXT:  %3 = AllocObjectLiteralInst (:object) empty: any, "o": string, 0: number
-// CHECK-NEXT:       PrStoreInst %2: exactObject(x: number), %3: object, 0: number, "o": string, false: boolean
-// CHECK-NEXT:  %5 = UnionNarrowTrustedInst (:exactObject(o: exactObject(x: number))) %3: object
-// CHECK-NEXT:       ReturnInst %5: exactObject(o: exactObject(x: number))
+// CHECK-NEXT:  %0 = AllocTypedObjectInst (:object) empty: any, "x": string, 4: number
+// CHECK-NEXT:  %1 = UnionNarrowTrustedInst (:exactObject(x: number)) %0: object
+// CHECK-NEXT:  %2 = AllocTypedObjectInst (:object) empty: any, "o": string, %1: exactObject(x: number)
+// CHECK-NEXT:  %3 = UnionNarrowTrustedInst (:exactObject(o: exactObject(x: number))) %2: object
+// CHECK-NEXT:       ReturnInst %3: exactObject(o: exactObject(x: number))
 // CHECK-NEXT:function_end
 
 // CHECK:function storePropSelf(n: number): any [allCallsitesKnownInStrictMode,typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = AllocObjectLiteralInst (:object) empty: any, "x": string, undefined: undefined
-// CHECK-NEXT:       PrStoreInst 5: number, %0: object, 0: number, "x": string, false: boolean
-// CHECK-NEXT:  %2 = UnionNarrowTrustedInst (:exactObject(x: any)) %0: object
-// CHECK-NEXT:       StorePropertyStrictInst %2: exactObject(x: any), %2: exactObject(x: any), "x": string
-// CHECK-NEXT:  %4 = PrLoadInst (:any) %2: exactObject(x: any), 0: number, "x": string
-// CHECK-NEXT:       ReturnInst %4: any
+// CHECK-NEXT:  %0 = AllocTypedObjectInst (:object) empty: any, "x": string, 5: number
+// CHECK-NEXT:  %1 = UnionNarrowTrustedInst (:exactObject(x: any)) %0: object
+// CHECK-NEXT:       TryStartInst %BB1, %BB3
+// CHECK-NEXT:%BB1:
+// CHECK-NEXT:  %3 = CatchInst (:any)
+// CHECK-NEXT:       BranchInst %BB2
+// CHECK-NEXT:%BB2:
+// CHECK-NEXT:  %5 = PrLoadInst (:any) %1: exactObject(x: any), 0: number, "x": string
+// CHECK-NEXT:       ReturnInst %5: any
+// CHECK-NEXT:%BB3:
+// CHECK-NEXT:       StorePropertyStrictInst %1: exactObject(x: any), %1: exactObject(x: any), "x": string
+// CHECK-NEXT:       TryEndInst %BB1, %BB2
 // CHECK-NEXT:function_end
 
 // CHECK:function defineOther(n: number, k: string): object [allCallsitesKnownInStrictMode,typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = AllocObjectLiteralInst (:object) empty: any, "x": string, 0: number
-// CHECK-NEXT:       PrStoreInst 6: number, %0: object, 0: number, "x": string, true: boolean
-// CHECK-NEXT:  %2 = UnionNarrowTrustedInst (:exactObject(x: number)) %0: object
-// CHECK-NEXT:  %3 = AllocObjectLiteralInst (:object) empty: any
-// CHECK-NEXT:       DefineOwnPropertyInst 1: number, %3: object, "k": string, true: boolean
-// CHECK-NEXT:       DefineOwnPropertyInst %2: exactObject(x: number), %3: object, "x": string, true: boolean
-// CHECK-NEXT:       ReturnInst %3: object
+// CHECK-NEXT:  %0 = AllocTypedObjectInst (:object) empty: any, "x": string, 6: number
+// CHECK-NEXT:  %1 = UnionNarrowTrustedInst (:exactObject(x: number)) %0: object
+// CHECK-NEXT:  %2 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:       DefineOwnPropertyInst 1: number, %2: object, "k": string, true: boolean
+// CHECK-NEXT:       DefineOwnPropertyInst %1: exactObject(x: number), %2: object, "x": string, true: boolean
+// CHECK-NEXT:       ReturnInst %2: object
 // CHECK-NEXT:function_end

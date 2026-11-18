@@ -48,7 +48,7 @@ return function main() {
 // CHECK-NEXT:  %15 = LoadFrameInst (:any) %1: environment, [%VS1.d]: any
 // CHECK-NEXT:  %16 = CheckedTypeCastInst (:object) %15: any, type(object)
 // CHECK-NEXT:        StorePropertyStrictInst 3: number, %16: object, "y": string
-// CHECK-NEXT:  %18 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:  %18 = AllocTypedObjectInst (:object) empty: any
 // CHECK-NEXT:  %19 = UnionNarrowTrustedInst (:exactObject()) %18: object
 // CHECK-NEXT:        StoreFrameInst %1: environment, %19: exactObject(), [%VS1.f]: any
 // CHECK-NEXT:  %21 = LoadFrameInst (:any) %1: environment, [%VS1.f]: any

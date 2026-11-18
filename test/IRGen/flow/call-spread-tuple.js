@@ -40,7 +40,7 @@ function emptyTuple(t: [number, string]): void {
 // CHECK-NEXT:  %1 = AllocStackInst (:any) $?anon_0_ret: any
 // CHECK-NEXT:       StoreStackInst undefined: undefined, %1: any
 // CHECK-NEXT:  %3 = CreateFunctionInst (:object) %0: environment, %VS0: any, %""(): functionCode
-// CHECK-NEXT:  %4 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:  %4 = AllocTypedObjectInst (:object) empty: any
 // CHECK-NEXT:  %5 = UnionNarrowTrustedInst (:exactObject()) %4: object
 // CHECK-NEXT:  %6 = CallInst [njsf] (:any) %3: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %5: exactObject()
 // CHECK-NEXT:       StoreStackInst %6: any, %1: any
@@ -123,7 +123,7 @@ function emptyTuple(t: [number, string]): void {
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS1: any, %parentScope: environment
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS5: any, %0: environment
-// CHECK-NEXT:  %2 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:  %2 = AllocTypedObjectInst (:object) empty: any
 // CHECK-NEXT:  %3 = UnionNarrowTrustedInst (:tuple()) %2: object
 // CHECK-NEXT:       ReturnInst %3: tuple()
 // CHECK-NEXT:function_end
