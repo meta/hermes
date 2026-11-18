@@ -100,6 +100,30 @@ static inline SHLegacyValue _sh_shv_unbox_inline(
   return _sh_ljs_double(boxedDouble->value_);
 }
 
+/// Like _sh_shv_unbox_inline, but \p shv must be a pointer.
+static inline SHLegacyValue _sh_shv_unbox_ptr_inline(
+    SHRuntime *shr,
+    SHGCSmallHermesValue shv) {
+  enum HV32Tag tag = _sh_shv_get_tag(shv);
+  assert(
+      tag != HV32Tag_CompressedHV64 && tag <= HV32Tag_Object &&
+      "value must be a pointer");
+  void *ptr = _sh_cp_decode_non_null(shr, _sh_shv_get_pointer(shv));
+  return _sh_ljs_encode_raw_tag(
+      (uint64_t)(uintptr_t)ptr, _sh_shv_tag_to_hv64_tag(tag));
+}
+
+/// Like _sh_shv_unbox_inline, but \p shv must not be a number or symbol.
+static inline SHLegacyValue _sh_shv_unbox_nonnumsym_inline(
+    SHRuntime *shr,
+    SHGCSmallHermesValue shv) {
+  if (_sh_shv_get_tag(shv) == HV32Tag_CompressedHV64) {
+    SHLegacyValue result = {.raw = _sh_shv_decompress_hv64(shv)};
+    return result;
+  }
+  return _sh_shv_unbox_ptr_inline(shr, shv);
+}
+
 #else
 
 /// Convert SHGCSmallHermesValue to SHLegacyValue (mirrors
@@ -110,6 +134,22 @@ static inline SHLegacyValue _sh_shv_unbox_inline(
   // When HERMESVM_BOXED_DOUBLES is disabled, SHGCSmallHermesValue is
   // SHLegacyValue So this is a no-op, just return the argument
   (void)shr; // unused parameter
+  return shv;
+}
+
+/// Like _sh_shv_unbox_inline, but \p shv must be a pointer.
+static inline SHLegacyValue _sh_shv_unbox_ptr_inline(
+    SHRuntime *shr,
+    SHGCSmallHermesValue shv) {
+  (void)shr;
+  return shv;
+}
+
+/// Like _sh_shv_unbox_inline, but \p shv must not be a number or symbol.
+static inline SHLegacyValue _sh_shv_unbox_nonnumsym_inline(
+    SHRuntime *shr,
+    SHGCSmallHermesValue shv) {
+  (void)shr;
   return shv;
 }
 

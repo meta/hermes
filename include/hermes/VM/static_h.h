@@ -760,23 +760,42 @@ _sh_prload(SHRuntime *shr, SHLegacyValue source, uint32_t propIndex) {
   }
 }
 
-static inline SHLegacyValue
-_sh_prload_inline(SHRuntime *shr, SHLegacyValue source, uint32_t propIndex) {
+/// \return the still-boxed value of property slot \p propIndex of \p source.
+static inline SHGCSmallHermesValue
+_sh_prload_shv(SHRuntime *shr, SHLegacyValue source, uint32_t propIndex) {
   if (propIndex < HERMESVM_DIRECT_PROPERTY_SLOTS) {
-    SHGCSmallHermesValue shv =
-        ((SHJSObjectAndDirectProps *)_sh_ljs_get_pointer(source))
-            ->directProps[propIndex];
-    return _sh_shv_unbox_inline(shr, shv);
+    return ((SHJSObjectAndDirectProps *)_sh_ljs_get_pointer(source))
+        ->directProps[propIndex];
   } else {
     // Inline indirect property access
     SHCompressedPointer propStoragePtr = {
         .raw = ((SHJSObject *)_sh_ljs_get_pointer(source))->propStorage};
     SHArrayStorageSmall *propStorage =
         (SHArrayStorageSmall *)_sh_cp_decode_non_null(shr, propStoragePtr);
-    SHGCSmallHermesValue shv =
-        propStorage->storage[propIndex - HERMESVM_DIRECT_PROPERTY_SLOTS];
-    return _sh_shv_unbox_inline(shr, shv);
+    return propStorage->storage[propIndex - HERMESVM_DIRECT_PROPERTY_SLOTS];
   }
+}
+
+static inline SHLegacyValue
+_sh_prload_inline(SHRuntime *shr, SHLegacyValue source, uint32_t propIndex) {
+  return _sh_shv_unbox_inline(shr, _sh_prload_shv(shr, source, propIndex));
+}
+
+/// Like _sh_prload_inline, but the property must not be a number or symbol.
+static inline SHLegacyValue _sh_prload_nonnumsym_inline(
+    SHRuntime *shr,
+    SHLegacyValue source,
+    uint32_t propIndex) {
+  return _sh_shv_unbox_nonnumsym_inline(
+      shr, _sh_prload_shv(shr, source, propIndex));
+}
+
+/// Like _sh_prload_inline, but the property must be a pointer.
+static inline SHLegacyValue _sh_prload_ptr_inline(
+    SHRuntime *shr,
+    SHLegacyValue source,
+    uint32_t propIndex) {
+  return _sh_shv_unbox_ptr_inline(shr, _sh_prload_shv(shr, source, propIndex));
 }
 
 SHERMES_EXPORT SHLegacyValue _sh_ljs_try_get_by_id_rjs(

@@ -2354,7 +2354,17 @@ class InstrGen {
     os_.indent(2);
     generateValue(inst);
     os_ << " = ";
-    os_ << "_sh_prload(shr, ";
+    // Only inline loads whose HV32 unboxing is cheap; numbers and symbols
+    // would inline every unboxing path.
+    Type type = inst.getType();
+    if (options_.smallC)
+      os_ << "_sh_prload(shr, ";
+    else if (type.isObjectType() || type.isStringType())
+      os_ << "_sh_prload_ptr_inline(shr, ";
+    else if (!typeCtx_.canBeNumber(type) && !typeCtx_.canBeSymbol(type))
+      os_ << "_sh_prload_nonnumsym_inline(shr, ";
+    else
+      os_ << "_sh_prload(shr, ";
     generateRegister(*inst.getObject());
     os_ << ", " << inst.getPropIndex() << ");\n";
   }
