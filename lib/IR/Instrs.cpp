@@ -455,9 +455,10 @@ void BaseSwitchImmInst::setSuccessorImpl(unsigned idx, BasicBlock *B) {
 }
 
 bool Instruction::isIdenticalTo(const Instruction *RHS) const {
-  // Check if both instructions have the same kind and number of operands.
-  // This should filter out most cases.
-  if (getKind() != RHS->getKind() || getNumOperands() != RHS->getNumOperands())
+  // Check if both instructions have the same kind, type and number of
+  // operands. This should filter out most cases.
+  if (getKind() != RHS->getKind() || getType() != RHS->getType() ||
+      getNumOperands() != RHS->getNumOperands())
     return false;
 
   // Check operands.
