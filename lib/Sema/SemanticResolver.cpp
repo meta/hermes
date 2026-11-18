@@ -2568,8 +2568,12 @@ void SemanticResolver::validateAndDeclareIdentifier(
 
     // When to create a new declaration?
     //
-    // Var, Var -> use prev
-    if (Decl::isKindVarLike(prevKind) && Decl::isKindVarLike(kind)) {
+    // Var, Var -> use prev, except Param, Var in another scope -> declare new
+    //   Parameters have their own scope only when there are parameter
+    //   expressions, and then a body "var" is a separate binding
+    //   (ES2026 10.2.11, step 30.e).
+    if (Decl::isKindVarLike(prevKind) && Decl::isKindVarLike(kind) &&
+        (prevKind != Decl::Kind::Parameter || sameScope)) {
       decl = prevName.decl;
     }
     // Var, ScopedFunc -> if non-param non-strict or same scope, then use prev,

@@ -981,11 +981,29 @@ void ESTreeIRGen::emitScopeDeclarations(sema::LexicalScope *scope) {
 
     if (init) {
       assert(var);
-      Builder.createStoreFrameInst(
-          curFunction()->curScope(),
-          var->getObeysTDZ() ? (Literal *)Builder.getLiteralEmpty()
-                             : (Literal *)Builder.getLiteralUndefined(),
-          var);
+      Value *initValue = var->getObeysTDZ()
+          ? (Value *)Builder.getLiteralEmpty()
+          : (Value *)Builder.getLiteralUndefined();
+      // With parameter expressions, a body "var" that shares a parameter's name
+      // is a separate binding initialized from the parameter (ES2026 10.2.11,
+      // step 30.e.i.4).
+      sema::FunctionInfo *funcInfo = scope->parentFunction;
+      sema::LexicalScope *separateParamScope =
+          funcInfo->hasParameterExpressions &&
+              scope == funcInfo->getFunctionBodyScope()
+          ? funcInfo->getParameterScope()
+          : nullptr;
+      if (separateParamScope && decl->kind == sema::Decl::Kind::Var) {
+        for (sema::Decl *param : separateParamScope->decls) {
+          if (param->kind != sema::Decl::Kind::Parameter)
+            break;
+          if (param->name == decl->name) {
+            initValue = emitLoad(getDeclData(param), false);
+            break;
+          }
+        }
+      }
+      Builder.createStoreFrameInst(curFunction()->curScope(), initValue, var);
     }
 
     // A typed class's static elements and non-virtual methods live in
