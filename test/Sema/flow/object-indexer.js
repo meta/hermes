@@ -66,10 +66,6 @@ function delWO(o: WO): void {
 // CHECK-NEXT:%function.6 = function(o: %object.4): number
 // CHECK-NEXT:%function.7 = function(o: %object.5): void
 // CHECK-NEXT:%object.8 = object({
-// CHECK-NEXT:  a: number
-// CHECK-NEXT:  b: number
-// CHECK-NEXT:})
-// CHECK-NEXT:%object.9 = object({
 // CHECK-NEXT:})
 
 // CHECK:SemContext
@@ -113,7 +109,7 @@ function delWO(o: WO): void {
 // CHECK-NEXT:                    NumberTypeAnnotation
 // CHECK-NEXT:        VariableDeclaration
 // CHECK-NEXT:            VariableDeclarator
-// CHECK-NEXT:                ObjectExpression : %object.8
+// CHECK-NEXT:                ObjectExpression : %object.2
 // CHECK-NEXT:                    Property
 // CHECK-NEXT:                        Id 'a'
 // CHECK-NEXT:                        NumericLiteral : 1
@@ -141,7 +137,7 @@ function delWO(o: WO): void {
 // CHECK-NEXT:                    StringTypeAnnotation
 // CHECK-NEXT:        VariableDeclaration
 // CHECK-NEXT:            VariableDeclarator
-// CHECK-NEXT:                ObjectExpression : %object.9
+// CHECK-NEXT:                ObjectExpression : %object.8
 // CHECK-NEXT:                Id 'nd' [D:E:%d.4 'nd']
 // CHECK-NEXT:        VariableDeclaration
 // CHECK-NEXT:            VariableDeclarator
@@ -189,7 +185,7 @@ function delWO(o: WO): void {
 // CHECK-NEXT:                        NumericLiteral : 1
 // CHECK-NEXT:        VariableDeclaration
 // CHECK-NEXT:            VariableDeclarator
-// CHECK-NEXT:                ObjectExpression : %object.9
+// CHECK-NEXT:                ObjectExpression : %object.8
 // CHECK-NEXT:                Id 'empty' [D:E:%d.8 'empty']
 // CHECK-NEXT:        VariableDeclaration
 // CHECK-NEXT:            VariableDeclarator

@@ -31,20 +31,16 @@ let merged: {[string]: number | boolean} = {...d, ...plain};
 // CHECK-NEXT:  [string]: number
 // CHECK-NEXT:})
 // CHECK-NEXT:%object.3 = object({
-// CHECK-NEXT:  [string]: %union.7
+// CHECK-NEXT:  [string]: %union.6
 // CHECK-NEXT:})
 // CHECK-NEXT:%object.4 = object({
 // CHECK-NEXT:  a: boolean
 // CHECK-NEXT:})
 // CHECK-NEXT:%object.5 = object({
-// CHECK-NEXT:  [string]: %union.8
+// CHECK-NEXT:  [string]: %union.7
 // CHECK-NEXT:})
-// CHECK-NEXT:%object.6 = object({
-// CHECK-NEXT:  a: number
-// CHECK-NEXT:  b: number
-// CHECK-NEXT:})
-// CHECK-NEXT:%union.7 = union(string | number)
-// CHECK-NEXT:%union.8 = union(boolean | number)
+// CHECK-NEXT:%union.6 = union(string | number)
+// CHECK-NEXT:%union.7 = union(boolean | number)
 
 // CHECK:SemContext
 // CHECK-NEXT:Func strict mayReachImplicitReturn
@@ -63,7 +59,7 @@ let merged: {[string]: number | boolean} = {...d, ...plain};
 // CHECK-NEXT:    BlockStatement
 // CHECK-NEXT:        VariableDeclaration
 // CHECK-NEXT:            VariableDeclarator
-// CHECK-NEXT:                ObjectExpression : %object.6
+// CHECK-NEXT:                ObjectExpression : %object.2
 // CHECK-NEXT:                    Property
 // CHECK-NEXT:                        Id 'a'
 // CHECK-NEXT:                        NumericLiteral : 1

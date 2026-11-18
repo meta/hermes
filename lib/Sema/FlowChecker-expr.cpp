@@ -1717,6 +1717,16 @@ class FlowChecker::ExprVisitor {
         f.type = outer_.widenLiteralType(f.type);
     }
 
+    // A literal constrained to an indexer is a fresh dictionary, so its named
+    // fields fold into the indexer. Objects with named fields only flow into
+    // read-only indexers.
+    if (indexerValueTypes.empty() && !fields.empty() && constraintObjectType &&
+        constraintObjectType->hasIndexer()) {
+      indexerKeyType = constraintObjectType->getIndexer()->keyType;
+      for (const auto &f : fields)
+        indexerValueTypes.insert(f.type);
+    }
+
     // Produce an indexer object if any spread had an indexer or any computed
     // property was present. The key and value types are the unions of all
     // contributing key and value types.
@@ -3827,6 +3837,16 @@ class FlowChecker::ExprVisitor {
       return;
     }
 
+    // The arguments are visited once the constructor is known, so that fresh
+    // literals are constrained by its parameter types. Error paths visit them
+    // unconstrained.
+    bool argsVisited = false;
+    auto visitArgsUnconstrained = [this, node, &argsVisited]() {
+      if (!argsVisited)
+        visitESTreeNodeList(*this, node->_arguments, node, nullptr);
+      argsVisited = true;
+    };
+
     auto *identCallee = llvh::dyn_cast<ESTree::IdentifierNode>(node->_callee);
     sema::Decl *genericDecl = nullptr;
     if (identCallee && outer_.getDecl(identCallee)->generic)
@@ -3840,6 +3860,7 @@ class FlowChecker::ExprVisitor {
             outer_.getGenericInfoMustExist(genericDecl).numTypeParams) {
       auto [visited, typeArgs] =
           outer_.inferTypeArgumentsForGenericClassNew(node, genericDecl);
+      argsVisited = visited;
       if (typeArgs.empty()) {
         if (!visited)
           outer_.sm_.error(
@@ -3850,10 +3871,11 @@ class FlowChecker::ExprVisitor {
       outer_.resolveGenericClassSpecializationWithParsedTypes(
           identCallee, node->getSourceRange(), typeArgs, genericDecl);
     } else {
-      visitESTreeChildren(*this, node, nullptr);
+      visitESTreeNode(*this, node->_callee, node, nullptr);
       // Resolve generics using type arguments if necessary.
       if (genericDecl) {
         if (!node->_typeArguments) {
+          visitArgsUnconstrained();
           outer_.sm_.error(
               node->_callee->getSourceRange(), "ft: type arguments required");
           return;
@@ -3866,6 +3888,7 @@ class FlowChecker::ExprVisitor {
       }
     }
     if (!identCallee && node->_typeArguments) {
+      visitArgsUnconstrained();
       // Generics handled above.
       outer_.sm_.error(
           node->_callee->getSourceRange(),
@@ -3876,11 +3899,13 @@ class FlowChecker::ExprVisitor {
     Type *calleeType = outer_.getNodeTypeOrAny(node->_callee);
     // If the callee has no type, we have nothing to do/check.
     if (llvh::isa<AnyType>(calleeType->info)) {
+      visitArgsUnconstrained();
       checkMixedSpreads(node->_arguments);
       return;
     }
 
     if (!llvh::isa<ClassConstructorType>(calleeType->info)) {
+      visitArgsUnconstrained();
       outer_.sm_.error(
           node->_callee->getSourceRange(),
           "ft: callee is not a class constructor");
@@ -3900,12 +3925,16 @@ class FlowChecker::ExprVisitor {
         break;
     }
     if (consFType) {
+      auto params = llvh::cast<TypedFunctionType>(consFType->info)->getParams();
+      if (!argsVisited)
+        visitCallArgumentsWithConstraints(node->_arguments, node, params);
       checkCallArgumentTypes(
-          llvh::cast<TypedFunctionType>(consFType->info)->getParams(),
+          params,
           node,
           node->_arguments,
           "class " + classTypeInfo->getClassNameOrDefault() + " constructor");
     } else if (!node->_arguments.empty()) {
+      visitArgsUnconstrained();
       outer_.sm_.error(
           node->getSourceRange(),
           "ft: class " + classTypeInfo->getClassNameOrDefault() +

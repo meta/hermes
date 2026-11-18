@@ -1916,7 +1916,7 @@ void FlowChecker::visitClassProperty(
       ScopeRAII staticTypeParamScope(*this);
       if (isStatic)
         shadowClassTypeParamsInStatic();
-      visitExpression(value, node, nullptr);
+      visitExpression(value, node, flowContext_.findNodeType(node));
     }
 
     Type *lt = getNodeTypeOrAny(node);
@@ -3381,8 +3381,11 @@ FlowChecker::CanFlowResult FlowChecker::canAFlowIntoB(
     } else {
       // Source has named fields (possibly none). An empty object flows into any
       // indexer; a named field requires a string-keyed indexer since field
-      // names are strings.
-      if (!a->getFields().empty() && !llvh::isa<StringType>(bi.keyType->info))
+      // names are strings, and a read-only one since a delete through the
+      // indexer would break the field's type.
+      if (!a->getFields().empty() &&
+          (!llvh::isa<StringType>(bi.keyType->info) ||
+           bi.variance != FieldVariance::ReadOnly))
         return {};
       for (const auto &f : a->getFields()) {
         if (!valueFlows(f.type, f.variance, bi.valueType, bi.variance))

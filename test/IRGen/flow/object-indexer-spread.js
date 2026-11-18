@@ -26,9 +26,9 @@ return function main() {
 // CHECK-NEXT:  %1 = CreateScopeInst (:environment) %VS1: any, %0: environment
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.d]: any
 // CHECK-NEXT:       StoreFrameInst %1: environment, undefined: undefined, [%VS1.r]: any
-// CHECK-NEXT:  %4 = AllocObjectLiteralInst (:object) empty: any, "a": string, 1: number
-// CHECK-NEXT:  %5 = UnionNarrowTrustedInst (:exactObject(a: number)) %4: object
-// CHECK-NEXT:       StoreFrameInst %1: environment, %5: exactObject(a: number), [%VS1.d]: any
+// CHECK-NEXT:  %4 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:       DefineOwnPropertyInst 1: number, %4: object, "a": string, true: boolean
+// CHECK-NEXT:       StoreFrameInst %1: environment, %4: object, [%VS1.d]: any
 // CHECK-NEXT:  %7 = AllocObjectLiteralInst (:object) empty: any
 // CHECK-NEXT:  %8 = LoadFrameInst (:any) %1: environment, [%VS1.d]: any
 // CHECK-NEXT:  %9 = CheckedTypeCastInst (:object) %8: any, type(object)

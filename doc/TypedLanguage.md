@@ -109,6 +109,8 @@ Reads yield `T` but are checked by a checked cast at runtime (so a read of a mis
 
 Non-computed access (`dict.x`) routes through the indexer using a `string` key, so it requires a `string`-keyed indexer.
 
+An object with named properties flows into a `string`-keyed indexer type only if the indexer is read-only, since `delete` through the indexer would break the properties' types. An object literal constrained to an indexer type is itself an indexer object.
+
 Spreading an object that has an indexer produces an object with an indexer of the same key type. If the result also has named properties, they fold into the indexer and its value type becomes the union of all the value types:
 ```
 var d: {[string]: number} = {};

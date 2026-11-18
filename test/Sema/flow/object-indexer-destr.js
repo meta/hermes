@@ -24,11 +24,6 @@ let {...rest2} = obj;
 // CHECK-NEXT:%object.2 = object({
 // CHECK-NEXT:  [string]: number
 // CHECK-NEXT:})
-// CHECK-NEXT:%object.3 = object({
-// CHECK-NEXT:  a: number
-// CHECK-NEXT:  b: number
-// CHECK-NEXT:  c: number
-// CHECK-NEXT:})
 
 // CHECK:SemContext
 // CHECK-NEXT:Func strict mayReachImplicitReturn
@@ -47,7 +42,7 @@ let {...rest2} = obj;
 // CHECK-NEXT:            StringLiteral : "use strict"
 // CHECK-NEXT:        VariableDeclaration
 // CHECK-NEXT:            VariableDeclarator
-// CHECK-NEXT:                ObjectExpression : %object.3
+// CHECK-NEXT:                ObjectExpression : %object.2
 // CHECK-NEXT:                    Property
 // CHECK-NEXT:                        Id 'a'
 // CHECK-NEXT:                        NumericLiteral : 1
