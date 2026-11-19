@@ -1326,9 +1326,12 @@ class ESTreeIRGen {
     ShortCircuitAndKind, // &&=
     NullishCoalesceKind, // ??=
   };
+  /// \param left the LHS expression the \p lref was created from, with any
+  ///   ImplicitCheckedCast stripped. Used to type the load.
   Value *genLogicalAssignmentExpr(
       ESTree::AssignmentExpressionNode *AE,
       LogicalAssignmentOp assignmentKind,
+      ESTree::Node *left,
       LReference lref,
       Identifier nameHint);
   Value *genConditionalExpr(ESTree::ConditionalExpressionNode *C);

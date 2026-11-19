@@ -3097,7 +3097,7 @@ Value *ESTreeIRGen::genAssignmentExpr(ESTree::AssignmentExpressionNode *AE) {
           .Case("\?\?=", LogicalAssignmentOp::NullishCoalesceKind)
           .Default(llvh::None);
   if (logicalAssign) {
-    return genLogicalAssignmentExpr(AE, *logicalAssign, lref, nameHint);
+    return genLogicalAssignmentExpr(AE, *logicalAssign, left, lref, nameHint);
   }
 
   auto AssignmentKind = BinaryOperatorInst::parseAssignmentOperator(opStr);
@@ -3168,6 +3168,7 @@ Value *ESTreeIRGen::genRegExpLiteral(ESTree::RegExpLiteralNode *RE) {
 Value *ESTreeIRGen::genLogicalAssignmentExpr(
     ESTree::AssignmentExpressionNode *AE,
     LogicalAssignmentOp assignmentKind,
+    ESTree::Node *left,
     LReference lref,
     Identifier nameHint) {
   // Logical assignment expressions must use short-circuiting logic.
@@ -3175,7 +3176,7 @@ Value *ESTreeIRGen::genLogicalAssignmentExpr(
   BasicBlock *assignBB = Builder.createBasicBlock(Builder.getFunction());
   // BB which simply continues without performing the assignment.
   BasicBlock *continueBB = Builder.createBasicBlock(Builder.getFunction());
-  auto *lhs = lref.emitLoad();
+  auto *lhs = enforceExprType(lref.emitLoad(), left);
 
   PhiInst::ValueListType values;
   PhiInst::BasicBlockListType blocks;

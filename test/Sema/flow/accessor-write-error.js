@@ -41,6 +41,12 @@ a.g += 1;
 // CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot assign to readonly property g
 a.g++;
 // CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot assign to readonly property g
+a.g ||= 1;
+// CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot assign to readonly property g
+a.g &&= 1;
+// CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot assign to readonly property g
+a.g ??= 1;
+// CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot assign to readonly property g
 
 // Statics reach a different IRGen path: the write became a plain
 // StorePropertyStrict on the class object rather than a setter call.
@@ -48,17 +54,23 @@ A.sg = 1;
 // CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot assign to readonly property sg
 A.sg++;
 // CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot assign to readonly property sg
+A.sg ??= 1;
+// CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot assign to readonly property sg
 
 // A setter-only accessor rejects reads, including the read half of a
-// compound assignment and of ++.
+// compound assignment, of a logical assignment, and of ++.
 let r: number = a.s;
 // CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:19: error: ft: cannot read writeonly property s
 a.s += 1;
 // CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot read writeonly property s
 a.s++;
 // CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot read writeonly property s
+a.s ||= 1;
+// CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot read writeonly property s
 let sr: number = A.ss;
 // CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:20: error: ft: cannot read writeonly property ss
+A.ss ??= 1;
+// CHECK: {{.*}}accessor-write-error.js:[[@LINE-1]]:3: error: ft: cannot read writeonly property ss
 
 // A plain `=` to a setter-only accessor is a pure write, so it is allowed.
 a.s = 1;

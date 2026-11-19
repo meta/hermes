@@ -2365,15 +2365,12 @@ class FlowChecker::ExprVisitor {
     outer_.setNodeType(node, res);
   }
 
-  void visit(
-      ESTree::LogicalExpressionNode *node,
-      ESTree::Node *parent,
-      Type *constraint) {
-    visitESTreeNode(*this, node->_left, node, constraint);
-    visitESTreeNode(*this, node->_right, node, constraint);
-    Type *left = outer_.flowContext_.getNodeTypeOrAny(node->_left);
-    Type *right = outer_.flowContext_.getNodeTypeOrAny(node->_right);
-
+  /// \return the result type of a short-circuiting operation whose operands
+  /// have types \p left and \p right. The result is the union of both sides,
+  /// however when \p dropLeftNullish is set (the operator is ?? or ||, or
+  /// their assignment forms) we can discard any null/void that only appears
+  /// on the left, because those can never be returned via the left.
+  Type *shortCircuitResultType(Type *left, Type *right, bool dropLeftNullish) {
     auto hasNull = [](TypeInfo *t) -> bool {
       if (llvh::isa<NullType>(t))
         return true;
@@ -2390,27 +2387,33 @@ class FlowChecker::ExprVisitor {
       return false;
     };
 
-    // The result of a logical expression is the union of both sides,
-    // however if the operator is ?? or ||, then we can discard any null/void
-    // that only appears on the left, because those can never be returned via
-    // the left.
     FlowContext::UnionExcludes excludes{};
-    if (node->_operator == outer_.kw_.identLogicalOr ||
-        node->_operator == outer_.kw_.identNullishCoalesce) {
+    if (dropLeftNullish) {
       if (hasVoid(left->info) && !hasVoid(right->info))
         excludes.excludeVoid = true;
       if (hasNull(left->info) && !hasNull(right->info))
         excludes.excludeNull = true;
     }
 
-    Type *types[2]{
-        outer_.flowContext_.getNodeTypeOrAny(node->_left),
-        outer_.flowContext_.getNodeTypeOrAny(node->_right)};
-
-    Type *unionType = outer_.flowContext_.createType(
+    Type *types[2]{left, right};
+    return outer_.flowContext_.createType(
         outer_.flowContext_.maybeCreateUnion(types, excludes));
+  }
 
-    outer_.setNodeType(node, unionType);
+  void visit(
+      ESTree::LogicalExpressionNode *node,
+      ESTree::Node *parent,
+      Type *constraint) {
+    visitESTreeNode(*this, node->_left, node, constraint);
+    visitESTreeNode(*this, node->_right, node, constraint);
+
+    outer_.setNodeType(
+        node,
+        shortCircuitResultType(
+            outer_.flowContext_.getNodeTypeOrAny(node->_left),
+            outer_.flowContext_.getNodeTypeOrAny(node->_right),
+            node->_operator == outer_.kw_.identLogicalOr ||
+                node->_operator == outer_.kw_.identNullishCoalesce));
   }
 
   enum class LogicalAssignmentOp : uint8_t {
@@ -2430,10 +2433,6 @@ class FlowChecker::ExprVisitor {
             .Case("&&=", LogicalAssignmentOp::ShortCircuitAndKind)
             .Case("\?\?=", LogicalAssignmentOp::NullishCoalesceKind)
             .Default(llvh::None);
-    if (logicalAssign) {
-      outer_.sm_.error(node->getSourceRange(), "ft: unsupported");
-      return;
-    }
 
     // Destructuring evaluates the RHS first. Use its type as the constraint
     // when typing the target pattern.
@@ -2473,9 +2472,9 @@ class FlowChecker::ExprVisitor {
     Type *lt = outer_.getNodeTypeOrAny(node->_left);
 
     Type *res;
-    if (node->_operator->str() == "=") {
+    if (logicalAssign || node->_operator == outer_.kw_.identEqual) {
       if (!destructuringLHS) {
-        // Use the type of the LHS as the constraint for the RHS for '='.
+        // Use the type of the LHS as the constraint for the RHS.
         visitESTreeNode(*this, node->_right, node, lt);
       }
       Type *rt = outer_.getNodeTypeOrAny(node->_right);
@@ -2495,6 +2494,16 @@ class FlowChecker::ExprVisitor {
         // This helps with cases like:
         //  let a: number|string, n: number; n = a = 5;
         res = cf.needCheckedCast ? lt : rt;
+      }
+
+      // The result is the LHS when the operation short circuits, or the newly
+      // assigned value otherwise. '||=' and '??=' only short circuit when the
+      // LHS is not null/void.
+      if (logicalAssign) {
+        res = shortCircuitResultType(
+            lt,
+            res,
+            *logicalAssign != LogicalAssignmentOp::ShortCircuitAndKind);
       }
     } else {
       visitESTreeNode(*this, node->_right, node, nullptr);
