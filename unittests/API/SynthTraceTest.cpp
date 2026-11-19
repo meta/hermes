@@ -337,6 +337,33 @@ TEST_F(SynthTraceTest, CallAndReturn) {
       *records[recordIndex++]);
 }
 
+TEST_F(SynthTraceTest, GetHostFunction) {
+  struct Callable {
+    jsi::Runtime *calledWith = nullptr;
+
+    jsi::Value operator()(
+        jsi::Runtime &runtime,
+        const jsi::Value &,
+        const jsi::Value *,
+        size_t) {
+      calledWith = &runtime;
+      return jsi::Value::undefined();
+    }
+  };
+  auto func = jsi::Function::createFromHostFunction(
+      *rt, jsi::PropNameID::forAscii(*rt, "f"), 0, Callable{});
+  ASSERT_TRUE(func.isHostFunction(*rt));
+  auto *target = func.getHostFunction(*rt).target<Callable>();
+  ASSERT_NE(target, nullptr);
+  func.call(*rt);
+  EXPECT_EQ(target->calledWith, rt.get());
+
+  auto &plain = rt->hermesRuntime();
+  auto plainFunc = jsi::Function::createFromHostFunction(
+      plain, jsi::PropNameID::forAscii(plain, "g"), 0, Callable{});
+  EXPECT_EQ(&plainFunc.getHostFunction(*rt), &plainFunc.getHostFunction(plain));
+}
+
 TEST_F(SynthTraceTest, CallToNative) {
   auto arg = 1;
   SynthTrace::ObjectID functionID;

@@ -204,6 +204,10 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
       unsigned int paramCount,
       jsi::HostFunctionType func) override;
 
+  /// Return the underlying callable for a host function, unwrapping tracing
+  /// if the function was created through this runtime.
+  jsi::HostFunctionType &getHostFunction(const jsi::Function &func) override;
+
   jsi::Value call(
       const jsi::Function &func,
       const jsi::Value &jsThis,
@@ -262,6 +266,8 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
   }
 
  private:
+  class TracingHostFunction;
+
   SynthTrace::TraceValue defTraceValue(const jsi::Value &value) {
     return toTraceValue(value, true);
   }

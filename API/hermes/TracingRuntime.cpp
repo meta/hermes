@@ -10,6 +10,7 @@
 #include <hermes/BCGen/HBC/BCProvider.h>
 #include <hermes/Platform/Logging.h>
 #include <hermes/Support/Algorithms.h>
+#include <hermes/Support/ErrorHandling.h>
 #include <hermes/Support/JSONEmitter.h>
 #include <hermes/VM/Callable.h>
 #include <hermes/VM/HostModel.h>
@@ -1302,53 +1303,61 @@ size_t TracingRuntime::push(
   return retVal;
 }
 
+class TracingRuntime::TracingHostFunction {
+ public:
+  TracingHostFunction(TracingRuntime &runtime, jsi::HostFunctionType func)
+      : runtime_(runtime), func_(std::move(func)) {}
+
+  jsi::HostFunctionType &getHostFunction() {
+    return func_;
+  }
+
+  void setFunctionID(SynthTrace::ObjectID functionID) {
+    functionID_ = functionID;
+  }
+
+  jsi::Value operator()(
+      jsi::Runtime &,
+      const jsi::Value &thisVal,
+      const jsi::Value *args,
+      size_t count);
+
+ private:
+  TracingRuntime &runtime_;
+  jsi::HostFunctionType func_;
+  /// The object id of the function that this is attached to.
+  SynthTrace::ObjectID functionID_{};
+};
+
+jsi::Value TracingRuntime::TracingHostFunction::operator()(
+    jsi::Runtime &,
+    const jsi::Value &thisVal,
+    const jsi::Value *args,
+    size_t count) {
+  runtime_.trace_.emplace_back<SynthTrace::CallToNativeRecord>(
+      runtime_.getTimeSinceStart(),
+      functionID_,
+      runtime_.defTraceValue(thisVal),
+      runtime_.argStringifyer(args, count, true));
+
+  try {
+    auto ret = func_(runtime_, thisVal, args, count);
+    runtime_.trace_.emplace_back<SynthTrace::ReturnFromNativeRecord>(
+        runtime_.getTimeSinceStart(), runtime_.useTraceValue(ret));
+    return ret;
+  } catch (...) {
+    // TODO(T28293178): The trace currently has no way to model
+    // exceptions thrown from C++ code.
+    ::hermes::hermes_fatal("Exception happened in native code during trace");
+  }
+}
+
 jsi::Function TracingRuntime::createFunctionFromHostFunction(
     const jsi::PropNameID &name,
     unsigned int paramCount,
     jsi::HostFunctionType func) {
-  class TracingHostFunction : public jsi::DecoratedHostFunction {
-   public:
-    using jsi::DecoratedHostFunction::DecoratedHostFunction;
-
-    jsi::Value operator()(
-        jsi::Runtime &rt,
-        const jsi::Value &thisVal,
-        const jsi::Value *args,
-        size_t count) {
-      TracingRuntime &trt = static_cast<TracingRuntime &>(decoratedRuntime());
-
-      trt.trace_.emplace_back<SynthTrace::CallToNativeRecord>(
-          trt.getTimeSinceStart(),
-          functionID_,
-          trt.defTraceValue(thisVal),
-          trt.argStringifyer(args, count, true));
-
-      try {
-        auto ret =
-            jsi::DecoratedHostFunction::operator()(rt, thisVal, args, count);
-
-        trt.trace_.emplace_back<SynthTrace::ReturnFromNativeRecord>(
-            trt.getTimeSinceStart(), trt.useTraceValue(ret));
-        return ret;
-      } catch (...) {
-        // TODO(T28293178): The trace currently has no way to model
-        // exceptions thrown from C++ code.
-        ::hermes::hermes_fatal(
-            "Exception happened in native code during trace");
-      }
-    }
-
-    void setFunctionID(SynthTrace::ObjectID functionID) {
-      functionID_ = functionID;
-    }
-
-   private:
-    /// The object id of the function that this is attached to.
-    SynthTrace::ObjectID functionID_;
-  };
-  auto tracer = TracingHostFunction(*this, func);
   auto tfunc = jsi::Function::createFromHostFunction(
-      plain(), name, paramCount, std::move(tracer));
+      plain(), name, paramCount, TracingHostFunction(*this, std::move(func)));
   const auto funcID = defObjectID(tfunc);
   tfunc.getHostFunction(plain()).target<TracingHostFunction>()->setFunctionID(
       funcID);
@@ -1361,6 +1370,15 @@ jsi::Function TracingRuntime::createFunctionFromHostFunction(
 #endif
       paramCount);
   return tfunc;
+}
+
+jsi::HostFunctionType &TracingRuntime::getHostFunction(
+    const jsi::Function &func) {
+  auto &hostFunc = func.getHostFunction(plain());
+  if (auto *tracer = hostFunc.target<TracingHostFunction>()) {
+    return tracer->getHostFunction();
+  }
+  return hostFunc;
 }
 
 jsi::Value TracingRuntime::call(
