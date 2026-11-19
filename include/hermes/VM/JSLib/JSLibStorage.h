@@ -9,7 +9,11 @@
 #define HERMES_VM_JSLIB_RUNTIMECOMMONSTORAGE_H
 
 #include "hermes/VM/JSLib/DateCache.h"
+#ifdef HERMES_ENABLE_INTL
+#include "hermes/Platform/Intl/PlatformIntl.h"
+#endif
 
+#include <memory>
 #include <random>
 
 namespace hermes {
@@ -31,6 +35,16 @@ struct JSLibStorage {
 
   /// Time zone offset cache used in conversion between UTC and local time.
   LocalTimeOffsetCache localTimeOffsetCache;
+
+#ifdef HERMES_ENABLE_INTL
+  /// The collator String.prototype.localeCompare created last, with the
+  /// normalized locales and options it was created from.
+  struct {
+    std::vector<std::u16string> locales;
+    platform_intl::Options options;
+    std::unique_ptr<platform_intl::Collator> collator;
+  } localeCompareCollator;
+#endif
 };
 
 } // namespace vm

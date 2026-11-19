@@ -17,6 +17,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.util.Locale;
 import java.util.stream.Collectors;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -57,6 +58,50 @@ public class HermesIntlAndroidTest {
         new BufferedReader(new InputStreamReader(is)).lines().collect(Collectors.joining("\n"));
     try (JSRuntime rt = JSRuntime.makeHermesRuntime()) {
       rt.evaluateJavaScript(script);
+    }
+  }
+
+  @Test
+  public void testLocaleCompareFromAsset() throws IOException {
+    AssetManager assets =
+        InstrumentationRegistry.getInstrumentation().getTargetContext().getAssets();
+    InputStream is = assets.open("locale-compare.js");
+    String script =
+        new BufferedReader(new InputStreamReader(is)).lines().collect(Collectors.joining("\n"));
+    try (JSRuntime rt = JSRuntime.makeHermesRuntime()) {
+      rt.evaluateJavaScript(script);
+    }
+  }
+
+  @Test
+  public void testLocaleCompareFollowsDefaultLocale() {
+    Locale saved = Locale.getDefault();
+    Locale savedFormat = Locale.getDefault(Locale.Category.FORMAT);
+    Locale savedDisplay = Locale.getDefault(Locale.Category.DISPLAY);
+    Locale swedish = new Locale("sv", "SE");
+    try (JSRuntime rt = JSRuntime.makeHermesRuntime()) {
+      // Swedish sorts 'ä' after 'z', German before it.
+      Locale.setDefault(swedish);
+      rt.evaluateJavaScript("var sv = 'ä'.localeCompare('z');");
+      Locale.setDefault(Locale.GERMANY);
+      rt.evaluateJavaScript("var de = 'ä'.localeCompare('z');");
+      // Collators resolve against the default format locale.
+      Locale.setDefault(Locale.Category.FORMAT, swedish);
+      rt.evaluateJavaScript("var svFormat = 'ä'.localeCompare('z');");
+      // An unsupported explicit locale falls back to the default locale.
+      Locale.setDefault(Locale.GERMANY);
+      rt.evaluateJavaScript("var deFallback = 'ä'.localeCompare('z', 'zz');");
+      Locale.setDefault(swedish);
+      rt.evaluateJavaScript("var svFallback = 'ä'.localeCompare('z', 'zz');");
+      assertThat(rt.getGlobalNumberProperty("sv")).isEqualTo(1);
+      assertThat(rt.getGlobalNumberProperty("de")).isEqualTo(-1);
+      assertThat(rt.getGlobalNumberProperty("svFormat")).isEqualTo(1);
+      assertThat(rt.getGlobalNumberProperty("deFallback")).isEqualTo(-1);
+      assertThat(rt.getGlobalNumberProperty("svFallback")).isEqualTo(1);
+    } finally {
+      Locale.setDefault(saved);
+      Locale.setDefault(Locale.Category.FORMAT, savedFormat);
+      Locale.setDefault(Locale.Category.DISPLAY, savedDisplay);
     }
   }
 
