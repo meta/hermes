@@ -2192,6 +2192,196 @@ TEST_P(JSITest, CreateValueFromJsonUtf8Test) {
   EXPECT_EQ(obj.getProperty(outer, "a").getNumber(), 1);
 }
 
+namespace {
+
+/// Exercise the JSON grammar shared by the ASCII and UTF-16 entry points.
+template <typename Parse>
+void checkJSONBufferParsing(IRuntime& rt, Parse parse) {
+  auto fromText = [&](const std::string& text) {
+    return parse(text.data(), text.size());
+  };
+  EXPECT_TRUE(fromText("null").isNull());
+  EXPECT_TRUE(fromText("true").getBool());
+  EXPECT_FALSE(fromText("false").getBool());
+  EXPECT_EQ(fromText(" \t\r\n42 \n").getNumber(), 42);
+  EXPECT_EQ(fromText("-12.5e2").getNumber(), -1250);
+  double zero = fromText("-0").getNumber();
+  EXPECT_EQ(zero, 0);
+  EXPECT_TRUE(std::signbit(zero));
+  EXPECT_EQ(fromText("1e400").getNumber(), INFINITY);
+  EXPECT_EQ(fromText("\"text\"").getString(rt).utf8(rt), "text");
+  EXPECT_EQ(fromText("\"\"").getString(rt).utf8(rt), "");
+  EXPECT_EQ(
+      fromText(R"("\u0000\uD800\uDC00\uDFFF")").getString(rt).utf16(rt),
+      (std::u16string{0, 0xd800, 0xdc00, 0xdfff}));
+  auto array = fromText("[null,true,3,\"x\",[],{}]").getObject(rt).getArray(rt);
+  EXPECT_EQ(array.size(rt), 6);
+  EXPECT_TRUE(array.getValueAtIndex(rt, 0).isNull());
+  EXPECT_TRUE(array.getValueAtIndex(rt, 1).getBool());
+  EXPECT_EQ(array.getValueAtIndex(rt, 2).getNumber(), 3);
+  EXPECT_EQ(array.getValueAtIndex(rt, 3).getString(rt).utf8(rt), "x");
+  EXPECT_TRUE(array.getValueAtIndex(rt, 4).getObject(rt).isArray(rt));
+  EXPECT_TRUE(array.getValueAtIndex(rt, 5).isObject());
+  auto object =
+      fromText(R"({"a":1,"a":2,"__proto__":3,"nested":{"b":4}})").getObject(rt);
+  EXPECT_EQ(object.getProperty(rt, "a").getNumber(), 2);
+  EXPECT_EQ(object.getProperty(rt, "__proto__").getNumber(), 3);
+  EXPECT_EQ(
+      object.getPropertyAsObject(rt, "nested").getProperty(rt, "b").getNumber(),
+      4);
+
+  const std::string invalid[] = {
+      "",
+      " ",
+      "undefined",
+      "NaN",
+      "01",
+      "-",
+      "1e+",
+      "1e",
+      "[1,]",
+      "{a:1}",
+      "{\"a\":}",
+      "\"unterminated",
+      R"("\x00")",
+      R"("\uD80")",
+      "null true",
+      std::string("null\0", 5),
+      std::string("\"x\0y\"", 5)};
+  for (const auto& text : invalid) {
+    SCOPED_TRACE(text);
+    EXPECT_THROW(fromText(text), JSError);
+  }
+
+  // The fifth byte is deliberately not part of the input.
+  const char bounded[] = {'t', 'r', 'u', 'e', '!'};
+  EXPECT_TRUE(parse(bounded, 4).getBool());
+  EXPECT_THROW(parse(bounded, 5), JSError);
+}
+
+} // namespace
+
+TEST_P(JSITest, CreateValueFromJsonBuffers) {
+  class DefaultRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit DefaultRD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    Value createValueFromJsonASCII(const char* json, size_t length) override {
+      return Runtime::createValueFromJsonASCII(json, length);
+    }
+    Value createValueFromJsonUtf16(
+        const char16_t* json, size_t length) override {
+      return Runtime::createValueFromJsonUtf16(json, length);
+    }
+    String createStringFromUtf16(const char16_t* text, size_t length) override {
+      return Runtime::createStringFromUtf16(text, length);
+    }
+  };
+  DefaultRD fallback(rt);
+  for (IRuntime* runtime :
+       {static_cast<IRuntime*>(&rt), static_cast<IRuntime*>(&fallback)}) {
+    SCOPED_TRACE(runtime == &rt ? "native" : "default");
+    checkJSONBufferParsing(*runtime, [&](const char* json, size_t length) {
+      return Value::createFromJsonASCII(*runtime, json, length);
+    });
+    checkJSONBufferParsing(*runtime, [&](const char* json, size_t length) {
+      std::u16string text(json, json + length);
+      return Value::createFromJsonUtf16(*runtime, text.data(), text.size());
+    });
+
+    const std::u16string unicode = u"\"Grüße 世界 \U0001F600\"";
+    EXPECT_EQ(
+        Value::createFromJsonUtf16(*runtime, unicode.data(), unicode.size())
+            .getString(*runtime)
+            .utf16(*runtime),
+        u"Grüße 世界 \U0001F600");
+    for (char16_t surrogate : {0xd800, 0xdc00}) {
+      // Check both the unescaped fast path and the path after an escape.
+      for (const std::u16string prefix : {u"\"", u"\"\\n"}) {
+        std::u16string json = prefix + surrogate + u'"';
+        auto value =
+            Value::createFromJsonUtf16(*runtime, json.data(), json.size());
+        std::u16string expected = prefix.size() == 1 ? u"" : u"\n";
+        expected += surrogate;
+        EXPECT_EQ(value.getString(*runtime).utf16(*runtime), expected);
+      }
+      std::u16string json = u"{\"";
+      json += surrogate;
+      json += u"\":\"";
+      json += surrogate;
+      json += u"\"}";
+      auto object =
+          Value::createFromJsonUtf16(*runtime, json.data(), json.size())
+              .getObject(*runtime);
+      auto key = String::createFromUtf16(*runtime, &surrogate, 1);
+      EXPECT_EQ(
+          object.getProperty(*runtime, key).getString(*runtime).utf16(*runtime),
+          std::u16string(1, surrogate));
+      json = u"null";
+      json += surrogate;
+      EXPECT_THROW(
+          Value::createFromJsonUtf16(*runtime, json.data(), json.size()),
+          JSError);
+    }
+    EXPECT_THROW(
+        Value::createFromJsonUtf16(*runtime, u"\uFEFFnull", 5), JSError);
+  }
+}
+
+TEST_P(JSITest, DecoratorsForwardJSONBuffers) {
+  class CountingRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit CountingRD(Runtime& rt) : RuntimeDecorator(rt) {}
+    Value createValueFromJsonASCII(const char* json, size_t length) override {
+      EXPECT_EQ(json, ascii);
+      EXPECT_EQ(length, 4);
+      ++asciiCalls;
+      return 123;
+    }
+    Value createValueFromJsonUtf16(
+        const char16_t* json, size_t length) override {
+      EXPECT_EQ(json, utf16);
+      EXPECT_EQ(length, 4);
+      ++utf16Calls;
+      if (throws) {
+        throw JSError(*this, "parse failed");
+      }
+      return 456;
+    }
+    const char* ascii = "1234";
+    const char16_t* utf16 = u"5678";
+    int asciiCalls = 0;
+    int utf16Calls = 0;
+    bool throws = false;
+  };
+  class OuterRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit OuterRD(Runtime& rt) : RuntimeDecorator(rt) {}
+  };
+  struct Counter {
+    void before() { ++befores; }
+    void after() { ++afters; }
+    int befores = 0;
+    int afters = 0;
+  };
+  CountingRD inner(rt);
+  OuterRD outer(inner);
+  Counter counter;
+  WithRuntimeDecorator<Counter> with(inner, counter);
+  EXPECT_EQ(outer.createValueFromJsonASCII(inner.ascii, 4).getNumber(), 123);
+  EXPECT_EQ(outer.createValueFromJsonUtf16(inner.utf16, 4).getNumber(), 456);
+  EXPECT_EQ(Value::createFromJsonASCII(with, inner.ascii, 4).getNumber(), 123);
+  EXPECT_EQ(Value::createFromJsonUtf16(with, inner.utf16, 4).getNumber(), 456);
+  EXPECT_EQ(inner.asciiCalls, 2);
+  EXPECT_EQ(inner.utf16Calls, 2);
+  EXPECT_EQ(counter.befores, 2);
+  EXPECT_EQ(counter.afters, 2);
+  inner.throws = true;
+  EXPECT_THROW(Value::createFromJsonUtf16(with, inner.utf16, 4), JSError);
+  EXPECT_EQ(counter.befores, 3);
+  EXPECT_EQ(counter.afters, 3);
+}
+
 TEST_P(JSITest, GetStringDataTest) {
   // This Runtime Decorator is used to test the default getStringData
   // implementation for VMs that do not provide their own implementation

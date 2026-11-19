@@ -839,6 +839,9 @@ class HermesRuntimeImpl final : public HermesRuntime,
 
   jsi::Value createValueFromJsonUtf8(const uint8_t *json, size_t length)
       override;
+  jsi::Value createValueFromJsonASCII(const char *json, size_t length) override;
+  jsi::Value createValueFromJsonUtf16(const char16_t *json, size_t length)
+      override;
 
   jsi::Object createObject() override;
   jsi::Object createObject(std::shared_ptr<jsi::HostObject> ho) override;
@@ -2649,6 +2652,26 @@ jsi::Value HermesRuntimeImpl::createValueFromJsonUtf8(
   llvh::ArrayRef<uint8_t> ref(json, length);
   vm::CallResult<vm::HermesValue> res =
       runtimeJSONParseRef(runtime_, ::hermes::UTF16Stream(ref));
+  checkStatus(res.getStatus());
+  return valueFromHermesValue(*res);
+}
+
+jsi::Value HermesRuntimeImpl::createValueFromJsonASCII(
+    const char *json,
+    size_t length) {
+  ExecutionScopeRAII scopeRAII(mutatorScope);
+  vm::GCScope gcScope(runtime_);
+  auto res = runtimeJSONParseRef(runtime_, vm::ASCIIRef(json, length));
+  checkStatus(res.getStatus());
+  return valueFromHermesValue(*res);
+}
+
+jsi::Value HermesRuntimeImpl::createValueFromJsonUtf16(
+    const char16_t *json,
+    size_t length) {
+  ExecutionScopeRAII scopeRAII(mutatorScope);
+  vm::GCScope gcScope(runtime_);
+  auto res = runtimeJSONParseRef(runtime_, vm::UTF16Ref(json, length));
   checkStatus(res.getStatus());
   return valueFromHermesValue(*res);
 }
