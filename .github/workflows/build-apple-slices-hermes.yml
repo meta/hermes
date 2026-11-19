@@ -67,6 +67,13 @@ jobs:
             echo "Please try again"
             exit 1
           fi
+
+          if [[ -d "$FINAL_PATH/lib/node-api.framework" ]]; then
+            echo "Successfully built node-api.framework for $SLICE in $FLAVOR"
+          else
+            echo "Failed to built node-api.framework for $SLICE in $FLAVOR"
+            exit 1
+          fi
       - name: Compress slices to preserve Symlinks
         shell: bash
         run: |
