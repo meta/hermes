@@ -8,18 +8,25 @@
 #include <hermes/SynthTrace.h>
 #include "llvh/ADT/ArrayRef.h"
 
+#include <hermes/SynthTraceParser.h>
 #include <hermes/TraceInterpreter.h>
 #include <hermes/TracingRuntime.h>
 
 #include "hermes/Public/RuntimeConfig.h"
 #include "hermes/VM/VMExperiments.h"
+#include "llvh/ADT/SmallString.h"
+#include "llvh/Support/FileSystem.h"
+#include "llvh/Support/FileUtilities.h"
+#include "llvh/Support/MathExtras.h"
 #include "llvh/Support/SHA1.h"
+#include "llvh/Support/raw_ostream.h"
 
 #include <gtest/gtest.h>
 
 #include <hermes/CompileJS.h>
 #include <hermes/hermes.h>
 
+#include <limits>
 #include <memory>
 #include <variant>
 
@@ -74,28 +81,35 @@ struct SynthTraceTest : public ::testing::Test {
 /// @name Synth trace tests
 /// @{
 
-TEST_F(SynthTraceTest, StabilizeMathFunctionsAcrossPlatforms) {
+TEST_F(SynthTraceTest, RecordMathCalls) {
   rt->replaceNondeterministicFuncs();
-  // Below code may produce different results on different platforms if run with
-  // hermes directly. Use the static builtin path here to ensure the wrapper in
-  // the builtin table is used.
-  const std::string source = R"(
-    'use static builtin';
-    (function() {
-      const frame = 3;
-      const numFrames = 24;
-      const t = frame / numFrames;
-      const bounciness = 1.4;
-      const p = bounciness * Math.PI;
-      return 1 - Math.pow(Math.cos((t * Math.PI) / 2), 3) * Math.cos(t * p);
-    })()
-  )";
+  auto eval = rt->global().getPropertyAsFunction(*rt, "eval");
+  // Call one function through the static builtin slot, and one through the
+  // Math property.
+  const double cosResult =
+      eval.call(*rt, "'use static builtin'; Math.cos(0.5)").getNumber();
+  const double atan2Result = eval.call(*rt, "Math.atan2(1, 3)").getNumber();
 
-  const double actual = rt->global()
-                            .getPropertyAsFunction(*rt, "eval")
-                            .call(*rt, source)
-                            .getNumber();
-  EXPECT_EQ(0.19557121126841759, actual);
+  // JS gets this platform's libm results, unmodified. volatile keeps the
+  // compiler from folding the calls.
+  volatile double half = 0.5, one = 1, three = 3;
+  EXPECT_EQ(std::cos(half), cosResult);
+  EXPECT_EQ(std::atan2(one, three), atan2Result);
+
+  std::vector<const SynthTrace::Record *> mathCalls;
+  for (const auto &record : rt->trace().records()) {
+    if (record->getType() == SynthTrace::RecordType::MathCall) {
+      mathCalls.push_back(record.get());
+    }
+  }
+  ASSERT_EQ(2, mathCalls.size());
+  EXPECT_EQ_RECORD(
+      SynthTrace::MathCallRecord(mathCalls[0]->time_, "cos", {0.5}, cosResult),
+      *mathCalls[0]);
+  EXPECT_EQ_RECORD(
+      SynthTrace::MathCallRecord(
+          mathCalls[1]->time_, "atan2", {1, 3}, atan2Result),
+      *mathCalls[1]);
 }
 
 TEST_F(SynthTraceTest, CreateObject) {
@@ -1675,6 +1689,17 @@ struct SynthTraceReplayTest : public SynthTraceRuntimeTest {
         });
     replayRt = std::move(rt);
   }
+
+  /// Replace the first occurrence of the number \p from in traceResult with
+  /// \p to.
+  void replaceNumberInTrace(double from, double to) {
+    const std::string fromStr =
+        SynthTrace::encode(SynthTrace::encodeNumber(from));
+    const size_t pos = traceResult.find(fromStr);
+    ASSERT_NE(std::string::npos, pos);
+    traceResult.replace(
+        pos, fromStr.size(), SynthTrace::encode(SynthTrace::encodeNumber(to)));
+  }
 };
 
 TEST_F(SynthTraceReplayTest, WeakObject) {
@@ -1878,6 +1903,165 @@ TEST_F(SynthTraceReplayTest, GetPropNameIdDataReplay) {
 
   replay();
 }
+
+TEST_F(SynthTraceReplayTest, MathCallReturnsRecordedResult) {
+  eval(*traceRt, "(function() { globalThis.result = Math.cos(0.5); })()");
+  traceRt.reset();
+  // Stand in for a platform whose libm returns a different result.
+  volatile double half = 0.5;
+  replaceNumberInTrace(std::cos(half), 0.25);
+
+  replay();
+  EXPECT_EQ(
+      0.25, replayRt->global().getProperty(*replayRt, "result").getNumber());
+}
+
+TEST_F(SynthTraceReplayTest, MathCallRecordsCanonicalNaNArgs) {
+  // zero / zero is a NaN with this architecture's sign bit (clear on arm64,
+  // set on x86-64), and negating it flips that bit, so one of these arguments
+  // differs from the NaN another architecture computes.
+  eval(*traceRt, "globalThis.zero = 0;");
+  eval(*traceRt, "Math.cos(zero / zero); Math.cos(-(zero / zero));");
+  traceRt.reset();
+
+  auto parsed = parseSynthTrace(llvh::MemoryBuffer::getMemBuffer(traceResult));
+  std::vector<uint64_t> argBits;
+  for (const auto &record : std::get<0>(parsed).records()) {
+    if (record->getType() == SynthTrace::RecordType::MathCall) {
+      for (double arg :
+           static_cast<const SynthTrace::MathCallRecord &>(*record).args_) {
+        argBits.push_back(llvh::DoubleToBits(arg));
+      }
+    }
+  }
+  const uint64_t nanBits =
+      llvh::DoubleToBits(std::numeric_limits<double>::quiet_NaN());
+  EXPECT_EQ(std::vector<uint64_t>(2, nanBits), argBits);
+
+  replay();
+}
+
+TEST_F(SynthTraceReplayTest, MathCallClearsLastBitWithoutRecords) {
+  // A runtime made for replay doesn't record Math calls, so this trace has no
+  // MathCallRecords, like traces recorded before they existed.
+  traceRt.reset();
+  traceResult.clear();
+  auto *hermesRoot = jsi::castInterface<IHermesRootAPI>(makeHermesRootAPI());
+  traceRt = makeTracingHermesRuntime(
+      hermesRoot->makeHermesRuntime(config),
+      config,
+      std::make_unique<llvh::raw_string_ostream>(traceResult),
+      /* forReplay */ true);
+  const std::vector<double> inputs{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+  eval(*traceRt, R"(
+    (function() {
+      globalThis.results =
+          [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8].map(x => Math.cos(x));
+    })()
+  )");
+
+  replay();
+  jsi::Runtime &rt = *replayRt;
+  auto results = rt.global().getPropertyAsObject(rt, "results").getArray(rt);
+  ASSERT_EQ(inputs.size(), results.size(rt));
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    volatile double input = inputs[i];
+    EXPECT_EQ(
+        llvh::DoubleToBits(std::cos(input)) & ~uint64_t{1},
+        llvh::DoubleToBits(results.getValueAtIndex(rt, i).getNumber()));
+  }
+}
+
+TEST_F(SynthTraceReplayTest, TraceWhileReplayingRecordsMathCalls) {
+  eval(*traceRt, "(function() { globalThis.result = Math.cos(0.5); })()");
+  traceRt.reset();
+  volatile double half = 0.5;
+  replaceNumberInTrace(std::cos(half), 0.25);
+
+  std::string newTrace;
+  {
+    tracing::TraceInterpreter::ExecuteOptions options;
+    options.useTraceConfig = true;
+    options.traceEnabled = true;
+    auto *hermesRoot = jsi::castInterface<IHermesRootAPI>(makeHermesRootAPI());
+    // Destroying the returned runtime at the end of the statement flushes
+    // newTrace.
+    tracing::TraceInterpreter::execFromMemoryBuffer(
+        llvh::MemoryBuffer::getMemBuffer(traceResult), // traceBuf
+        {}, // codeBufs
+        options, // ExecuteOptions
+        [&newTrace, hermesRoot](const ::hermes::vm::RuntimeConfig &config) {
+          return makeTracingHermesRuntime(
+              hermesRoot->makeHermesRuntime(config),
+              config,
+              std::make_unique<llvh::raw_string_ostream>(newTrace),
+              /* forReplay */ true);
+        });
+  }
+
+  // The new trace records the result replay gave JS.
+  auto parsed = parseSynthTrace(llvh::MemoryBuffer::getMemBuffer(newTrace));
+  std::vector<const SynthTrace::MathCallRecord *> mathCalls;
+  for (const auto &record : std::get<0>(parsed).records()) {
+    if (record->getType() == SynthTrace::RecordType::MathCall) {
+      mathCalls.push_back(
+          &static_cast<const SynthTrace::MathCallRecord &>(*record));
+    }
+  }
+  ASSERT_EQ(1, mathCalls.size());
+  EXPECT_EQ("cos", mathCalls[0]->function_);
+  EXPECT_EQ(std::vector<double>{0.5}, mathCalls[0]->args_);
+  EXPECT_EQ(0.25, mathCalls[0]->retVal_);
+}
+
+#ifndef _WIN32
+TEST_F(SynthTraceReplayTest, MathCallReturnsRecordedResultInNativeReplay) {
+  {
+    auto &rt = *traceRt;
+    rt.global().setProperty(
+        rt,
+        "hostFn",
+        jsi::Function::createFromHostFunction(
+            rt,
+            jsi::PropNameID::forAscii(rt, "hostFn"),
+            0,
+            [](jsi::Runtime &, const jsi::Value &, const jsi::Value *, size_t) {
+              return jsi::Value::undefined();
+            }));
+    // Replaying the host call expects its record right after the Math record.
+    eval(rt, "(function() { globalThis.result = Math.cos(0.5); hostFn(); })()");
+  }
+  traceRt.reset();
+  volatile double half = 0.5;
+  replaceNumberInTrace(std::cos(half), 0.25);
+
+  llvh::SmallString<128> tracePath;
+  ASSERT_FALSE(llvh::sys::fs::createTemporaryFile("synth", "json", tracePath));
+  llvh::FileRemover removeTrace(tracePath);
+  {
+    std::error_code ec;
+    llvh::raw_fd_ostream os(tracePath, ec);
+    ASSERT_FALSE(ec);
+    os << traceResult;
+  }
+
+  tracing::TraceInterpreter::ExecuteOptions options;
+  options.useTraceConfig = true;
+  options.verificationEnabled = true;
+  tracing::TraceInterpreter::execNativeWithRuntime(
+      std::string(tracePath.str()), // traceFile
+      {}, // shermesUnitCreatorFns
+      options, // ExecuteOptions
+      [this](const ::hermes::vm::RuntimeConfig &config) {
+        auto *hermesRoot =
+            jsi::castInterface<IHermesRootAPI>(makeHermesRootAPI());
+        replayRt = hermesRoot->makeHermesRuntime(config);
+        return replayRt;
+      });
+  EXPECT_EQ(
+      0.25, replayRt->global().getProperty(*replayRt, "result").getNumber());
+}
+#endif
 
 TEST_F(SynthTraceRuntimeTest, WarmUpAndRepeatReplay) {
   {

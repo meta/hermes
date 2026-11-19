@@ -124,6 +124,12 @@ TEST_F(SynthTraceSerializationTest, Return) {
               dummyTime, SynthTrace::encodeBool(false))));
 }
 
+TEST_F(SynthTraceSerializationTest, MathCall) {
+  EXPECT_EQ(
+      R"({"type":"MathCallRecord","time":0,"function":"pow","args":["number:0x4000000000000000","number:0x4024000000000000"],"retval":"number:0x4090000000000000"})",
+      to_string(SynthTrace::MathCallRecord(dummyTime, "pow", {2, 10}, 1024)));
+}
+
 TEST_F(SynthTraceSerializationTest, ReturnEncodeUTF8String) {
   EXPECT_EQ(
       R"({"type":"ReturnFromNativeRecord","time":0,"retval":"string:1111"})",

@@ -10,15 +10,32 @@
 #include <hermes/SynthTrace.h>
 #include <hermes/hermes.h>
 #include <jsi/decorator.h>
+#include "llvh/ADT/ArrayRef.h"
+#include "llvh/ADT/StringRef.h"
 #include "llvh/Support/raw_ostream.h"
+
+#include <functional>
+#include <memory>
 
 namespace facebook {
 namespace hermes {
 namespace tracing {
 
-/// Prepare traceable builtins by installing Math wrappers into both properties
-/// and static builtin slots.
-void installTraceableBuiltinWrappers(jsi::Runtime &runtime);
+/// Called on every call to a Math function wrapped by
+/// installTraceableBuiltinWrappers, with the function's name (such as "cos"),
+/// its arguments converted to numbers, and this platform's libm result. The
+/// Math call returns what the hook returns. The hook must not use the runtime:
+/// replay can't reproduce runtime calls made inside a Math call.
+using TraceableMathHook = std::function<
+    double(llvh::StringRef name, llvh::ArrayRef<double> args, double result)>;
+
+/// Install wrappers into both the properties and the static builtin slots of
+/// the Math functions whose results IEEE 754 doesn't require to be correctly
+/// rounded. A call returns what \p hook returns, or this platform's libm result
+/// once \p *hook is empty.
+void installTraceableBuiltinWrappers(
+    jsi::Runtime &runtime,
+    std::shared_ptr<TraceableMathHook> hook);
 
 class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
 #ifdef JSI_UNSTABLE
@@ -33,6 +50,8 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
       std::shared_ptr<jsi::Runtime> runtime,
       const ::hermes::vm::RuntimeConfig &conf,
       std::unique_ptr<llvh::raw_ostream> traceStream);
+
+  ~TracingRuntime() override;
 
   /// Assign a new ObjectID for given jsi::Pointer.
   SynthTrace::ObjectID defObjectID(const jsi::Pointer &p);
@@ -216,6 +235,12 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
 
   void addMarker(const std::string &marker);
 
+  /// Record that JS called Math.\p name with \p args and got \p result.
+  void recordMathCall(
+      llvh::StringRef name,
+      llvh::ArrayRef<double> args,
+      double result);
+
   SynthTrace &trace() {
     return trace_;
   }
@@ -256,6 +281,9 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
 
   std::shared_ptr<jsi::Runtime> runtime_;
   SynthTrace trace_;
+  /// The hook that records Math calls into trace_. The destructor empties it,
+  /// because the wrappers that call it can outlive this object.
+  std::shared_ptr<TraceableMathHook> mathCallRecorder_;
   std::deque<jsi::Function> savedFunctions;
   const SynthTrace::TimePoint startTime_{std::chrono::steady_clock::now()};
   uint32_t numPreambleRecords_;

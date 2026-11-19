@@ -14,6 +14,8 @@
 #include <hermes/VM/SerializedValue.h>
 #include <hermes/VM/instrumentation/PerfEvents.h>
 #include <jsi/instrumentation.h>
+#include <llvh/ADT/ScopeExit.h>
+#include <llvh/Support/MathExtras.h>
 #include <llvh/Support/SHA1.h>
 #include <llvh/Support/SaveAndRestore.h>
 
@@ -202,6 +204,29 @@ bool isDoubleEqual(double a, double b) {
   return std::abs(a - b) <= ep;
 }
 
+/// \return Whether \p a and \p b hold the same numbers, bit for bit.
+bool isBitwiseEqual(llvh::ArrayRef<double> a, llvh::ArrayRef<double> b) {
+  return a.size() == b.size() &&
+      memcmp(a.data(), b.data(), a.size() * sizeof(double)) == 0;
+}
+
+/// \return \p result with its last bit cleared, as TracingRuntime returned
+/// Math results before MathCallRecords existed.
+double clearLastBit(double result) {
+  if (!std::isfinite(result)) {
+    return result;
+  }
+  return llvh::BitsToDouble(llvh::DoubleToBits(result) & ~uint64_t{1});
+}
+
+/// \return Whether \p trace has any MathCallRecord.
+bool hasMathCallRecords(const SynthTrace &trace) {
+  return std::any_of(
+      trace.records().begin(), trace.records().end(), [](const auto &rec) {
+        return rec->getType() == RecordType::MathCall;
+      });
+}
+
 } // namespace
 
 /// Assert that \p val seen at replay matches the recorded \p traceValue
@@ -231,6 +256,28 @@ void TraceInterpreter::assertMatch(
   }
 }
 
+double TraceInterpreter::replayMathCall(
+    llvh::StringRef name,
+    llvh::ArrayRef<double> args,
+    double libmResult) {
+  if (!traceHasMathCalls_) {
+    return clearLastBit(libmResult);
+  }
+  const auto &records = trace_.records();
+  if (nextExecIndex_ >= records.size() ||
+      records[nextExecIndex_]->getType() != RecordType::MathCall) {
+    // A truncated trace has no record for this call. Otherwise, replay made a
+    // Math call the recording didn't.
+    TRACE_EXPECT_TRUE(nextExecIndex_ >= records.size());
+    return libmResult;
+  }
+  const auto &mcr =
+      record_cast<const SynthTrace::MathCallRecord>(*records[nextExecIndex_++]);
+  TRACE_EXPECT_EQ(mcr.function_, name.str());
+  TRACE_EXPECT_TRUE(isBitwiseEqual(mcr.args_, args));
+  return mcr.retVal_;
+}
+
 TraceInterpreter::TraceInterpreter(
     jsi::Runtime &rt,
     const ExecuteOptions &options,
@@ -240,6 +287,7 @@ TraceInterpreter::TraceInterpreter(
       options_(options),
       bundles_(std::move(bundles)),
       trace_(trace),
+      traceHasMathCalls_(hasMathCallRecords(trace)),
       gom_() {
   // Add the global object to the global object map
   if (trace.globalObjID()) {
@@ -260,6 +308,7 @@ TraceInterpreter::TraceInterpreter(
       options_(options),
       shermesUnitCreatorFns_(std::move(shermesUnitCreatorFns)),
       trace_(trace),
+      traceHasMathCalls_(hasMathCallRecords(trace)),
       gom_() {
   // Add the global object to the global object map
   if (trace.globalObjID()) {
@@ -518,7 +567,6 @@ std::string TraceInterpreter::exec(
     const ExecuteOptions &options,
     const SynthTrace &trace,
     std::map<::hermes::SHA1, std::shared_ptr<const jsi::Buffer>> bundles) {
-  installTraceableBuiltinWrappers(rt);
   TraceInterpreter interpreter(rt, options, trace, std::move(bundles));
   std::string res = interpreter.executeRecordsWithMarkerOptions();
 #ifdef HERMESVM_PROFILER_BB
@@ -684,6 +732,21 @@ std::string TraceInterpreter::executeRecordsWithMarkerOptions() {
       (options_.action == ExecuteOptions::MarkerAction::NONE ||
        !options_.profileFileName.empty()) &&
       "If the action isn't none, need a profile output file");
+  // When tracing while replaying, the new trace records the replayed results.
+  auto *tracingRuntime = dynamic_cast<TracingRuntime *>(&rt_);
+  auto mathCallReplayer = std::make_shared<TraceableMathHook>(
+      [this, tracingRuntime](
+          llvh::StringRef name, llvh::ArrayRef<double> args, double result) {
+        result = replayMathCall(name, args, result);
+        if (tracingRuntime) {
+          tracingRuntime->recordMathCall(name, args, result);
+        }
+        return result;
+      });
+  installTraceableBuiltinWrappers(rt_, mathCallReplayer);
+  // The wrappers outlive the interpreter.
+  auto clearMathCallReplayer = llvh::make_scope_exit(
+      [&mathCallReplayer] { *mathCallReplayer = nullptr; });
   switch (options_.action) {
     case ExecuteOptions::MarkerAction::TIMELINE: {
       // Start tracking heap objects right before interpreting the trace.
@@ -1436,6 +1499,11 @@ void TraceInterpreter::executeRecords() {
           addToObjectMap(record.objID_, rt_.global(), currentExecIndex);
           break;
         }
+        case RecordType::MathCall:
+          // replayMathCall consumes this record when replay makes the call. It
+          // gets here only if the call ran in code that replay skips, such as
+          // inside callUntraced.
+          break;
       }
     } catch (const std::exception &e) {
       crashOnException(e, currentExecIndex);

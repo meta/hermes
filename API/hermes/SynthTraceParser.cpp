@@ -714,6 +714,19 @@ SynthTrace getTrace(
             timeFromStart, offsets, contents, strings);
         break;
       }
+      case RecordType::MathCall: {
+        std::vector<double> args;
+        for (const SynthTrace::TraceValue &arg :
+             getListOfTraceValues(callArgs)) {
+          args.push_back(arg.getNumber());
+        }
+        trace.emplace_back<SynthTrace::MathCallRecord>(
+            timeFromStart,
+            llvh::cast<JSONString>(obj->get("function"))->str().str(),
+            std::move(args),
+            SynthTrace::decode(retval->c_str()).getNumber());
+        break;
+      }
       case RecordType::Global: {
         trace.emplace_back<SynthTrace::GlobalRecord>(
             timeFromStart, objID->getValue());

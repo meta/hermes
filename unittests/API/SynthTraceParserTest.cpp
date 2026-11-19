@@ -272,6 +272,33 @@ TEST_F(SynthTraceParserTest, ParseUtf8Record) {
   ASSERT_EQ(record2.retVal_, "nice👍");
 }
 
+TEST_F(SynthTraceParserTest, ParseMathCallRecord) {
+  const char *src = R"(
+{
+  "version": 5,
+  "globalObjID": 258,
+  "runtimeConfig": {},
+  "trace": [
+    {
+      "type": "MathCallRecord",
+      "time": 1234,
+      "function": "pow",
+      "args": ["number:0x4000000000000000", "number:0x4024000000000000"],
+      "retval": "number:0x4090000000000000"
+    }
+  ]
+}
+  )";
+  auto parseResult = parseSynthTrace(bufFromStr(src));
+  SynthTrace &trace = std::get<0>(parseResult);
+
+  auto record =
+      dynamic_cast<const SynthTrace::MathCallRecord &>(*trace.records().at(0));
+  EXPECT_EQ("pow", record.function_);
+  EXPECT_EQ((std::vector<double>{2, 10}), record.args_);
+  EXPECT_EQ(1024, record.retVal_);
+}
+
 TEST_F(SynthTraceParserTest, ParseUtf16Record) {
   const char *src = R"(
 {

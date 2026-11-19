@@ -15,6 +15,8 @@
 #include <jsi/hermes-interfaces.h>
 #include <jsi/instrumentation.h>
 #include <jsi/jsi.h>
+#include <llvh/ADT/ArrayRef.h>
+#include <llvh/ADT/StringRef.h>
 #include <llvh/Support/MemoryBuffer.h>
 #include <llvh/Support/raw_ostream.h>
 
@@ -36,7 +38,9 @@ class TraceInterpreter final {
 
     /// If true, trace again while replaying. After normalization (see
     /// hermes/tools/synth/trace_normalize.py) the output trace should be
-    /// identical to the input trace. If they're not, there was a bug in replay.
+    /// identical to the input trace, except for MathCallRecords: the output
+    /// has one for each Math call that replay made, with the result replay
+    /// returned. Any other difference is a bug in replay.
     mutable bool traceEnabled{false};
 
     /// If true, verify that the replay results such as returned values from JS
@@ -130,6 +134,9 @@ class TraceInterpreter final {
   // Map from source hash to shermes unit creator function.
   std::map<::hermes::SHA1, SHUnitCreator> shermesUnitCreatorFns_;
   const SynthTrace &trace_;
+  /// Whether the trace has MathCallRecords. Without them, replay clears the
+  /// last bit of libm results, as TracingRuntime did before they existed.
+  const bool traceHasMathCalls_;
 
   /// The last use of each object.
   std::unordered_map<SynthTrace::ObjectID, uint64_t> lastUsePerObj_;
@@ -248,7 +255,8 @@ class TraceInterpreter final {
 
   jsi::Object createHostObject(SynthTrace::ObjectID objID);
 
-  /// Execute the records with the given ExecuteOptions::MarkerOption
+  /// Install the Math wrappers in rt_ to replay the trace's Math calls, then
+  /// execute the records with the given ExecuteOptions::MarkerOption.
   std::string executeRecordsWithMarkerOptions();
 
   /// Execute the records. JS might call this recursively when HostFunction or
@@ -327,6 +335,13 @@ class TraceInterpreter final {
   void assertMatch(
       const SynthTrace::TraceValue &traceValue,
       const jsi::Value &val) const;
+
+  /// \return The result to give JS for a call to Math.\p name with \p args
+  /// during replay, for which this platform's libm returned \p libmResult.
+  double replayMathCall(
+      llvh::StringRef name,
+      llvh::ArrayRef<double> args,
+      double libmResult);
 };
 
 } // namespace tracing

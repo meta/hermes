@@ -237,6 +237,7 @@ class SynthTrace {
   RECORD(CreateUInt8ArrayFromArrayBuffer) \
   RECORD(GetBufferFromTypedArray)         \
   RECORD(CreateJSError)                   \
+  RECORD(MathCall)                        \
   RECORD(Global)
 
   /// RecordType is a tag used to differentiate which type of record it is.
@@ -1701,6 +1702,38 @@ class SynthTrace {
 
     std::vector<ObjectID> uses() const override {
       return {};
+    }
+
+    void toJSONInternal(::hermes::JSONEmitter &json) const override;
+  };
+
+  /// A MathCallRecord is an event where JS called one of the Math functions
+  /// whose results IEEE 754 doesn't require to be correctly rounded, so they
+  /// can differ across libm implementations (see
+  /// installTraceableBuiltinWrappers). Replay returns the recorded result in
+  /// place of this platform's libm result, so a trace replays the same on
+  /// every platform.
+  struct MathCallRecord final : public Record {
+    static constexpr RecordType type{RecordType::MathCall};
+    /// The name of the Math function, such as "cos".
+    const std::string function_;
+    /// The arguments, after conversion to numbers.
+    const std::vector<double> args_;
+    /// The result returned to JS.
+    const double retVal_;
+
+    explicit MathCallRecord(
+        TimeSinceStart time,
+        std::string function,
+        std::vector<double> args,
+        double retVal)
+        : Record(time),
+          function_(std::move(function)),
+          args_(std::move(args)),
+          retVal_(retVal) {}
+
+    RecordType getType() const override {
+      return type;
     }
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;

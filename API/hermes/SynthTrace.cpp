@@ -718,6 +718,18 @@ void SynthTrace::DeserializeRecord::toJSONInternal(
   json.closeArray();
 }
 
+void SynthTrace::MathCallRecord::toJSONInternal(JSONEmitter &json) const {
+  Record::toJSONInternal(json);
+  json.emitKeyValue("function", function_);
+  json.emitKey("args");
+  json.openArray();
+  for (double arg : args_) {
+    json.emitValue(encode(encodeNumber(arg)));
+  }
+  json.closeArray();
+  json.emitKeyValue("retval", encode(encodeNumber(retVal_)));
+}
+
 void SynthTrace::GlobalRecord::toJSONInternal(JSONEmitter &json) const {
   Record::toJSONInternal(json);
   json.emitKeyValue("objID", objID_);

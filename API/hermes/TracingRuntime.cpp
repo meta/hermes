@@ -12,6 +12,7 @@
 #include <hermes/Support/Algorithms.h>
 #include <hermes/Support/JSONEmitter.h>
 #include <hermes/VM/Callable.h>
+#include <hermes/VM/HostModel.h>
 #include <hermes/VM/JSObject.h>
 #include <hermes/VM/Operations.h>
 #include <hermes/VM/Predefined.h>
@@ -27,6 +28,7 @@
 #include <math.h>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace facebook {
 namespace hermes {
@@ -41,54 +43,55 @@ using Math1ArgFuncPtr = double (*)(double);
 using Math2ArgFuncPtr = double (*)(double, double);
 
 struct TraceableMathBuiltin {
-  Predefined::Str name;
+  /// The name recorded in MathCallRecords.
+  const char *name;
+  Predefined::Str predefinedName;
   BuiltinMethod::Enum builtinIndex;
   unsigned paramCount;
   Math1ArgFuncPtr function1Arg;
   Math2ArgFuncPtr function2Arg;
 };
 
-/// Stabilize the result of a math function across platforms by dropping the
-/// last bit.
-HermesValue stabilizeMathResult(HermesValue result) {
-  double number = result.getNumber();
-  if (LLVM_UNLIKELY(!std::isfinite(number))) {
-    return result;
+/// The context of a wrapper created by installTraceableBuiltinWrappers.
+struct TraceableMathContext {
+  const TraceableMathBuiltin &builtin;
+  std::shared_ptr<TraceableMathHook> hook;
+};
+
+/// The native function of a wrapper created by
+/// installTraceableBuiltinWrappers.
+CallResult<HermesValue> traceableMathFunction(void *ctx, Runtime &runtime) {
+  auto *context = static_cast<TraceableMathContext *>(ctx);
+  const TraceableMathBuiltin &builtin = context->builtin;
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+
+  double numbers[2];
+  for (unsigned i = 0; i < builtin.paramCount; ++i) {
+    auto res = toNumber_RJS(runtime, args.getArgHandle(i));
+    if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    // A NaN made by arithmetic keeps the hardware's sign bit, which differs
+    // across architectures, so pass every NaN on as the same one.
+    const double number = res->getNumber();
+    numbers[i] =
+        std::isnan(number) ? std::numeric_limits<double>::quiet_NaN() : number;
   }
 
-  uint64_t bits = llvh::DoubleToBits(number);
-  bits &= ~uint64_t{1};
-  return HermesValue::encodeTrustedNumberValue(llvh::BitsToDouble(bits));
+  double result = builtin.paramCount == 1
+      ? builtin.function1Arg(numbers[0])
+      : builtin.function2Arg(numbers[0], numbers[1]);
+  if (*context->hook) {
+    result = (*context->hook)(
+        builtin.name, llvh::makeArrayRef(numbers, builtin.paramCount), result);
+  }
+  // The hook may return a recorded NaN with any payload.
+  return HermesValue::encodeUntrustedNumberValue(result);
 }
 
-CallResult<HermesValue> traceableMathFunction1Arg(void *ctx, Runtime &runtime) {
-  auto args = runtime.getCurrentFrame().getNativeArgs();
-  auto function = reinterpret_cast<Math1ArgFuncPtr>(ctx);
-
-  auto res = toNumber_RJS(runtime, args.getArgHandle(0));
-  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  double result = function(res->getNumber());
-  return stabilizeMathResult(HermesValue::encodeTrustedNumberValue(result));
-}
-
-CallResult<HermesValue> traceableMathFunction2Arg(void *ctx, Runtime &runtime) {
-  auto args = runtime.getCurrentFrame().getNativeArgs();
-  auto function = reinterpret_cast<Math2ArgFuncPtr>(ctx);
-
-  auto res = toNumber_RJS(runtime, args.getArgHandle(0));
-  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  double arg0 = res->getNumber();
-
-  res = toNumber_RJS(runtime, args.getArgHandle(1));
-  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  double result = function(arg0, res->getNumber());
-  return stabilizeMathResult(HermesValue::encodeTrustedNumberValue(result));
+/// Frees the TraceableMathContext of a wrapper when the GC finalizes it.
+void finalizeTraceableMathContext(void *ctx) {
+  delete static_cast<TraceableMathContext *>(ctx);
 }
 
 } // namespace
@@ -102,6 +105,12 @@ TracingRuntime::TracingRuntime(
       trace_(conf, std::move(traceStream)),
       numPreambleRecords_(0) {}
 
+TracingRuntime::~TracingRuntime() {
+  if (mathCallRecorder_) {
+    *mathCallRecorder_ = nullptr;
+  }
+}
+
 SynthTrace::ObjectID TracingRuntime::useObjectID(const jsi::Pointer &p) const {
   const jsi::Runtime::PointerValue *pv = getPointerValue(p);
   auto it = uniqueIDs_.find(pv);
@@ -114,10 +123,12 @@ SynthTrace::ObjectID TracingRuntime::defObjectID(const jsi::Pointer &p) {
   return currentUniqueID_++;
 }
 
-void installTraceableBuiltinWrappers(jsi::Runtime &jsRuntime) {
+void installTraceableBuiltinWrappers(
+    jsi::Runtime &jsRuntime,
+    std::shared_ptr<TraceableMathHook> hook) {
   // jsRuntime could be TracingRuntime if run `synth` with `--trace` flag.
   if (auto *tracingRuntime = dynamic_cast<TracingRuntime *>(&jsRuntime)) {
-    installTraceableBuiltinWrappers(tracingRuntime->plain());
+    installTraceableBuiltinWrappers(tracingRuntime->plain(), std::move(hook));
     return;
   }
 
@@ -127,29 +138,27 @@ void installTraceableBuiltinWrappers(jsi::Runtime &jsRuntime) {
   // rounded.
   // NOTE: This mapping needs to be synced with MathStdFunctions.def (we can't
   // access it here) and Builtins.def.
+#define MATH_1ARG(name, func) \
+  {#name, Predefined::name, BuiltinMethod::Math_##name, 1, func, nullptr}
+#define MATH_2ARG(name, func)                                             \
+  {                                                                       \
+    #name, Predefined::name, BuiltinMethod::Math_##name, 2, nullptr, func \
+  }
   static const TraceableMathBuiltin traceableMathBuiltins[] = {
-      {Predefined::acos, BuiltinMethod::Math_acos, 1, std::acos, nullptr},
-      {Predefined::acosh, BuiltinMethod::Math_acosh, 1, ::acosh, nullptr},
-      {Predefined::asin, BuiltinMethod::Math_asin, 1, std::asin, nullptr},
-      {Predefined::asinh, BuiltinMethod::Math_asinh, 1, ::asinh, nullptr},
-      {Predefined::atan, BuiltinMethod::Math_atan, 1, std::atan, nullptr},
-      {Predefined::atanh, BuiltinMethod::Math_atanh, 1, ::atanh, nullptr},
-      {Predefined::atan2, BuiltinMethod::Math_atan2, 2, nullptr, std::atan2},
-      {Predefined::cbrt, BuiltinMethod::Math_cbrt, 1, ::cbrt, nullptr},
-      {Predefined::cos, BuiltinMethod::Math_cos, 1, std::cos, nullptr},
-      {Predefined::cosh, BuiltinMethod::Math_cosh, 1, ::cosh, nullptr},
-      {Predefined::exp, BuiltinMethod::Math_exp, 1, std::exp, nullptr},
-      {Predefined::expm1, BuiltinMethod::Math_expm1, 1, ::expm1, nullptr},
-      {Predefined::log, BuiltinMethod::Math_log, 1, std::log, nullptr},
-      {Predefined::log10, BuiltinMethod::Math_log10, 1, std::log10, nullptr},
-      {Predefined::log1p, BuiltinMethod::Math_log1p, 1, ::log1p, nullptr},
-      {Predefined::log2, BuiltinMethod::Math_log2, 1, std::log2, nullptr},
-      {Predefined::pow, BuiltinMethod::Math_pow, 2, nullptr, expOp},
-      {Predefined::sin, BuiltinMethod::Math_sin, 1, std::sin, nullptr},
-      {Predefined::sinh, BuiltinMethod::Math_sinh, 1, ::sinh, nullptr},
-      {Predefined::tan, BuiltinMethod::Math_tan, 1, std::tan, nullptr},
-      {Predefined::tanh, BuiltinMethod::Math_tanh, 1, ::tanh, nullptr},
+      MATH_1ARG(acos, std::acos),   MATH_1ARG(acosh, ::acosh),
+      MATH_1ARG(asin, std::asin),   MATH_1ARG(asinh, ::asinh),
+      MATH_1ARG(atan, std::atan),   MATH_1ARG(atanh, ::atanh),
+      MATH_2ARG(atan2, std::atan2), MATH_1ARG(cbrt, ::cbrt),
+      MATH_1ARG(cos, std::cos),     MATH_1ARG(cosh, ::cosh),
+      MATH_1ARG(exp, std::exp),     MATH_1ARG(expm1, ::expm1),
+      MATH_1ARG(log, std::log),     MATH_1ARG(log10, std::log10),
+      MATH_1ARG(log1p, ::log1p),    MATH_1ARG(log2, std::log2),
+      MATH_2ARG(pow, expOp),        MATH_1ARG(sin, std::sin),
+      MATH_1ARG(sinh, ::sinh),      MATH_1ARG(tan, std::tan),
+      MATH_1ARG(tanh, ::tanh),
   };
+#undef MATH_1ARG
+#undef MATH_2ARG
 
   auto *hermes = jsi::castInterface<IHermes>(&jsRuntime);
   if (!hermes) {
@@ -180,27 +189,26 @@ void installTraceableBuiltinWrappers(jsi::Runtime &jsRuntime) {
   for (const TraceableMathBuiltin &traceableMathBuiltin :
        traceableMathBuiltins) {
     GCScopeMarkerRAII marker{gcScope};
-    SymbolID functionID = Predefined::getSymbolID(traceableMathBuiltin.name);
-    void *functionContext;
-    NativeFunctionPtr nativeFunctionPtr;
-    if (traceableMathBuiltin.paramCount == 1) {
-      functionContext =
-          reinterpret_cast<void *>(traceableMathBuiltin.function1Arg);
-      nativeFunctionPtr = traceableMathFunction1Arg;
-    } else if (traceableMathBuiltin.paramCount == 2) {
-      functionContext =
-          reinterpret_cast<void *>(traceableMathBuiltin.function2Arg);
-      nativeFunctionPtr = traceableMathFunction2Arg;
-    } else {
-      hermes_fatal("unsupported traceable Math function parameter count");
-    }
-
-    lv.replacementMathFunction = *NativeFunction::create(
+    SymbolID functionID =
+        Predefined::getSymbolID(traceableMathBuiltin.predefinedName);
+    auto context = std::make_unique<TraceableMathContext>(
+        TraceableMathContext{traceableMathBuiltin, hook});
+    auto functionRes = FinalizableNativeFunction::createWithoutPrototype(
         *runtime,
-        functionContext,
-        nativeFunctionPtr,
+        context.get(),
+        traceableMathFunction,
+        finalizeTraceableMathContext,
         functionID,
         traceableMathBuiltin.paramCount);
+    if (LLVM_UNLIKELY(functionRes == ExecutionStatus::EXCEPTION)) {
+      runtime->clearThrownValue();
+      throw jsi::JSINativeException(
+          "Failed to create Math function while installing wrappers");
+    }
+    // The function owns the context now, and its finalizer frees it.
+    context.release();
+    lv.replacementMathFunction.castAndSetHermesValue<NativeFunction>(
+        *functionRes);
 
     auto defineRes = JSObject::defineOwnProperty(
         lv.math,
@@ -262,7 +270,12 @@ void TracingRuntime::replaceNondeterministicFuncs() {
         }
       });
 
-  installTraceableBuiltinWrappers(*runtime_);
+  mathCallRecorder_ = std::make_shared<TraceableMathHook>(
+      [this](llvh::StringRef name, llvh::ArrayRef<double> args, double result) {
+        recordMathCall(name, args, result);
+        return result;
+      });
+  installTraceableBuiltinWrappers(*runtime_, mathCallRecorder_);
 
   // Below two host functions are for WeakRef hook.
   // We assign a new ObjectID for PointerValuea*, but for the case of Object
@@ -1468,6 +1481,14 @@ jsi::Array TracingRuntime::deserializeWithTransfer(
 
 void TracingRuntime::addMarker(const std::string &marker) {
   trace_.emplace_back<SynthTrace::MarkerRecord>(getTimeSinceStart(), marker);
+}
+
+void TracingRuntime::recordMathCall(
+    llvh::StringRef name,
+    llvh::ArrayRef<double> args,
+    double result) {
+  trace_.emplace_back<SynthTrace::MathCallRecord>(
+      getTimeSinceStart(), name.str(), args.vec(), result);
 }
 
 std::vector<SynthTrace::TraceValue> TracingRuntime::argStringifyer(
