@@ -347,6 +347,24 @@ print(/a(?<=(\1))/.exec("a"));
 // CHECK-NEXT: a,
 print(/a(?<=((?!\1)))/.exec("a"));
 // CHECK-NEXT: null
+// A ^ inside a lookbehind's alternation or loop is checked against the
+// position where the lookbehind's match ends, not where it starts.
+print(/a(?<=x|^a)/.exec("a"));
+// CHECK-NEXT: a
+print(/ba(?<=x|^a)/.exec("ba"));
+// CHECK-NEXT: null
+print(/b(?<=^a.|^b)/.exec("ab"));
+// CHECK-NEXT: b
+print(/a(?<=(x|^a))/.exec("a"));
+// CHECK-NEXT: a,a
+print(/a(?<=(?:^a)+)/.exec("a"));
+// CHECK-NEXT: a
+print(/a(?<=(?:^a){1,2})/.exec("a"));
+// CHECK-NEXT: a
+print(/a(?<=(?:x|^a)+)/.exec("a"));
+// CHECK-NEXT: a
+print(/ba(?<=(?:x|^a)+)/.exec("ba"));
+// CHECK-NEXT: null
 
 
 // Sticky support
