@@ -14,6 +14,7 @@
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/DecoratedObject.h"
 #include "hermes/VM/FastArray.h"
+#include "hermes/VM/HostModel.h"
 #include "hermes/VM/JSArrayBuffer.h"
 #include "hermes/VM/JSDataView.h"
 #include "hermes/VM/JSLib.h"
@@ -445,6 +446,9 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
   CREATE_CLASS_FOR_PARENT(BoundFunction, runtime.functionPrototype)
   CREATE_CLASS_FOR_PARENT(NativeFunction, runtime.functionPrototype)
   CREATE_CLASS_FOR_PARENT(FinalizableNativeFunction, runtime.functionPrototype)
+  runtime.classFinalizableNativeFunctionNameLength =
+      FinalizableNativeFunction::createClass(
+          runtime, runtime.classFinalizableNativeFunction);
   CREATE_CLASS_FOR_PARENT(NativeConstructor, runtime.functionPrototype)
   CREATE_CLASS_FOR_PARENT_FLAGS(
       JSCallableProxy, runtime.functionPrototype, proxyFlags)

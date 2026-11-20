@@ -91,6 +91,11 @@ RUNTIME_HV_FIELD(lazyObjectClass_, HiddenClass)
 RUNTIME_HV_FIELD(classNativeFunction1Reserved, HiddenClass)
 RUNTIME_HV_FIELD(classDecoratedObject1Reserved, HiddenClass)
 
+/// Class of FinalizableNativeFunction objects that already has the 'length'
+/// and 'name' properties, so that creating a host function does not need to
+/// add them one at a time.
+RUNTIME_HV_FIELD(classFinalizableNativeFunctionNameLength, HiddenClass)
+
 RUNTIME_HV_FIELD(iteratorPrototype, JSObject)
 RUNTIME_HV_FIELD(arrayIteratorPrototype, JSObject)
 RUNTIME_HV_FIELD(arrayPrototypeValues, NativeFunction)
