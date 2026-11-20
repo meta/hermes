@@ -64,6 +64,69 @@ class Parser {
   // groups or not. That means this value may not reflect reality.
   bool hasNamedGroups_;
 
+  /// State for the ES2025 duplicate named capture groups early error. Two
+  /// capture groups may share a name only if some enclosing Disjunction puts
+  /// them in different Alternatives, so they can never both participate in a
+  /// match. Groups are identified by mexp.
+  ///
+  /// An earlier group is separated from the one being declared now if some open
+  /// Disjunction both encloses it (mexp >= firstMexp) and has since moved on to
+  /// another Alternative (mexp < curAltFirstMexp). Both halves matter: checking
+  /// only the second would wrongly accept (a|(?<n>b))((?<n>c)|d), where the two
+  /// Disjunctions are siblings rather than one enclosing both groups.
+  ///
+  /// Only the most recent earlier use of a name needs checking. Every earlier
+  /// use is separated from that one, or parsing would already have failed, and
+  /// whichever Disjunction separates them either is still open, and so
+  /// separates the older use from the new one too, or was nested in an earlier
+  /// Alternative of the Disjunction found by the check, which then separates it
+  /// as well.
+  struct OpenDisjunction {
+    /// markedCount() when this Disjunction was opened, so every capture group
+    /// inside it has a mexp at least this large.
+    uint32_t firstMexp;
+
+    /// markedCount() when the Alternative being parsed now began.
+    uint32_t curAltFirstMexp;
+  };
+
+  /// One entry per Disjunction currently being parsed, outermost first. The
+  /// first entry is the pattern's own Disjunction, so this is never empty.
+  llvh::SmallVector<OpenDisjunction, 4> openDisjunctions_;
+
+  /// Enter the Disjunction inside a group that has just been opened.
+  void openDisjunction() {
+    // A capturing group's own mexp has already been allocated, and belongs to
+    // the enclosing Disjunction rather than to this one.
+    uint32_t firstMexp = re_->markedCount();
+    openDisjunctions_.push_back(OpenDisjunction{firstMexp, firstMexp});
+  }
+
+  /// Leave the Disjunction of a group that has just been closed.
+  void closeDisjunction() {
+    assert(
+        openDisjunctions_.size() > 1 &&
+        "cannot close the pattern's Disjunction");
+    openDisjunctions_.pop_back();
+  }
+
+  /// Begin a new Alternative of the innermost Disjunction.
+  void beginAlternative() {
+    openDisjunctions_.back().curAltFirstMexp = re_->markedCount();
+  }
+
+  /// \return true if the capture group with mexp \p prevMexp sits in an earlier
+  /// Alternative of a Disjunction that also encloses the current position, so
+  /// the two can never both participate in a match.
+  bool isSeparatedFromHere(uint32_t prevMexp) const {
+    for (const OpenDisjunction &disjunction : openDisjunctions_) {
+      if (disjunction.firstMexp <= prevMexp &&
+          prevMexp < disjunction.curAltFirstMexp)
+        return true;
+    }
+    return false;
+  }
+
   /// Set the error \p err, if not already set to a different error.
   /// Also move our input to end, to abort parsing.
   /// \return false, for convenience.
@@ -231,6 +294,14 @@ class Parser {
 
   using ParseStack = llvh::SmallVector<ParseStackElement, 4>;
 
+  /// Finish opening a group of any kind: push \p elem onto \p stack and enter
+  /// the Disjunction inside it. Every parenthesized construct, lookarounds
+  /// included, is `( ... Disjunction )`. The inverse is closeGroup().
+  void openGroup(ParseStack &stack, ParseStackElement &&elem) {
+    openDisjunction();
+    stack.push_back(std::move(elem));
+  }
+
   /// Push an empty alternation onto the parse stack \p stack.
   void openAlternation(ParseStack &stack) {
     // Should never have two adjacent alternations on the stack
@@ -265,7 +336,7 @@ class Parser {
     }
     elem.mexp = re_->incrementMarkedCount();
     elem.splicePoint = re_->currentNode();
-    stack.push_back(std::move(elem));
+    openGroup(stack, std::move(elem));
   }
 
   /// Open a named group, pushing it onto \p stack.
@@ -288,21 +359,24 @@ class Parser {
       return;
     }
 
-    // If we couldn't add this named group, that means a name already existed.
-    if (!re_->addNamedCaptureGroup(std::move(identifier), elem.mexp)) {
+    // The name belongs to the enclosing Alternative, so check it before
+    // openGroup() enters the group's own Disjunction.
+    llvh::Optional<uint32_t> prevMexp =
+        re_->addNamedCaptureGroup(std::move(identifier), elem.mexp);
+    if (LLVM_UNLIKELY(prevMexp && !isSeparatedFromHere(*prevMexp))) {
       setError(constants::ErrorType::DuplicateCaptureGroupName);
       return;
     }
 
     hasNamedGroups_ = true;
-    stack.push_back(std::move(elem));
+    openGroup(stack, std::move(elem));
   }
   /// Open a non-capturing group, pushing it onto \p stack.
   void openNonCapturingGroup(ParseStack &stack) {
     ParseStackElement elem(ParseStackElement::NonCapturingGroup);
     elem.quant = prepareQuantifier();
     elem.splicePoint = re_->currentNode();
-    stack.push_back(std::move(elem));
+    openGroup(stack, std::move(elem));
   }
 
   /// Consume modifiers after '(?' has been consumed:
@@ -391,7 +465,7 @@ class Parser {
     elem.splicePoint = re_->currentNode();
     elem.savedFlags = curFlags_;
     curFlags_ = newFlags;
-    stack.push_back(std::move(elem));
+    openGroup(stack, std::move(elem));
   }
 
   /// Open a lookaround, pushing it onto \p stack.
@@ -402,7 +476,7 @@ class Parser {
     elem.negateLookaround = negate;
     elem.quant = prepareQuantifier();
     elem.splicePoint = re_->currentNode();
-    stack.push_back(std::move(elem));
+    openGroup(stack, std::move(elem));
   }
 
   /// Close a group or lookaround on top of \p stack, emitting the proper nodes
@@ -411,6 +485,7 @@ class Parser {
     assert(!stack.empty() && "Stack must not be empty");
     ParseStackElement elem = std::move(stack.back());
     stack.pop_back();
+    closeDisjunction();
     bool quantifierAllowed = true;
     switch (elem.type) {
       case ParseStackElement::Alternation:
@@ -464,6 +539,7 @@ class Parser {
       switch (*current_) {
         case '|': {
           consume('|');
+          beginAlternative();
           auto *splicePoint =
               stack.empty() ? firstNode : stack.back().splicePoint;
           auto nodes = re_->spliceOut(splicePoint);
@@ -1474,7 +1550,10 @@ class Parser {
         end_(end),
         curFlags_(flags),
         backRefLimit_(backRefLimit),
-        hasNamedGroups_(hasNamedGroups) {}
+        hasNamedGroups_(hasNamedGroups) {
+    // Seed the level for the pattern's own Disjunction.
+    openDisjunctions_.push_back(OpenDisjunction{0, 0});
+  }
 
   constants::ErrorType performParse() {
     consumeDisjunction();

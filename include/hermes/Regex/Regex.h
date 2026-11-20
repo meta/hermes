@@ -25,6 +25,8 @@
 #include "hermes/Support/Algorithms.h"
 #include "hermes/Support/Compiler.h"
 
+#include "llvh/ADT/Optional.h"
+
 #include <deque>
 #include <string>
 #include <vector>
@@ -77,7 +79,9 @@ class Regex {
   /// filter: the regex can match the empty string, or the analysis gave up.
   llvh::Optional<StartSet> startSet_;
 
-  // This holds the named capture groups in the order they were defined.
+  // This holds the named capture groups in the order they were defined. Each
+  // distinct name appears exactly once, even if it is used by several capture
+  // groups.
   std::deque<llvh::SmallVector<char16_t, 5>> orderedGroupNames_{};
 
   ParsedGroupNamesMapping nameMapping_{};
@@ -249,9 +253,15 @@ class Regex {
       uint32_t *outMaxBackRef);
 
   // Note- this method does not insert into the AST, it populates a different
-  // datastructure. Returns false if the given name was already defined.
+  // datastructure. \p identifier may already be in use, which is only legal if
+  // the two groups can never both participate in a match; that is the parser's
+  // job to check.
   // \param mexp the zero-based mexp of the capture group being named.
-  bool addNamedCaptureGroup(GroupName &&identifier, uint32_t mexp);
+  // \return the mexp of the previous capture group using \p identifier, or
+  //   None if this is the first use of the name.
+  llvh::Optional<uint32_t> addNamedCaptureGroup(
+      GroupName &&identifier,
+      uint32_t mexp);
 
   bool resolveNamedBackRefs();
 
@@ -501,17 +511,23 @@ void Regex<Traits>::pushLookaround(
 }
 
 template <class Traits>
-bool Regex<Traits>::addNamedCaptureGroup(
+llvh::Optional<uint32_t> Regex<Traits>::addNamedCaptureGroup(
     GroupName &&identifier,
     uint32_t mexp) {
-  // Add one to the mexp because this is used to index into the whole matches
-  // array, which is prepended with the entire match string.
   uint32_t matchIndex = mexp + 1;
+  auto existing = nameMapping_.find(identifier);
+  if (LLVM_UNLIKELY(existing != nameMapping_.end())) {
+    // Keep one entry per distinct name, so orderedGroupNames_ stays in
+    // first-appearance order and without repeats.
+    uint32_t prevMexp = existing->second.back() - 1;
+    existing->second.push_back(matchIndex);
+    return prevMexp;
+  }
   // The name is interned in orderedGroupNames_, a deque, so the map key stays
   // valid as more names are added.
   auto &elm = orderedGroupNames_.emplace_back(std::move(identifier));
-  auto res = nameMapping_.try_emplace(elm, GroupNums{matchIndex});
-  return res.second;
+  nameMapping_.try_emplace(elm, GroupNums{matchIndex});
+  return llvh::None;
 }
 
 } // namespace regex
