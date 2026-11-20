@@ -689,11 +689,56 @@ static ExecutionStatus regExpConstructorFastCopy(
   return ExecutionStatus::RETURNED;
 }
 
+/// The rare path of resolveGroupValue(), taken when several mutually exclusive
+/// capture groups share one name. At most one of them can have participated.
+/// \param mapping the name's entry in the mapping object: a JSArray of the
+///   match array indices of every capture group using the name.
+/// \param getCapture maps a match array index to that element's result, or
+///   undefined if it did not participate, and must not allocate.
+/// \return the first result named by \p mapping that is defined, or
+///   undefined.
+template <typename GetCapture>
+static SmallHermesValue resolveSharedNameGroup(
+    Runtime &runtime,
+    SmallHermesValue mapping,
+    const GetCapture &getCapture) {
+  NoAllocScope noAlloc{runtime};
+  auto *matchIndices = vmcast<JSArray>(mapping.getObject(runtime));
+  for (uint32_t i = 0, e = JSArray::getLength(matchIndices, runtime); i < e;
+       ++i) {
+    SmallHermesValue value = getCapture(
+        static_cast<uint32_t>(matchIndices->at(runtime, i).getNumber(runtime)));
+    if (!value.isUndefined())
+      return value;
+  }
+  return SmallHermesValue::encodeUndefinedValue();
+}
+
+/// \param mapping one capture group name's entry in a JSRegExp's mapping
+///   object: normally that name's match array index, or a JSArray of indices
+///   when several mutually exclusive capture groups share the name.
+/// \param getCapture maps a match array index to that element's result, or
+///   undefined if it did not participate, and must not allocate.
+/// \return the value a groups object should hold for that name, which in the
+///   normal case is just `getCapture(mapping)`.
+template <typename GetCapture>
+static SmallHermesValue resolveGroupValue(
+    Runtime &runtime,
+    SmallHermesValue mapping,
+    const GetCapture &getCapture) {
+  // A name shared by several capture groups maps to a list of indices instead.
+  if (LLVM_UNLIKELY(mapping.isObject()))
+    return resolveSharedNameGroup(runtime, mapping, getCapture);
+  return getCapture(static_cast<uint32_t>(mapping.getNumber(runtime)));
+}
+
 /// Build an object whose property keys are identical to \p mappingObj. Each
 /// value for a given property key `k` in this object is
-/// `getCapture(mappingObj[k])`: \p getCapture maps an index of the match
-/// (0 is the whole match, n the n-th group) to that element as a
-/// SmallHermesValue, and must not allocate. The result has a null
+/// `resolveGroupValue(mappingObj[k], getCapture)`: normally
+/// `getCapture(mappingObj[k])`, or the first defined capture among the
+/// indices when `mappingObj[k]` is an array of them. \p getCapture maps an
+/// index of the match (0 is the whole match, n the n-th group) to that element
+/// as a SmallHermesValue, and must not allocate. The result has a null
 /// prototype.
 template <typename GetCapture>
 static CallResult<PseudoHandle<JSObject>> buildGroupsObject(
@@ -720,11 +765,12 @@ static CallResult<PseudoHandle<JSObject>> buildGroupsObject(
           assert(
               !desc.flags.privateName &&
               "private name not expected in regex mapping object");
-          auto idx = static_cast<uint32_t>(
-              JSObject::getNamedSlotValueUnsafe(*mappingObj, runtime, desc.slot)
-                  .getNumber(runtime));
+          auto mapping = JSObject::getNamedSlotValueUnsafe(
+              *mappingObj, runtime, desc.slot);
+          SmallHermesValue value =
+              resolveGroupValue(runtime, mapping, getCapture);
           JSObject::setNamedSlotValueUnsafe(
-              lv.groupsObj.get(), runtime, desc.slot, getCapture(idx));
+              lv.groupsObj.get(), runtime, desc.slot, value);
         });
     return PseudoHandle<JSObject>::create(lv.groupsObj.get());
   }
@@ -746,10 +792,11 @@ static CallResult<PseudoHandle<JSObject>> buildGroupsObject(
       lv.clazz,
       runtime,
       [&](Runtime &, SymbolID id, NamedPropertyDescriptor desc) -> bool {
-        auto idx = static_cast<uint32_t>(
-            JSObject::getNamedSlotValueUnsafe(*mappingObj, runtime, desc.slot)
-                .getNumber(runtime));
-        lv.tmpVal = getCapture(idx).unboxToHV(runtime);
+        auto mapping =
+            JSObject::getNamedSlotValueUnsafe(*mappingObj, runtime, desc.slot);
+        SmallHermesValue value =
+            resolveGroupValue(runtime, mapping, getCapture);
+        lv.tmpVal = value.unboxToHV(runtime);
         if (LLVM_UNLIKELY(
                 JSObject::defineNewOwnProperty(
                     lv.groupsObj,

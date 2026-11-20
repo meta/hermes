@@ -172,6 +172,10 @@ class JSRegExp final : public JSObject {
 
   regex::SyntaxFlags syntaxFlags_ = {};
 
+  /// Maps each distinct capture group name to its match array index, or to a
+  /// JSArray of indices if several mutually exclusive capture groups share the
+  /// name. Never exposed to JS and never modified after initialization, so
+  /// JSRegExps compiled from the same pattern may share one.
   GCPointer<JSObject> groupNameMappings_{nullptr};
 
   // Finalizer to clean up stored native regex

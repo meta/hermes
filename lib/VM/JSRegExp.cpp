@@ -12,6 +12,7 @@
 #include "hermes/Regex/RegexTraits.h"
 #include "hermes/Support/UTF8.h"
 #include "hermes/VM/BuildMetadata.h"
+#include "hermes/VM/JSArray.h"
 #include "hermes/VM/Operations.h"
 #include "hermes/VM/RegExpMatch.h"
 #include "hermes/VM/Runtime-inline.h"
@@ -219,7 +220,7 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
     regex::ParsedGroupNamesMapping &parsedMappings) {
   struct : public Locals {
     PinnedValue<JSObject> obj;
-    PinnedValue<HermesValue> numberValue;
+    PinnedValue<> value;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -234,7 +235,6 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
       parsedMappings.size());
   lv.obj = objRes.get();
 
-  MutableHandle<HermesValue> numberHandle{runtime};
   for (const auto &identifier : orderedNamedGroups) {
     GCScopeMarkerRAII marker{gcScope};
 
@@ -243,21 +243,36 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
         mappingIt != parsedMappings.end() &&
         "identifier not found in named groups");
     const regex::GroupNums &matchIndices = mappingIt->second;
-    assert(matchIndices.size() == 1 && "a name maps to exactly one group");
+    if (LLVM_LIKELY(matchIndices.size() == 1)) {
+      lv.value = HermesValue::encodeTrustedNumberValue(matchIndices.front());
+    } else {
+      // Several mutually exclusive capture groups share this name, so it maps
+      // to an array of their match array indices rather than to a single one.
+      uint32_t count = matchIndices.size();
+      auto arrRes = JSArray::create(runtime, count, count);
+      if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+      lv.value = arrRes->getHermesValue();
+      for (uint32_t i = 0; i < count; ++i) {
+        // Encoding a number may allocate, so do it before touching the array.
+        SmallHermesValue shv =
+            SmallHermesValue::encodeNumberValue(matchIndices[i], runtime);
+        JSArray::unsafeSetExistingElementAt(
+            vmcast<JSArray>(*lv.value), runtime, i, shv);
+      }
+    }
 
     auto symbolRes =
         runtime.getIdentifierTable().getSymbolHandle(runtime, identifier);
     if (LLVM_UNLIKELY(symbolRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    numberHandle.set(
-        HermesValue::encodeTrustedNumberValue(matchIndices.front()));
     auto res = JSObject::defineNewOwnProperty(
         lv.obj,
         runtime,
         symbolRes->get(),
         PropertyFlags::defaultNewNamedPropertyFlags(),
-        numberHandle);
+        lv.value);
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
   }

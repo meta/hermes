@@ -3151,8 +3151,21 @@ Value *ESTreeIRGen::genRegExpLiteral(ESTree::RegExpLiteralNode *RE) {
           groupIdxRes != mapping.end() &&
           "identifier not found in named groups");
       const regex::GroupNums &groupIdxs = groupIdxRes->second;
-      assert(groupIdxs.size() == 1 && "a name maps to exactly one group");
-      auto *val = Builder.getLiteralNumber(groupIdxs.front());
+      Value *val;
+      if (LLVM_LIKELY(groupIdxs.size() == 1)) {
+        val = Builder.getLiteralNumber(groupIdxs.front());
+      } else {
+        // Several mutually exclusive capture groups share this name, so it maps
+        // to an array of their match array indices rather than to a single one.
+        // This is the same encoding JSRegExp::initializeGroupNameMappingObj
+        // builds on the `new RegExp` path, where the pattern is only known at
+        // runtime. The array is not a Literal, so lowering stores it into the
+        // object after allocating it.
+        AllocArrayInst::ArrayValueList elems;
+        for (uint32_t groupIdx : groupIdxs)
+          elems.push_back(Builder.getLiteralNumber(groupIdx));
+        val = Builder.createAllocArrayInst(elems, elems.size());
+      }
       propMap.emplace_back(key, val);
     }
     auto literalObj =
