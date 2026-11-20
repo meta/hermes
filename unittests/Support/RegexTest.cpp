@@ -1277,4 +1277,109 @@ TEST(Regex, StartFilterAvoidsOverflow) {
       searchWithBytecode(bytecode, text, 0, 1, &m, constants::matchDefault));
 }
 
+TEST(Regex, DuplicateNamedGroups) {
+  using namespace constants;
+  // A capture group name may be reused only when some enclosing disjunction
+  // puts the two groups in different alternatives, so that they can never both
+  // participate in a match (ES2025 duplicate named capturing groups).
+  EXPECT_EQ(error_for(u"(?<a>x)|(?<a>y)"), ErrorType::None);
+  EXPECT_EQ(error_for(u"(?<a>x)|(?<a>y)|(?<a>z)"), ErrorType::None);
+  EXPECT_EQ(error_for(u"(?:(?<a>x)|(?<a>y))|(?<a>z)"), ErrorType::None);
+  EXPECT_EQ(error_for(u"(?:(?:(?<a>1)|(?<a>2))|(?<a>3))"), ErrorType::None);
+  EXPECT_EQ(error_for(u"(?:(?<a>x)|(?<a>y))(?<b>z)"), ErrorType::None);
+  // Quantifying the disjunction does not let both groups participate at once.
+  EXPECT_EQ(error_for(u"(?:(?<a>1)|(?<a>2))+"), ErrorType::None);
+  // A group can be separated by a disjunction at any enclosing depth.
+  EXPECT_EQ(error_for(u"(?:(?<a>1)(?:q))|(?<a>2)"), ErrorType::None);
+  EXPECT_EQ(error_for(u"(?<a>x)|(?:(?:(?<a>y)))"), ErrorType::None);
+  // Modifier groups and lookarounds delimit disjunctions too.
+  EXPECT_EQ(error_for(u"(?i:(?<a>x))|(?<a>y)"), ErrorType::None);
+  EXPECT_EQ(error_for(u"(?=(?<a>x))|(?<a>y)"), ErrorType::None);
+
+  EXPECT_EQ(error_for(u"(?<a>x)(?<a>y)"), ErrorType::DuplicateCaptureGroupName);
+  EXPECT_EQ(
+      error_for(u"(?<a>x)(?:(?<a>y))"), ErrorType::DuplicateCaptureGroupName);
+  EXPECT_EQ(
+      error_for(u"(?:(?<a>x))(?<a>y)"), ErrorType::DuplicateCaptureGroupName);
+  EXPECT_EQ(
+      error_for(u"(?:(?<a>x)|(?<a>y))(?<a>z)"),
+      ErrorType::DuplicateCaptureGroupName);
+  // Mutual exclusion is not transitive: a and b are separated from c, but not
+  // from each other.
+  EXPECT_EQ(
+      error_for(u"(?<a>1)(?<a>2)|(?<a>3)"),
+      ErrorType::DuplicateCaptureGroupName);
+  // Lookarounds are not special; the rule is purely syntactic.
+  EXPECT_EQ(
+      error_for(u"(?=(?<a>x))(?<a>y)"), ErrorType::DuplicateCaptureGroupName);
+  EXPECT_EQ(
+      error_for(u"(?!(?<a>x))(?<a>y)"), ErrorType::DuplicateCaptureGroupName);
+  EXPECT_EQ(
+      error_for(u"(?<=(?<a>x))(?<a>y)"), ErrorType::DuplicateCaptureGroupName);
+  // Two sibling disjunctions inside one alternative separate nothing.
+  EXPECT_EQ(
+      error_for(u"(a|(?<n>b))((?<n>c)|d)"),
+      ErrorType::DuplicateCaptureGroupName);
+  EXPECT_EQ(
+      error_for(u"(?:(?<a>1)|(?<a>2))(?:(?<a>3)|(?<a>4))"),
+      ErrorType::DuplicateCaptureGroupName);
+
+  // A named backreference refers to every group with that name, so it is only
+  // an error when no group defines the name at all.
+  EXPECT_EQ(error_for(u"(?:(?<a>x)|(?<a>y))\\k<a>"), ErrorType::None);
+  EXPECT_EQ(
+      error_for(u"(?:(?<a>x)|(?<a>y))\\k<b>"),
+      ErrorType::NonexistentNamedCaptureReference);
+  // The name may be defined after the reference, in either alternative.
+  EXPECT_EQ(error_for(u"\\k<a>(?:(?<a>x)|(?<a>y))"), ErrorType::None);
+  EXPECT_EQ(error_for(u"(?:\\k<a>|(?<a>y))"), ErrorType::None);
+
+  // Many mutually exclusive groups may share one name. Validating this must
+  // not degenerate into comparing every use of the name against every other.
+  {
+    std::u16string manyAlternatives;
+    for (int i = 0; i < 20000; i++) {
+      if (i)
+        manyAlternatives += u'|';
+      manyAlternatives += u"(?<a>x)";
+    }
+    EXPECT_EQ(error_for(manyAlternatives.c_str()), ErrorType::None);
+    // The same groups in sequence rather than in alternation are a conflict.
+    EXPECT_EQ(
+        error_for((manyAlternatives + u"(?<a>x)").c_str()),
+        ErrorType::DuplicateCaptureGroupName);
+  }
+
+  // All of the above also holds with the unicode flag, which skips the
+  // reparsing that a non-unicode pattern needs to resolve \k.
+  EXPECT_EQ(error_for(u"(?<a>x)|(?<a>y)", u"u"), ErrorType::None);
+  EXPECT_EQ(
+      error_for(u"(?<a>x)(?<a>y)", u"u"), ErrorType::DuplicateCaptureGroupName);
+  EXPECT_EQ(error_for(u"\\k<a>(?:(?<a>x)|(?<a>y))", u"u"), ErrorType::None);
+}
+
+TEST(Regex, DuplicateNamedGroupsBackRef) {
+  cmatch matchRanges;
+  // A backreference to a duplicated name matches whichever group participated.
+  cregex re(u"^(?:(?<a>x)|(?<a>y))\\k<a>$");
+  EXPECT_TRUE(search(u"xx", matchRanges, re));
+  EXPECT_TRUE(search(u"yy", matchRanges, re));
+  EXPECT_FALSE(search(u"xy", matchRanges, re));
+  EXPECT_FALSE(search(u"yx", matchRanges, re));
+
+  // When no group with the name participated, the backreference matches empty.
+  cregex none(u"^(?:z|(?<a>x)|(?<a>y))\\k<a>$");
+  EXPECT_TRUE(search(u"z", matchRanges, none));
+
+  // Case-insensitive comparison still applies.
+  cregex icase(u"^(?:(?<a>x)|(?<a>y))\\k<a>$", u"i");
+  EXPECT_TRUE(search(u"xX", matchRanges, icase));
+  EXPECT_FALSE(search(u"xY", matchRanges, icase));
+
+  // Only the group that participated is captured; the other stays unmatched.
+  cregex groups(u"^(?:(?<a>x)|(?<a>y))$");
+  ASSERT_TRUE(search(u"y", matchRanges, groups));
+  EXPECT_EQ("(0-1) nm (0-1)", flatten(matchRanges));
+}
+
 } // end anonymous namespace

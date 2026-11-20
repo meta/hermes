@@ -303,3 +303,26 @@ print(/(abc|def)/);
 // CHECK-NEXT:    0014  MatchNChar8: 'def'
 // CHECK-NEXT:    0019  EndMarkedSubexpression: 0
 // CHECK-NEXT:    001c  Goal
+
+// A name shared by mutually exclusive capture groups makes \k<a> refer to all
+// of them: one BackRefInsn per group, since a backreference to a group that did
+// not participate matches empty. An ordinary backreference emits just one.
+print(/(?:(?<a>x)|(?<a>y))\k<a>(?<b>z)\k<b>/);
+// CHECK:       28: /(?:(?<a>x)|(?<a>y))\k<a>(?<b>z)\k<b>/
+// CHECK-NEXT:    Header: marked: 3 loops: 0 flags: 0 constraints: 4
+// CHECK-NEXT:    StartSet: 0x78-0x79
+// CHECK-NEXT:    0000  Alternation: Target 0x14, constraints 4,4
+// CHECK-NEXT:    0007  BeginMarkedSubexpression: 0
+// CHECK-NEXT:    000a  MatchChar8: 'x'
+// CHECK-NEXT:    000c  EndMarkedSubexpression: 0
+// CHECK-NEXT:    000f  Jump32: 0x1c
+// CHECK-NEXT:    0014  BeginMarkedSubexpression: 1
+// CHECK-NEXT:    0017  MatchChar8: 'y'
+// CHECK-NEXT:    0019  EndMarkedSubexpression: 1
+// CHECK-NEXT:    001c  BackRefInsn: 0
+// CHECK-NEXT:    001f  BackRefInsn: 1
+// CHECK-NEXT:    0022  BeginMarkedSubexpression: 2
+// CHECK-NEXT:    0025  MatchChar8: 'z'
+// CHECK-NEXT:    0027  EndMarkedSubexpression: 2
+// CHECK-NEXT:    002a  BackRefInsn: 2
+// CHECK-NEXT:    002d  Goal

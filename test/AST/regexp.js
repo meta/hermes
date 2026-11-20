@@ -26,3 +26,10 @@ print(/{100}/);
 //CHECK: {{.*}}regexp.js:25:7: error: Invalid regular expression: Quantifier has nothing to repeat
 //CHECK-NEXT: print(/{100}/);
 //CHECK-NEXT:       ^~~~~~~
+
+// Reusing a capture group name is only allowed when the two groups are in
+// different alternatives, so this one is still an error.
+print(/(?<a>x)(?<a>y)/);
+//CHECK: {{.*}}regexp.js:32:7: error: Invalid regular expression: Duplicate capture group name
+//CHECK-NEXT: print(/(?<a>x)(?<a>y)/);
+//CHECK-NEXT:       ^~~~~~~~~~~~~~~~
