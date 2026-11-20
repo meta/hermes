@@ -59,6 +59,42 @@ void FinalizableNativeFunctionBuildMeta(
   mb.setVTable(&FinalizableNativeFunction::vt);
 }
 
+HiddenClass *FinalizableNativeFunction::createClass(
+    Runtime &runtime,
+    Handle<HiddenClass> rootClazz) {
+  struct : public Locals {
+    PinnedValue<HiddenClass> clazz;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  // HiddenClass::addProperty() returns each new class in a new handle. Free
+  // those handles here, so that they do not stay in the caller's GCScope.
+  GCScopeMarkerRAII marker{runtime};
+
+  // Same flags as Callable::defineNameLengthAndPrototype().
+  PropertyFlags pf{};
+  pf.enumerable = 0;
+  pf.writable = 0;
+  pf.configurable = 1;
+
+  auto addedLength = runtime.ignoreAllocationFailure(
+      HiddenClass::addProperty(
+          rootClazz, runtime, Predefined::getSymbolID(Predefined::length), pf));
+  assert(
+      addedLength.second == lengthPropIndex() &&
+      "FinalizableNativeFunction.length has invalid index");
+  lv.clazz = addedLength.first;
+
+  auto addedName = runtime.ignoreAllocationFailure(
+      HiddenClass::addProperty(
+          lv.clazz, runtime, Predefined::getSymbolID(Predefined::name), pf));
+  assert(
+      addedName.second == namePropIndex() &&
+      "FinalizableNativeFunction.name has invalid index");
+  lv.clazz = addedName.first;
+
+  return *lv.clazz;
+}
+
 CallResult<HermesValue> FinalizableNativeFunction::createWithoutPrototype(
     Runtime &runtime,
     void *context,
@@ -66,32 +102,59 @@ CallResult<HermesValue> FinalizableNativeFunction::createWithoutPrototype(
     FinalizeNativeFunctionPtr finalizePtr,
     SymbolID name,
     unsigned paramCount) {
-  auto parentHandle = Handle<JSObject>::vmcast(&runtime.functionPrototype);
+  assert(name.isValid() && "A name must always be provided");
 
+  struct : public Locals {
+    PinnedValue<FinalizableNativeFunction> self;
+    PinnedValue<StringPrimitive> name;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  // The class already has 'length' and 'name', and its object parent is
+  // Function.prototype. So the new object needs no class transitions, only
+  // the values of the two properties.
   auto *cell = runtime.makeAFixed<FinalizableNativeFunction, HasFinalizer::Yes>(
       runtime,
-      parentHandle,
-      runtime.getHiddenClassForPrototype(
-          *parentHandle, runtime.classFinalizableNativeFunction),
+      Handle<JSObject>::vmcast(&runtime.functionPrototype),
+      Handle<HiddenClass>::vmcast(
+          &runtime.classFinalizableNativeFunctionNameLength),
       context,
       functionPtr,
       finalizePtr);
-  auto selfHandle = JSObjectInit::initToHandle(runtime, cell);
+  lv.self = JSObjectInit::initToPointer(runtime, cell);
 
-  auto prototypeObjectHandle = runtime.makeNullHandle<JSObject>();
+  // When the overlap slots use all the direct property slots (for example,
+  // with compressed pointers), the two properties need indirect storage. Give
+  // it the default capacity, as JSObject::allocateNewSlotStorage() does for
+  // the first indirect property. Like there, an allocation failure is fatal:
+  // the cell owns the context now, so this function must not fail.
+  constexpr SlotIndex kNumSlots = namePropIndex() + 1;
+  constexpr PropStorage::size_type kNumIndirect =
+      kNumSlots > DIRECT_PROPERTY_SLOTS ? kNumSlots - DIRECT_PROPERTY_SLOTS : 0;
+  static_assert(
+      kNumIndirect <= DEFAULT_PROPERTY_CAPACITY,
+      "Indirect properties must fit in the default capacity");
+  if constexpr (kNumIndirect > 0) {
+    HermesValue storage = runtime.ignoreAllocationFailure(
+        PropStorage::create(runtime, DEFAULT_PROPERTY_CAPACITY, kNumIndirect));
+    lv.self->propStorage_.setNonNull(
+        runtime, vmcast<PropStorage>(storage), runtime.getHeap());
+  }
 
-  auto st = defineNameLengthAndPrototype(
-      selfHandle,
+  lv.name = runtime.getStringPrimFromSymbolID(name);
+
+  // Encode the length before reading the object pointer: with boxed doubles,
+  // encoding a number can allocate, and so move the object.
+  SmallHermesValue lengthSHV =
+      SmallHermesValue::encodeNumberValue(paramCount, runtime);
+  setNamedSlotValueUnsafe(lv.self.get(), runtime, lengthPropIndex(), lengthSHV);
+  setNamedSlotValueUnsafe(
+      lv.self.get(),
       runtime,
-      name,
-      paramCount,
-      prototypeObjectHandle,
-      Callable::WritablePrototype::Yes);
-  (void)st;
-  assert(
-      st != ExecutionStatus::EXCEPTION && "defineLengthAndPrototype() failed");
+      namePropIndex(),
+      SmallHermesValue::encodeStringValue(lv.name.get(), runtime));
 
-  return selfHandle.getHermesValue();
+  return lv.self.getHermesValue();
 }
 
 HostObjectProxy::~HostObjectProxy() {}
