@@ -36,7 +36,7 @@ jobs:
         cmake -S hermes -B build
         cmake --build build --target check-hermes all -j 4
   test-windows:
-    runs-on: windows-2025
+    runs-on: windows-2022
     steps:
     - uses: actions/checkout@v4.1.0
       with:
