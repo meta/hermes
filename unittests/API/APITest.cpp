@@ -856,6 +856,58 @@ TEST(HermesRootsTest, DontGrowWhenCloneObject) {
   EXPECT_EQ(rootsDelta, 0);
 }
 
+// Call a host function with more arguments than the inline capacity of its
+// argument buffer, and with every kind of value. Check the values, and check
+// that the call releases the roots it makes for the arguments and `this`.
+TEST(HermesRootsTest, HostFunctionArgumentsAreReleased) {
+  std::shared_ptr<HermesRuntime> rt = makeHermesRuntime();
+  Value kept;
+  Function check = Function::createFromHostFunction(
+      *rt,
+      PropNameID::forAscii(*rt, "check"),
+      0,
+      [&kept](
+          Runtime &rt, const Value &thisVal, const Value *args, size_t count) {
+        EXPECT_EQ(count, 10u);
+        EXPECT_EQ(thisVal.getObject(rt).getProperty(rt, "tag").getNumber(), 7);
+        EXPECT_TRUE(args[0].isUndefined());
+        EXPECT_TRUE(args[1].isNull());
+        EXPECT_TRUE(args[2].getBool());
+        EXPECT_EQ(args[3].getNumber(), 1.5);
+        EXPECT_EQ(args[4].getString(rt).utf8(rt), "str");
+        EXPECT_EQ(args[5].getObject(rt).getProperty(rt, "a").getNumber(), 1);
+        EXPECT_EQ(args[6].getSymbol(rt).toString(rt), "Symbol(sym)");
+        EXPECT_EQ(args[7].getBigInt(rt).toString(rt).utf8(rt), "123");
+        EXPECT_EQ(args[8].getNumber(), 8);
+        EXPECT_EQ(args[9].getString(rt).utf8(rt), "last");
+        kept = Value(rt, args[5]);
+        return Value(rt, args[9]);
+      });
+  rt->global().setProperty(*rt, "check", check);
+  Function callCheck =
+      rt->evaluateJavaScript(
+            std::make_unique<StringBuffer>(
+                "(function() {"
+                "  return {tag: 7, check}.check("
+                "      undefined, null, true, 1.5, 'str', {a: 1},"
+                "      Symbol('sym'), 123n, 8, 'last');"
+                "})"),
+            "")
+          .getObject(*rt)
+          .getFunction(*rt);
+
+  auto helperRt = dynamicInterfaceCast<IHermesTestHelpers>(rt);
+  auto rootsDelta =
+      HermesTestHelper::calculateRootsListChange(*helperRt, [&]() {
+        EXPECT_EQ(callCheck.call(*rt).getString(*rt).utf8(*rt), "last");
+      });
+  // Only the copy of the object argument in `kept` stays.
+  EXPECT_EQ(rootsDelta, 1);
+
+  rt->instrumentation().collectGarbage("test");
+  EXPECT_EQ(kept.getObject(*rt).getProperty(*rt, "a").getNumber(), 1);
+}
+
 TEST(HermesWatchTimeLimitTest, WatchTimeLimit) {
   // Some code that exercies the async break checks.
   const char *forABit = "var t = Date.now(); while (Date.now() < t + 100) {}";
