@@ -3293,7 +3293,10 @@ size_t HermesRuntimeImpl::push(
     }
   }
 
-  // Slow-path: Set the property at [oldLen, oldLen + count - 1].
+  // Slow-path: Set the property at [oldLen, oldLen + count - 1], then set
+  // 'length', throwing on failure as Array.prototype.push does. Set 'length'
+  // even for a JSArray: an element store handled by a setter on the prototype
+  // chain doesn't grow it.
   vm::PinnedHermesValue numStorage;
   vm::PinnedHermesValue valStorage;
   for (size_t i = 0; i < count; i++) {
@@ -3303,21 +3306,19 @@ size_t HermesRuntimeImpl::push(
         handle(arr),
         runtime_,
         vm::Handle<>(&numStorage),
-        vmHandleFromValue(elements[i], &valStorage));
-    checkStatus(res.getStatus());
-  }
-
-  // If it's not a JS Array, we need to update the 'length' property explicitly
-  if (LLVM_UNLIKELY(!isJSArray)) {
-    numStorage = vm::HermesValue::encodeTrustedNumberValue(newLen);
-    auto res = vm::JSObject::putNamed_RJS(
-        handle(arr),
-        runtime_,
-        vm::Predefined::getSymbolID(vm::Predefined::length),
-        vm::Handle<>(&numStorage),
+        vmHandleFromValue(elements[i], &valStorage),
         vm::PropOpFlags().plusThrowOnError());
     checkStatus(res.getStatus());
   }
+
+  numStorage = vm::HermesValue::encodeTrustedNumberValue(newLen);
+  auto res = vm::JSObject::putNamed_RJS(
+      handle(arr),
+      runtime_,
+      vm::Predefined::getSymbolID(vm::Predefined::length),
+      vm::Handle<>(&numStorage),
+      vm::PropOpFlags().plusThrowOnError());
+  checkStatus(res.getStatus());
 
   return newLen;
 }

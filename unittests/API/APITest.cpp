@@ -2643,6 +2643,65 @@ TEST_P(HermesRuntimeTest, ArrayPush) {
   EXPECT_TRUE(arr.getValueAtIndex(*rt, 3).isUndefined());
 }
 
+TEST_P(HermesRuntimeTest, ArrayPushSlowPathMatchesJS) {
+  auto thrownName = [&](const std::function<void()> &f) -> std::string {
+    try {
+      f();
+    } catch (const JSError &e) {
+      return e.value()
+          .asObject(*rt)
+          .getProperty(*rt, "name")
+          .asString(*rt)
+          .utf8(*rt);
+    }
+    return "<no throw>";
+  };
+
+  // A setter on Array.prototype handles the element store, so nothing lands on
+  // the array. push must still set length, as [].push(1) does in JS.
+  eval(R"(
+Object.defineProperty(Array.prototype, 0, {
+  get() { return 'GETTER'; },
+  set(v) { globalThis.stored = v; },
+  configurable: true,
+});
+)");
+  Array arr(*rt, 0);
+  EXPECT_EQ(arr.push(*rt, 1), 1);
+  ASSERT_EQ(arr.length(*rt), 1);
+  EXPECT_EQ(arr.getValueAtIndex(*rt, 0).asString(*rt).utf8(*rt), "GETTER");
+  EXPECT_EQ(rt->global().getProperty(*rt, "stored").asNumber(), 1);
+
+  // A read-only index on Array.prototype makes the element store fail, so push
+  // must throw a TypeError, as [].push(1) does in JS.
+  eval(R"(
+delete Array.prototype[0];
+Object.defineProperty(Array.prototype, 0, {
+  value: 'READONLY',
+  writable: false,
+  configurable: true,
+});
+)");
+  arr = Array(*rt, 0);
+  const auto pushOne = [&] { arr.push(*rt, 1); };
+  EXPECT_EQ(thrownName(pushOne), "TypeError");
+  EXPECT_EQ(arr.length(*rt), 0);
+  eval("delete Array.prototype[0];");
+
+  // A failed element store on a non-JSArray must throw too.
+  arr = eval(R"(
+new Proxy([], {
+  set(target, key, value) {
+    return key !== '0' && Reflect.set(target, key, value);
+  },
+});
+)")
+            .asObject(*rt)
+            .getArray(*rt);
+  EXPECT_EQ(thrownName(pushOne), "TypeError");
+  EXPECT_EQ(arr.length(*rt), 0);
+}
+
 TEST_P(HermesRuntimeTest, TryGetMutableBuffer) {
   auto arrayBuffer =
       eval("new ArrayBuffer(8);").getObject(*rt).getArrayBuffer(*rt);
