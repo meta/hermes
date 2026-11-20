@@ -107,7 +107,7 @@ inline llvh::Optional<T> valueToUnsigned(const jsi::Value &val) {
 /// instanceof Uint8Array. This is more permissive than the spec requires, but
 /// handles cross-realm Uint8Arrays and is consistent with JSI's portable
 /// design. The original VM implementation used internal type checks.
-/// Throws JSError if the object is not a valid TypedArray or is detached.
+/// Throws a TypeError if the object is not a valid TypedArray or is detached.
 /// The returned object keeps the backing ArrayBuffer alive; it must outlive
 /// every use of its data().
 /// \param errorMessage The error message to use if the object is invalid.
