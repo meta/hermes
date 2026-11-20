@@ -25,6 +25,11 @@
 #include <set>
 #include <sstream>
 
+#ifdef __LLVM_INSTR_PROFILE_GENERATE
+/// From the LLVM profile runtime, which -fprofile-generate links in.
+extern "C" void __llvm_profile_reset_counters(void);
+#endif
+
 #define TRACE_EXPECT_EQ(expected, actual)                                 \
   do {                                                                    \
     if (options_.verificationEnabled && (expected) != (actual)) {         \
@@ -539,6 +544,11 @@ TraceInterpreter::execFromMemoryBuffer(
 
   const auto &rtConfig = merge(
       rtConfigBuilder, gcConfigBuilder, options, codeIsMmapped, isBytecode);
+
+#ifdef __LLVM_INSTR_PROFILE_GENERATE
+  // An app never parses a trace, so keep only the replay in the profile.
+  __llvm_profile_reset_counters();
+#endif
 
   std::vector<std::string> repGCStats(options.reps);
   std::shared_ptr<jsi::Runtime> rt;
