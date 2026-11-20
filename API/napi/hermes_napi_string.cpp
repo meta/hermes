@@ -14,6 +14,7 @@
 #include "llvh/Support/ConvertUTF.h"
 
 #include <cstring>
+#include <string>
 
 //===========================================================================
 // String creation
@@ -58,8 +59,12 @@ napi_status NAPI_CDECL napi_create_string_utf8(
   // and produce 2 output units, so the bound still holds).
   llvh::SmallVector<char16_t, 128> buf;
   buf.reserve(length);
-  const char *cur = str;
-  const char *end = str + length;
+  // decodeUTF8 reads the continuation bytes of a sequence without checking
+  // for the end, and relies on a terminator to stop at the end of the input.
+  // str is only valid for length bytes, so decode a null-terminated copy.
+  std::string terminated(str, length);
+  const char *cur = terminated.c_str();
+  const char *end = cur + length;
   while (cur < end) {
     uint32_t cp = hermes::decodeUTF8<false>(cur, [](const llvh::Twine &) {});
     auto inserter = std::back_inserter(buf);
