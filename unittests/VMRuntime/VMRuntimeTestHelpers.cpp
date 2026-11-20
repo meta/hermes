@@ -29,7 +29,8 @@ namespace vm {
 DummyRuntime::DummyRuntime(
     const GCConfig &gcConfig,
     std::shared_ptr<StorageProvider> storageProvider,
-    std::shared_ptr<CrashManager> crashMgr)
+    std::shared_ptr<CrashManager> crashMgr,
+    experiments::VMExperimentFlags vmExperimentFlags)
     : gcCallbacksWrapper_(*this),
       heap_{
           gcCallbacksWrapper_,
@@ -37,7 +38,7 @@ DummyRuntime::DummyRuntime(
           gcConfig,
           crashMgr,
           std::move(storageProvider),
-          /* experiments */ 0} {}
+          vmExperimentFlags} {}
 
 DummyRuntime::~DummyRuntime() {
   EXPECT_FALSE(getHeap().getIDTracker().hasNativeIDs())
@@ -49,13 +50,16 @@ DummyRuntime::~DummyRuntime() {
 std::shared_ptr<DummyRuntime> DummyRuntime::create(
     const GCConfig &gcConfig,
     std::shared_ptr<StorageProvider> provider,
-    std::shared_ptr<CrashManager> crashMgr) {
+    std::shared_ptr<CrashManager> crashMgr,
+    experiments::VMExperimentFlags vmExperimentFlags) {
   auto rt = HeapRuntime<DummyRuntime>::create(provider);
-  new (rt.get()) DummyRuntime(gcConfig, provider, crashMgr);
+  new (rt.get()) DummyRuntime(gcConfig, provider, crashMgr, vmExperimentFlags);
   return rt;
 }
 
-std::shared_ptr<DummyRuntime> DummyRuntime::create(const GCConfig &gcConfig) {
+std::shared_ptr<DummyRuntime> DummyRuntime::create(
+    const GCConfig &gcConfig,
+    experiments::VMExperimentFlags vmExperimentFlags) {
 #ifdef HERMESVM_CONTIGUOUS_HEAP
   // Allow some extra segments for the runtime, and as a buffer for the GC.
   // This is consistent to VM::Runtime.
@@ -63,9 +67,17 @@ std::shared_ptr<DummyRuntime> DummyRuntime::create(const GCConfig &gcConfig) {
       1ULL << 32,
       (uint64_t)gcConfig.getMaxHeapSize() +
           FixedSizeHeapSegment::storageSize() * 4);
-  return create(gcConfig, defaultProvider(providerSize));
+  return create(
+      gcConfig,
+      defaultProvider(providerSize),
+      std::make_shared<NopCrashManager>(),
+      vmExperimentFlags);
 #else
-  return create(gcConfig, defaultProvider());
+  return create(
+      gcConfig,
+      defaultProvider(),
+      std::make_shared<NopCrashManager>(),
+      vmExperimentFlags);
 #endif
 }
 

@@ -287,7 +287,9 @@ class DummyRuntime final : public RuntimeBase, public HandleRootOwner {
   Locals *vmLocals{};
 
   /// Create a DummyRuntime with the default parameters.
-  static std::shared_ptr<DummyRuntime> create(const GCConfig &gcConfig);
+  static std::shared_ptr<DummyRuntime> create(
+      const GCConfig &gcConfig,
+      experiments::VMExperimentFlags vmExperimentFlags = experiments::Default);
 
   /// Use a custom storage provider and/or a custom crash manager.
   /// \param provider A pointer to a StorageProvider. It *must* use
@@ -297,7 +299,8 @@ class DummyRuntime final : public RuntimeBase, public HandleRootOwner {
       const GCConfig &gcConfig,
       std::shared_ptr<StorageProvider> provider,
       std::shared_ptr<CrashManager> crashMgr =
-          std::make_shared<NopCrashManager>());
+          std::make_shared<NopCrashManager>(),
+      experiments::VMExperimentFlags vmExperimentFlags = experiments::Default);
 
   /// Provide the correct storage provider based on build modes.
   /// All decorator StorageProviders must wrap the one returned from this
@@ -396,7 +399,8 @@ class DummyRuntime final : public RuntimeBase, public HandleRootOwner {
   DummyRuntime(
       const GCConfig &gcConfig,
       std::shared_ptr<StorageProvider> storageProvider,
-      std::shared_ptr<CrashManager> crashMgr);
+      std::shared_ptr<CrashManager> crashMgr,
+      experiments::VMExperimentFlags vmExperimentFlags);
 };
 
 /// RAII class to push/pop a Locals struct within a scope. This is a duplicate
