@@ -5,7 +5,7 @@ on:
 
 jobs:
   build-hermesc-windows:
-    runs-on: windows-2025
+    runs-on: windows-2022
     env:
       HERMES_WS_DIR: 'C:\tmp\hermes'
       HERMES_TARBALL_ARTIFACTS_DIR: 'C:\tmp\hermes\hermes-runtime-darwin'
