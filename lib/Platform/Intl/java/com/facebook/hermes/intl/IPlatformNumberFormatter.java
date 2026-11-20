@@ -213,8 +213,11 @@ public interface IPlatformNumberFormatter {
       switch (this) {
         case NAME:
           return Currency.LONG_NAME;
-        case SYMBOL:
         case NARROWSYMBOL:
+          // Currency.NARROW_SYMBOL_NAME is only available from API 30.
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return Currency.NARROW_SYMBOL_NAME;
+          return Currency.SYMBOL_NAME;
+        case SYMBOL:
         default:
           return Currency.SYMBOL_NAME;
       }

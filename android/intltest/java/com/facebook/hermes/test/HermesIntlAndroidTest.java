@@ -144,4 +144,20 @@ public class HermesIntlAndroidTest {
       }
     }
   }
+
+  @Test
+  public void testCurrencyDisplayNarrowSymbolForApiLevelAbove30() {
+    if (Build.VERSION.SDK_INT >= 30) {
+      try (JSRuntime rt = JSRuntime.makeHermesRuntime()) {
+        rt.evaluateJavaScript(
+            "var options = { style: 'currency', currency: 'USD' };\n"
+                + "var symbol = new Intl.NumberFormat('en-CA', options).format(7.99);\n"
+                + "options.currencyDisplay = 'narrowSymbol';\n"
+                + "var narrow = new Intl.NumberFormat('en-CA', options).format(7.99);");
+
+        assertThat(rt.getGlobalStringProperty("symbol")).isEqualTo("US$7.99");
+        assertThat(rt.getGlobalStringProperty("narrow")).isEqualTo("$7.99");
+      }
+    }
+  }
 }
