@@ -154,9 +154,10 @@ using ThreadRunner = std::function<void(std::function<void()>)>;
   /* HostObject, HostFunction and NativeState destructors run */       \
   /* there, and like the runner itself they must not throw. */         \
   /* std::nullopt, the default, selects the platform default, which */ \
-  /* on Android wraps the thread in a JNI ThreadScope. Setting an */   \
-  /* empty ThreadRunner suppresses that and leaves the thread */       \
-  /* unwrapped -- note that this must be spelled */                    \
+  /* in builds with fbjni wraps the thread in a JNI ThreadScope */     \
+  /* when fbjni has a JavaVM. Setting an empty ThreadRunner */         \
+  /* suppresses that and leaves the thread unwrapped -- note that */   \
+  /* this must be spelled */                                           \
   /* withFinalizerThreadRunner(ThreadRunner{}), since a bare {} is */  \
   /* nullopt and so selects the platform default instead. */           \
   F(HERMES_NON_CONSTEXPR,                                              \

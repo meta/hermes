@@ -100,6 +100,16 @@ set(HERMES_ENABLE_NAPI ON CACHE BOOL
 set(HERMES_IS_ANDROID OFF CACHE BOOL
   "Building for Android")
 
+set(HERMES_HAS_FBJNI OFF CACHE BOOL
+  "Build with fbjni (always ON when HERMES_IS_ANDROID is ON)")
+
+# HERMES_IS_ANDROID builds, like the Gradle ones, run in an app with fbjni.
+# hermes.cpp uses it to attach the finalizer thread to the JVM, and the Java
+# Unicode and Android Intl backends link it when they are built.
+if(HERMES_IS_ANDROID)
+  set(HERMES_HAS_FBJNI ON)
+endif()
+
 if(HERMES_IS_ANDROID OR HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone|appletv")
   set(_HERMES_IS_MOBILE_BUILD_DEFAULT ON)
 else()
@@ -704,7 +714,7 @@ include_directories(BEFORE
   ${CMAKE_CURRENT_SOURCE_DIR}/external
   )
 
-if(HERMES_IS_ANDROID)
+if(HERMES_HAS_FBJNI)
   find_package(fbjni REQUIRED CONFIG)
 endif()
 

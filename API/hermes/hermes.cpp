@@ -71,7 +71,7 @@
 #include <jsi/instrumentation.h>
 #include <jsi/threadsafe.h>
 
-#ifdef __ANDROID__
+#if HERMES_HAS_FBJNI
 #include <fbjni/fbjni.h>
 #endif
 
@@ -256,16 +256,22 @@ using EventLoopCallback = const std::function<void()>;
 using ScheduleCallbackFunc = std::function<void(EventLoopCallback)>;
 
 /// Return the runner to install on the finalizer worker thread when the
-/// embedder did not configure one: a JNI ThreadScope wrapper on Android, and
-/// an empty runner, which leaves the thread unwrapped, everywhere else.
+/// embedder did not configure one. In builds with fbjni, it attaches the
+/// thread to the JVM, if there is one, with a JNI ThreadScope. Without fbjni,
+/// it is empty, which leaves the thread unwrapped.
 vm::ThreadRunner makeDefaultFinalizerThreadRunner() {
-#ifdef __ANDROID__
+#if HERMES_HAS_FBJNI
   return [](std::function<void()> run) {
     // Finalizers may release JNI references, which requires the thread to be
-    // attached to the JVM. ThreadScope's constructor throws when fbjni has no
-    // JavaVM. Nothing may escape into SerialExecutor, which is compiled
-    // without exceptions, so report any failure as a Hermes fatal error
-    // instead of letting it terminate the process without a diagnostic.
+    // attached to the JVM. Without a JavaVM, as in a command-line tool, there
+    // is nothing to attach to, and ThreadScope's constructor would throw.
+    if (!facebook::jni::Environment::isGlobalJvmAvailable()) {
+      run();
+      return;
+    }
+    // Nothing may escape into SerialExecutor, which is compiled without
+    // exceptions, so report any failure as a Hermes fatal error instead of
+    // letting it terminate the process without a diagnostic.
     try {
       const facebook::jni::ThreadScope scope;
       run();
