@@ -316,6 +316,76 @@ TEST_F(AlignedHeapSegmentTest, ResetLevel) {
   EXPECT_EQ(s.start(), s.level());
 }
 
+/// Charging external memory lowers the effective end by as much of it as the
+/// segment has room for.
+TEST_F(AlignedHeapSegmentTest, ChargeExternalMemory) {
+  const size_t room = s.available();
+  s.chargeExternalMemory(room / 4);
+  EXPECT_EQ(room - room / 4, s.available());
+
+  s.chargeExternalMemory(room);
+  EXPECT_EQ(0u, s.available());
+}
+
+/// A charge takes only the room above the level, and capping the charge at zero
+/// gives it back.
+TEST_F(AlignedHeapSegmentTest, ChargeExternalMemoryStopsAtLevel) {
+  AllocResult res = s.alloc(cellSize<GCCell>());
+  ASSERT_TRUE(res.success);
+
+  s.chargeExternalMemory(s.size());
+  EXPECT_EQ(s.level(), s.effectiveEnd());
+
+  s.capExternalMemoryCharge(0);
+  EXPECT_EQ(s.end(), s.effectiveEnd());
+}
+
+/// Capping the charge gives back the part of it that the external memory still
+/// credited no longer accounts for.
+TEST_F(AlignedHeapSegmentTest, CapExternalMemoryCharge) {
+  const size_t room = s.available();
+  s.chargeExternalMemory(room / 2);
+
+  s.capExternalMemoryCharge(room / 2);
+  EXPECT_EQ(room - room / 2, s.available());
+
+  s.capExternalMemoryCharge(room / 8);
+  EXPECT_EQ(room - room / 8, s.available());
+
+  s.capExternalMemoryCharge(0);
+  EXPECT_EQ(room, s.available());
+}
+
+/// A charge that found less room than it asked for is given back only as far
+/// as it lowered the effective end.
+TEST_F(AlignedHeapSegmentTest, CapExternalMemoryChargeThatStoppedAtLevel) {
+  const size_t room = s.available();
+  s.chargeExternalMemory(room);
+  s.chargeExternalMemory(room);
+  EXPECT_EQ(0u, s.available());
+
+  // Both credits outstanding account for more than the charge, which stays.
+  s.capExternalMemoryCharge(2 * room);
+  EXPECT_EQ(s.level(), s.effectiveEnd());
+
+  // The credit still outstanding accounts for all the room.
+  s.capExternalMemoryCharge(room);
+  EXPECT_EQ(0u, s.available());
+
+  s.capExternalMemoryCharge(0);
+  EXPECT_EQ(room, s.available());
+}
+
+/// Setting the effective end forgets the charge taken before it.
+TEST_F(AlignedHeapSegmentTest, SetEffectiveEndForgetsExternalMemoryCharge) {
+  const size_t room = s.available();
+  s.chargeExternalMemory(room / 2);
+  s.setEffectiveEnd(s.effectiveEnd());
+
+  s.capExternalMemoryCharge(0);
+  EXPECT_EQ(room - room / 2, s.available());
+}
+
 #ifndef NDEBUG
 
 using AlignedHeapSegmentDeathTest = AlignedHeapSegmentTest;
