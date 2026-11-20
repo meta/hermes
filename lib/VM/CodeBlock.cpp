@@ -32,16 +32,21 @@ CodeBlock::CodeBlock(
     hbc::RuntimeFunctionHeader header,
     const uint8_t *bytecode,
     uint32_t functionID,
-    uint32_t readCacheSize,
-    uint32_t writeCacheSize,
-    uint32_t privateNameCacheSize)
+    uint16_t readCacheSize,
+    uint16_t writeCacheSize,
+    uint16_t privateNameCacheSize)
     : runtimeModule_(runtimeModule),
       functionHeader_(header),
       bytecode_(bytecode),
+      frameSize_(header.getFrameSize()),
+      headerFlags_(header.getFlags()),
+      privateNameCacheSize_(privateNameCacheSize),
       functionID_(functionID),
       readPropertyCacheSize_(readCacheSize),
-      writePropertyCacheSize_(writeCacheSize),
-      privateNameCacheSize_(privateNameCacheSize) {
+      writePropertyCacheSize_(writeCacheSize) {
+  assert(
+      readCacheSize <= 256 && writeCacheSize <= 256 &&
+      privateNameCacheSize <= 256 && "cache size too large");
   std::uninitialized_fill_n(
       readPropertyCache(), readCacheSize, ReadPropertyCacheEntry{});
   std::uninitialized_fill_n(
@@ -171,14 +176,14 @@ std::unique_ptr<CodeBlock> CodeBlock::createCodeBlock(
   // actually 255 elements, or that there are 256.  Here we make sure
   // that the cache is big enough in that case, by conservatively
   // adding one element when the size is 255.
-  auto sizeComputer = [](uint8_t size) -> uint32_t {
+  auto sizeComputer = [](uint8_t size) -> uint16_t {
     static_assert(hbc::PROPERTY_CACHING_DISABLED == 255);
     return size == hbc::PROPERTY_CACHING_DISABLED ? 256 : size;
   };
 
-  uint32_t readCacheSize = sizeComputer(header.getReadCacheSize());
-  uint32_t writeCacheSize = sizeComputer(header.getWriteCacheSize());
-  uint32_t privateNameCacheSize =
+  uint16_t readCacheSize = sizeComputer(header.getReadCacheSize());
+  uint16_t writeCacheSize = sizeComputer(header.getWriteCacheSize());
+  uint16_t privateNameCacheSize =
       sizeComputer(header.getPrivateNameCacheSize());
 
   bool isCodeBlockLazy = !bytecode;
@@ -274,7 +279,11 @@ ExecutionStatus CodeBlock::compileLazyFunction(Runtime &runtime) {
 
   functionHeader_ =
       runtimeModule_->getBytecode()->getFunctionHeader(functionID_);
+  cacheHeaderFields();
   bytecode_ = runtimeModule_->getBytecode()->getBytecode(functionID_);
+#ifdef HERMES_SLOW_DEBUG
+  validateInstructions(getOpcodeArray(), frameSize_);
+#endif
   runtimeModule_->initAfterLazyCompilation();
 
   return ExecutionStatus::RETURNED;

@@ -54,6 +54,19 @@ class CodeBlock final : private llvh::TrailingObjects<
   /// Pointer to the bytecode opcodes.
   const uint8_t *bytecode_;
 
+  /// Copies of the frame size and flags in functionHeader_, which every call
+  /// of this function reads. The header is in the bytecode buffer, on a cache
+  /// line (and page) that a call would not otherwise touch, while bytecode_
+  /// is read by every call anyway. On 64-bit platforms, these copies share
+  /// the 16-byte malloc granule of bytecode_, and thus its cache line.
+  /// cacheHeaderFields() refreshes them whenever functionHeader_ changes.
+  uint32_t frameSize_;
+  hbc::FunctionHeaderFlag headerFlags_;
+
+  /// Total size of the private name cache. It is at most 256, so 16 bits are
+  /// enough, and it fills the padding after headerFlags_.
+  const uint16_t privateNameCacheSize_;
+
   /// ID of this function in the module's function list.
   uint32_t functionID_;
 
@@ -86,21 +99,19 @@ class CodeBlock final : private llvh::TrailingObjects<
   uint32_t numInstalledBreakpoints_ = 0;
 #endif
 
-  /// Total size of the property caches.
-  const uint32_t readPropertyCacheSize_;
-  const uint32_t writePropertyCacheSize_;
-
-  /// Total size of the private name cache.
-  const uint32_t privateNameCacheSize_;
+  /// Total size of the property caches. Each is at most 256, so 16 bits are
+  /// enough.
+  const uint16_t readPropertyCacheSize_;
+  const uint16_t writePropertyCacheSize_;
 
   CodeBlock(
       RuntimeModule *runtimeModule,
       hbc::RuntimeFunctionHeader header,
       const uint8_t *bytecode,
       uint32_t functionID,
-      uint32_t readCacheSize,
-      uint32_t writeCacheSize,
-      uint32_t privateNameCacheSize);
+      uint16_t readCacheSize,
+      uint16_t writeCacheSize,
+      uint16_t privateNameCacheSize);
 
   size_t numTrailingObjects(OverloadToken<ReadPropertyCacheEntry>) const {
     return readPropertyCacheSize_;
@@ -108,6 +119,13 @@ class CodeBlock final : private llvh::TrailingObjects<
 
   size_t numTrailingObjects(OverloadToken<WritePropertyCacheEntry>) const {
     return writePropertyCacheSize_;
+  }
+
+  /// Copy the fields of functionHeader_ that this CodeBlock caches. Must be
+  /// called whenever functionHeader_ changes after construction.
+  void cacheHeaderFields() {
+    frameSize_ = functionHeader_.getFrameSize();
+    headerFlags_ = functionHeader_.getFlags();
   }
 
  public:
@@ -145,7 +163,10 @@ class CodeBlock final : private llvh::TrailingObjects<
     return functionHeader_.getParamCount();
   }
   uint32_t getFrameSize() const {
-    return functionHeader_.getFrameSize();
+    assert(
+        frameSize_ == functionHeader_.getFrameSize() &&
+        "frameSize_ is out of date");
+    return frameSize_;
   }
   uint32_t getFunctionID() const {
     return functionID_;
@@ -170,11 +191,14 @@ class CodeBlock final : private llvh::TrailingObjects<
   }
 
   hbc::FunctionHeaderFlag getHeaderFlags() const {
-    return functionHeader_.getFlags();
+    assert(
+        headerFlags_._flags == functionHeader_.getFlags()._flags &&
+        "headerFlags_ is out of date");
+    return headerFlags_;
   }
 
   bool isStrictMode() const {
-    return functionHeader_.getFlags().getStrictMode();
+    return getHeaderFlags().getStrictMode();
   }
 
   SymbolID getNameMayAllocate() const;
