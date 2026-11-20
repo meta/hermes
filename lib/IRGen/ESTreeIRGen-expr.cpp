@@ -3150,8 +3150,9 @@ Value *ESTreeIRGen::genRegExpLiteral(ESTree::RegExpLiteralNode *RE) {
       assert(
           groupIdxRes != mapping.end() &&
           "identifier not found in named groups");
-      auto groupIdx = groupIdxRes->second;
-      auto *val = Builder.getLiteralNumber(groupIdx);
+      const regex::GroupNums &groupIdxs = groupIdxRes->second;
+      assert(groupIdxs.size() == 1 && "a name maps to exactly one group");
+      auto *val = Builder.getLiteralNumber(groupIdxs.front());
       propMap.emplace_back(key, val);
     }
     auto literalObj =

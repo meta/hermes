@@ -86,8 +86,9 @@ class Regex {
   // before the definition of the first named capture group.
   bool sawNamedBackrefBeforeGroup_{false};
 
-  // Named backrefs that might be invalid.
-  std::vector<std::pair<GroupName, BackRefNode *>> unresolvedNamedBackRefs_;
+  // Named backrefs, which are resolved once the whole pattern has been parsed.
+  llvh::SmallVector<std::pair<GroupName, BackRefNode *>, 2>
+      unresolvedNamedBackRefs_;
 
   /// Construct and and append a node of type NodeType at the end of the nodes_
   /// list. The node should be constructible from \p args.
@@ -249,7 +250,8 @@ class Regex {
 
   // Note- this method does not insert into the AST, it populates a different
   // datastructure. Returns false if the given name was already defined.
-  bool addNamedCaptureGroup(GroupName &&identifier, uint32_t groupNum);
+  // \param mexp the zero-based mexp of the capture group being named.
+  bool addNamedCaptureGroup(GroupName &&identifier, uint32_t mexp);
 
   bool resolveNamedBackRefs();
 
@@ -327,11 +329,6 @@ constants::ErrorType Regex<Traits>::parse(
 
     uint32_t backRefLimit = markedCount_;
     uint32_t reparsedMaxBackRef = 0;
-    loopCount_ = 0;
-    markedCount_ = 0;
-    matchConstraints_ = 0;
-    nameMapping_.clear();
-    orderedGroupNames_.clear();
     result = parseWithBackRefLimit(
         first, last, backRefLimit, hasNamedGroups, &reparsedMaxBackRef);
     assert(
@@ -350,6 +347,13 @@ constants::ErrorType Regex<Traits>::parseWithBackRefLimit(
     uint32_t backRefLimit,
     bool hasNamedGroups,
     uint32_t *outMaxBackRef) {
+  // Discard everything a previous pass produced; parse() may run two.
+  loopCount_ = 0;
+  markedCount_ = 0;
+  matchConstraints_ = 0;
+  nameMapping_.clear();
+  orderedGroupNames_.clear();
+  unresolvedNamedBackRefs_.clear();
   // Initialize our node list with a single no-op node (it must never be empty.)
   nodes_.clear();
   startSet_ = llvh::None;
@@ -393,8 +397,7 @@ bool Regex<Traits>::resolveNamedBackRefs() {
     if (search == nameMapping_.end()) {
       return false;
     }
-    auto groupNum = search->second;
-    backRef->setBackRef(groupNum - 1);
+    backRef->setBackRefs(search->second);
   }
   return true;
 }
@@ -463,18 +466,11 @@ void Regex<Traits>::pushBackRef(uint32_t i, bool icase) {
 
 template <class Traits>
 void Regex<Traits>::pushNamedBackRef(GroupName &&identifier, bool icase) {
-  auto search = nameMapping_.find(identifier);
-  if (search == nameMapping_.end()) {
-    // If this name hasn't been defined yet, we have a case of an ambiguous
-    // named backref. It could be valid or not, because the group name could be
-    // defined in the future. We will revist these nodes at the end to see if
-    // they are valid.
-    BackRefNode *backRef = appendNode<BackRefNode>(0, icase);
-    unresolvedNamedBackRefs_.emplace_back(std::move(identifier), backRef);
-    return;
-  }
-  auto groupNum = search->second;
-  appendNode<BackRefNode>(groupNum - 1, icase);
+  // A named backreference refers to every capture group using that name,
+  // including any not parsed yet, and the name may turn out never to be
+  // defined at all, so resolve it once the whole pattern has been parsed.
+  BackRefNode *backRef = appendNode<BackRefNode>(0, icase);
+  unresolvedNamedBackRefs_.emplace_back(std::move(identifier), backRef);
 }
 
 template <class Traits>
@@ -507,13 +503,14 @@ void Regex<Traits>::pushLookaround(
 template <class Traits>
 bool Regex<Traits>::addNamedCaptureGroup(
     GroupName &&identifier,
-    uint32_t groupNum) {
-  // Add one to the given group number because later on this is used to index
-  // into the whole matches array, which will be prepended with the entire match
-  // string so all these group numbers will be off by one if we don't offset it
-  // here.
+    uint32_t mexp) {
+  // Add one to the mexp because this is used to index into the whole matches
+  // array, which is prepended with the entire match string.
+  uint32_t matchIndex = mexp + 1;
+  // The name is interned in orderedGroupNames_, a deque, so the map key stays
+  // valid as more names are added.
   auto &elm = orderedGroupNames_.emplace_back(std::move(identifier));
-  auto res = nameMapping_.try_emplace(elm, groupNum + 1);
+  auto res = nameMapping_.try_emplace(elm, GroupNums{matchIndex});
   return res.second;
 }
 

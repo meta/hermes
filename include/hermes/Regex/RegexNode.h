@@ -617,18 +617,34 @@ class MarkedSubexpressionNode final : public Node {
 
 /// BackRefNode represents a backreference node.
 class BackRefNode final : public Node {
-  // The backreference like \3.
-  uint16_t mexp_;
+  /// The referenced capture groups, normally just one. \k<name> holds several
+  /// when the name is shared by several mutually exclusive capture groups
+  /// (ES2025 duplicate named capture groups).
+  llvh::SmallVector<uint16_t, 1> mexps_;
 
   /// Whether the ignoreCase flag is set.
   bool icase_;
 
  public:
-  explicit BackRefNode(unsigned mexp, bool icase)
-      : mexp_(mexp), icase_(icase) {}
+  explicit BackRefNode(unsigned mexp, bool icase) : icase_(icase) {
+    mexps_.push_back(mexp);
+  }
 
-  void setBackRef(unsigned mexp) {
-    mexp_ = mexp;
+  /// Refer to every capture group sharing one name, given their match array
+  /// indices \p matchIndices, as stored in the group name mapping. A match
+  /// array index is one more than the group's zero-based mexp, because index 0
+  /// of the match array holds the entire match. This function subtracts the 1
+  /// itself, so callers pass the indices unchanged.
+  void setBackRefs(llvh::ArrayRef<uint32_t> matchIndices) {
+    assert(
+        !matchIndices.empty() &&
+        "backreference must reference a capture group");
+    mexps_.clear();
+    mexps_.reserve(matchIndices.size());
+    for (uint32_t matchIndex : matchIndices) {
+      assert(matchIndex > 0 && "match array index 0 is the entire match");
+      mexps_.push_back(static_cast<uint16_t>(matchIndex - 1));
+    }
   }
 
  protected:
@@ -640,10 +656,15 @@ class BackRefNode final : public Node {
 
  private:
   virtual NodeList *emitStep(RegexBytecodeStream &bcs) override {
-    if (icase_)
-      bcs.emit<BackRefICaseInsn>()->mexp = mexp_;
-    else
-      bcs.emit<BackRefInsn>()->mexp = mexp_;
+    // At most one of the groups sharing a name can have participated, and a
+    // backreference to one that did not matches the empty string, so a
+    // reference to several groups is just a reference to each in turn.
+    for (uint16_t mexp : mexps_) {
+      if (icase_)
+        bcs.emit<BackRefICaseInsn>()->mexp = mexp;
+      else
+        bcs.emit<BackRefInsn>()->mexp = mexp;
+    }
     return nullptr;
   }
 };

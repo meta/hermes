@@ -237,13 +237,21 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
   MutableHandle<HermesValue> numberHandle{runtime};
   for (const auto &identifier : orderedNamedGroups) {
     GCScopeMarkerRAII marker{gcScope};
+
+    auto mappingIt = parsedMappings.find(identifier);
+    assert(
+        mappingIt != parsedMappings.end() &&
+        "identifier not found in named groups");
+    const regex::GroupNums &matchIndices = mappingIt->second;
+    assert(matchIndices.size() == 1 && "a name maps to exactly one group");
+
     auto symbolRes =
         runtime.getIdentifierTable().getSymbolHandle(runtime, identifier);
     if (LLVM_UNLIKELY(symbolRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    auto idx = parsedMappings[identifier];
-    numberHandle.set(HermesValue::encodeTrustedNumberValue(idx));
+    numberHandle.set(
+        HermesValue::encodeTrustedNumberValue(matchIndices.front()));
     auto res = JSObject::defineNewOwnProperty(
         lv.obj,
         runtime,

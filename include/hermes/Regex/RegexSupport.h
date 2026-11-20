@@ -15,11 +15,16 @@
 namespace hermes {
 namespace regex {
 using GroupName = llvh::SmallVector<char16_t, 5>;
-// A map from identifier -> groupNum
+// The match array indices of every capture group using one name. A name is
+// used by more than one group only with ES2025 duplicate named capture groups.
+using GroupNums = llvh::SmallVector<uint32_t, 1>;
+// A map from identifier -> match array indices
 // /(?<id_foo>a)(b)(?<id_bar>c)/
-// would be represented as { id_foo -> 1, id_bar -> 3 }
+// would be represented as { id_foo -> [1], id_bar -> [3] }
+// /(?<id_foo>a)|(?<id_foo>b)(?<id_bar>c)/
+// would be represented as { id_foo -> [1, 2], id_bar -> [3] }
 using ParsedGroupNamesMapping =
-    llvh::DenseMap<llvh::ArrayRef<char16_t>, uint32_t>;
+    llvh::DenseMap<llvh::ArrayRef<char16_t>, GroupNums>;
 } // namespace regex
 } // namespace hermes
 
