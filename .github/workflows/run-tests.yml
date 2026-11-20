@@ -48,7 +48,9 @@ jobs:
   test-e2e:
     runs-on: ubuntu-22.04
     env:
-      ANDROID_NDK: /usr/local/lib/android/sdk/ndk/27.1.12297006
+      # Keep this and the emulator runner's ndk input in sync with
+      # ndkVersion in React Native's libs.versions.toml.
+      ANDROID_NDK: /usr/local/lib/android/sdk/ndk/28.2.13676358
       HERMES_WS_DIR: /home/runner/work/hermes
       REACT_NATIVE_OVERRIDE_HERMES_DIR: /home/runner/work/hermes/hermes
       CMAKE_VERSION: 3.22.1
@@ -71,11 +73,17 @@ jobs:
         cd react-native
         yarn install
         echo "console.log('Using Hermes: ' + (global.HermesInternal != null));" >> packages/rn-tester/js/RNTesterApp.android.js
+    # Emulator 37.3+ needs KVM; it no longer runs with -accel off.
+    - name: Enable KVM
+      run: |-
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
     - name: Run RNTester
       uses: ReactiveCircus/android-emulator-runner@v2.30.1
       with:
         api-level: 29
-        ndk: 27.1.12297006
+        ndk: 28.2.13676358
         cmake: 3.22.1
         script: |
           cd ../react-native && ./gradlew -PreactNativeArchitectures=x86 :packages:rn-tester:android:app:installRelease
@@ -105,6 +113,12 @@ jobs:
         cd "$HERMES_WS_DIR"
         cmake -S hermes -B ./build -DCMAKE_BUILD_TYPE=Release
         cmake --build ./build -j 4 --target hermesc
+    # Emulator 37.3+ needs KVM; it no longer runs with -accel off.
+    - name: Enable KVM
+      run: |-
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
     - name: Run android tests
       id: tests
       uses: ReactiveCircus/android-emulator-runner@v2.30.1
