@@ -32,6 +32,7 @@ enum {
   CrashTrace = 1 << 13,
   // JobQueue = 1 << 14,
   IdleTimeGC = 1 << 15,
+  HadesYGSizeByCPUTime = 1 << 16,
 };
 
 /// Set of flags for active VM experiments.

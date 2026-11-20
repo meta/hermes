@@ -307,6 +307,20 @@ class HadesGC::CollectionStats final {
         Clock::now() - beginTime_);
   }
 
+  /// Return the CPU time this thread has used since the current CPU time
+  /// section began. Fall back to the wall-clock time if the thread CPU time is
+  /// unavailable.
+  std::chrono::milliseconds getElapsedCPUTime() {
+    assert(
+        cpuTimeSectionStart_ != Duration{} &&
+        "Must be called inside a CPU time section");
+    const Duration now = oscompat::thread_cpu_time();
+    if (now == Duration::max() || cpuTimeSectionStart_ == Duration::max())
+      return getElapsedTime();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - cpuTimeSectionStart_);
+  }
+
   /// Record this amount of CPU time was taken.
   /// Call begin/end in each thread that does work to correctly count CPU time.
   /// NOTE: Can only be used by one thread at a time.
@@ -1287,12 +1301,13 @@ HadesGC::HadesGC(
       promoteYGToOG_{!gcConfig.getAllocInYoung()},
       revertToYGAtTTI_{gcConfig.getRevertToYGAtTTI()},
       overwriteDeadYGObjects_{gcConfig.getOverwriteDeadYGObjects()},
+      ygSizeByCPUTime_{
+          (vmExperimentFlags & experiments::HadesYGSizeByCPUTime) != 0},
       occupancyTarget_(gcConfig.getOccupancyTarget()),
       ygAverageSurvivalBytes_{/*weight*/ 0.5,
                               /*init*/ kYGInitialSizeFactor *
                                   FixedSizeHeapSegment::maxSize() *
                                   kYGInitialSurvivalRatio} {
-  (void)vmExperimentFlags;
   std::lock_guard<Mutex> lk(gcMutex_);
   crashMgr_->setCustomData("HermesGC", getKindAsStr().c_str());
   // createSegment relies on member variables and should not be called until
@@ -2945,7 +2960,12 @@ void HadesGC::transferExternalMemoryToOldGen() {
 void HadesGC::updateYoungGenSizeFactor() {
   assert(
       ygSizeFactor_ <= 1.0 && ygSizeFactor_ >= 0.25 && "YG size out of range.");
-  const auto ygDuration = ygCollectionStats_->getElapsedTime().count();
+  // With the HadesYGSizeByCPUTime experiment, use the CPU time of the
+  // collection, so that time spent descheduled doesn't shrink the YG.
+  const auto ygDuration =
+      (ygSizeByCPUTime_ ? ygCollectionStats_->getElapsedCPUTime()
+                        : ygCollectionStats_->getElapsedTime())
+          .count();
   // If the YG collection has taken less than 20% of our budgeted time, increase
   // the size of the YG by 10%.
   if (ygDuration < kTargetMaxPauseMs * 0.2)

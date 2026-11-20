@@ -639,6 +639,13 @@ class HadesGC final : public GCBase {
   /// cleaned.
   llvh::ErrorOr<size_t> getVMFootprintForTest() const;
 
+#ifdef UNIT_TEST
+  /// \return the fraction of the YG segment that the YG may currently fill.
+  double getYoungGenSizeFactorForTest() const {
+    return ygSizeFactor_;
+  }
+#endif
+
 #ifndef NDEBUG
   /// \name Debug APIs
   /// \{
@@ -1247,6 +1254,10 @@ class HadesGC final : public GCBase {
   /// If true, overwrite the allocation region in the YG with kInvalidHeapValue
   /// at the end of each YG collection.
   bool overwriteDeadYGObjects_;
+
+  /// If true, size the YG by the CPU time of each YG collection instead of its
+  /// wall-clock time (the HadesYGSizeByCPUTime experiment).
+  const bool ygSizeByCPUTime_;
 
   /// Target OG occupancy ratio at the end of an OG collection.
   const double occupancyTarget_;

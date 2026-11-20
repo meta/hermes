@@ -7,6 +7,7 @@
 
 #include "EmptyCell.h"
 #include "VMRuntimeTestHelpers.h"
+#include "hermes/Support/OSCompat.h"
 #include "hermes/VM/ArrayStorage.h"
 #include "hermes/VM/BuildMetadata.h"
 #include "hermes/VM/CardBoundaryTable.h"
@@ -924,6 +925,64 @@ TEST(GCDirtyCardScanTest, OGCollectionCompletesWhileMarking) {
   ASSERT_TRUE(lv.a->at(0).isObject());
   EXPECT_FALSE(
       gc.inYoungGen(static_cast<const GCCell *>(lv.a->at(0).getObject())));
+}
+
+/// Run YG collections that each call \p finalizer from a finalizer, and return
+/// the ratio of the YG size factor after them to the factor before them. Hades
+/// shrinks the YG after a collection that takes more than 20 ms.
+static double ygSizeFactorRatioAfterCollections(
+    experiments::VMExperimentFlags flags,
+    const DummyObject::Callback &finalizer) {
+  auto runtime = DummyRuntime::create(
+      TestGCConfigFixedSize(4 * FixedSizeHeapSegment::storageSize()), flags);
+  DummyRuntime &rt = *runtime;
+  auto &gc = rt.getHeap();
+  const double before = gc.getYoungGenSizeFactorForTest();
+  for (int i = 0; i < 3; ++i) {
+    DummyObject::create(gc, rt)->finalizerCallback =
+        std::make_unique<DummyObject::Callback>(finalizer);
+    gc.collectWithOptions(
+        "test", {GCBase::GCType::Minor, GCBase::GCExecutionPolicy::Sync});
+  }
+  return gc.getYoungGenSizeFactorForTest() / before;
+}
+
+/// Take 25 ms of wall-clock time, more than the 20 ms above which Hades shrinks
+/// the YG, but almost no CPU time.
+static void sleepFor25ms() {
+  std::this_thread::sleep_for(std::chrono::milliseconds(25));
+}
+
+/// Take 25 ms of this thread's CPU time.
+static void spinFor25msOfCPUTime() {
+  const auto start = hermes::oscompat::thread_cpu_time();
+  while (hermes::oscompat::thread_cpu_time() - start <
+         std::chrono::milliseconds(25)) {
+  }
+}
+
+/// Time a YG collection spends off the CPU shrinks the YG by default, but not
+/// with the HadesYGSizeByCPUTime experiment.
+TEST(GCYoungGenSizeTest, OffCPUTimeShrinksYGOnlyWithoutCPUTimeSizing) {
+  EXPECT_LT(
+      ygSizeFactorRatioAfterCollections(experiments::Default, sleepFor25ms), 1);
+  EXPECT_GE(
+      ygSizeFactorRatioAfterCollections(
+          experiments::HadesYGSizeByCPUTime, sleepFor25ms),
+      1);
+}
+
+/// Time a YG collection spends on the CPU still shrinks the YG with the
+/// HadesYGSizeByCPUTime experiment.
+TEST(GCYoungGenSizeTest, CPUTimeShrinksYGWithCPUTimeSizing) {
+  // This gtest has no GTEST_SKIP: without thread CPU time the spin would never
+  // end, so return.
+  if (hermes::oscompat::thread_cpu_time() == std::chrono::microseconds::max())
+    return;
+  EXPECT_LT(
+      ygSizeFactorRatioAfterCollections(
+          experiments::HadesYGSizeByCPUTime, spinFor25msOfCPUTime),
+      1);
 }
 #endif
 
