@@ -17,11 +17,13 @@ import {
 } from './utils/scriptUtils';
 import tempCustomASTDefs from './utils/tempCustomASTDefs';
 
-const visitorKeys: {[string]: Readonly<{[string]: 'Node' | 'NodeList'}>} =
+const visitorKeys: {
+  [key: string]: Readonly<{[key: string]: 'Node' | 'NodeList'}>,
+} =
   // $FlowExpectedError[incompatible-type]
   Object.create(null);
 for (const node of GetHermesESTreeJSON()) {
-  const nodeVisitorKeys: {[string]: 'Node' | 'NodeList'} = {};
+  const nodeVisitorKeys: {[key: string]: 'Node' | 'NodeList'} = {};
   for (const arg of node.arguments) {
     if (EXCLUDE_PROPERTIES_FROM_NODE.get(node.name)?.has(arg.name)) {
       continue;

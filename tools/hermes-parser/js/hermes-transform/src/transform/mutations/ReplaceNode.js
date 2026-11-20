@@ -53,7 +53,7 @@ export function performReplaceNodeMutation(
 
   if (replacementParent.type === 'array') {
     const parent: interface {
-      [string]: ReadonlyArray<DetachedNode<ESNode>>,
+      [key: string]: ReadonlyArray<DetachedNode<ESNode>>,
     } = replacementParent.parent;
     parent[replacementParent.key] = astArrayMutationHelpers.replaceInArray(
       parent[replacementParent.key],
@@ -61,7 +61,7 @@ export function performReplaceNodeMutation(
       [mutation.nodeToReplaceWith],
     );
   } else {
-    (replacementParent.parent as interface {[string]: unknown})[
+    (replacementParent.parent as interface {[key: string]: unknown})[
       replacementParent.key
     ] = mutation.nodeToReplaceWith;
   }

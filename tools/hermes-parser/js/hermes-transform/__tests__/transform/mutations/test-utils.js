@@ -19,7 +19,7 @@ import {traverse} from '../../../src/traverse/traverse';
 import {parse} from '../../../src/transform/parse';
 
 export type StatementTypes = Statement['type'] | ModuleDeclaration['type'];
-export const CODE_SAMPLES: Readonly<{[StatementTypes]: string}> = {
+export const CODE_SAMPLES: Readonly<{[key: StatementTypes]: string}> = {
   ExpressionStatement: 'foo;',
   BlockStatement: '{}',
   EmptyStatement: ';',

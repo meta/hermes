@@ -41,7 +41,7 @@ export function performRemoveStatementMutation(
 
   if (removalParent.type === 'array') {
     const parent: interface {
-      [string]: ReadonlyArray<DetachedNode<Statement | ModuleDeclaration>>,
+      [key: string]: ReadonlyArray<DetachedNode<Statement | ModuleDeclaration>>,
     } = removalParent.parent;
     parent[removalParent.key] = astArrayMutationHelpers.removeFromArray(
       parent[removalParent.key],
@@ -60,8 +60,9 @@ export function performRemoveStatementMutation(
       parent: removalParent.parent,
     });
 
-    (removalParent.parent as interface {[string]: unknown})[removalParent.key] =
-      blockStatement;
+    (removalParent.parent as interface {[key: string]: unknown})[
+      removalParent.key
+    ] = blockStatement;
   }
 
   return removalParent.parent;

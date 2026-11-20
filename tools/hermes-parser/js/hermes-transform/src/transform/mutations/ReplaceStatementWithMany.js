@@ -75,7 +75,7 @@ export function performReplaceStatementWithManyMutation(
 
   if (replacementParent.type === 'array') {
     const parent: interface {
-      [string]: ReadonlyArray<DetachedNode<Statement | ModuleDeclaration>>,
+      [key: string]: ReadonlyArray<DetachedNode<Statement | ModuleDeclaration>>,
     } = replacementParent.parent;
     parent[replacementParent.key] = astArrayMutationHelpers.replaceInArray(
       parent[replacementParent.key],
@@ -96,7 +96,7 @@ export function performReplaceStatementWithManyMutation(
     parent: replacementParent.parent,
   });
 
-  (replacementParent.parent as interface {[string]: unknown})[
+  (replacementParent.parent as interface {[key: string]: unknown})[
     replacementParent.key
   ] = blockStatement;
 

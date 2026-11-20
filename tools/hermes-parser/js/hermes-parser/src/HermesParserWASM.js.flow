@@ -42,9 +42,9 @@ export type HermesParserWASM = Readonly<{
   ): INTENTIONAL_ANY,
   cwrap: {
     (
-      'hermesParse',
-      'number',
-      [
+      v0: 'hermesParse',
+      v1: 'number',
+      v2: [
         'number',
         'number',
         'number',
@@ -55,38 +55,50 @@ export type HermesParserWASM = Readonly<{
         'number',
       ],
     ): (
-      number,
-      number,
-      CBoolean,
-      CBoolean,
-      CBoolean,
-      CBoolean,
-      CBoolean,
-      CBoolean,
+      v0: number,
+      v1: number,
+      v2: CBoolean,
+      v3: CBoolean,
+      v4: CBoolean,
+      v5: CBoolean,
+      v6: CBoolean,
+      v7: CBoolean,
     ) => number,
-    ('hermesParseResult_free', 'void', ['number']): number => void,
-    ('hermesParseResult_getError', 'string', ['number']): number => string,
-    ('hermesParseResult_getErrorLine', 'number', ['number']): number => number,
     (
-      'hermesParseResult_getErrorColumn',
-      'number',
-      ['number'],
-    ): number => number,
+      v0: 'hermesParseResult_free',
+      v1: 'void',
+      v2: ['number'],
+    ): (v: number) => void,
     (
-      'hermesParseResult_getProgramBuffer',
-      'number',
-      ['number'],
-    ): number => number,
+      v0: 'hermesParseResult_getError',
+      v1: 'string',
+      v2: ['number'],
+    ): (v: number) => string,
     (
-      'hermesParseResult_getPositionBuffer',
-      'number',
-      ['number'],
-    ): number => number,
+      v0: 'hermesParseResult_getErrorLine',
+      v1: 'number',
+      v2: ['number'],
+    ): (v: number) => number,
     (
-      'hermesParseResult_getPositionBufferSize',
-      'number',
-      ['number'],
-    ): number => number,
+      v0: 'hermesParseResult_getErrorColumn',
+      v1: 'number',
+      v2: ['number'],
+    ): (v: number) => number,
+    (
+      v0: 'hermesParseResult_getProgramBuffer',
+      v1: 'number',
+      v2: ['number'],
+    ): (v: number) => number,
+    (
+      v0: 'hermesParseResult_getPositionBuffer',
+      v1: 'number',
+      v2: ['number'],
+    ): (v: number) => number,
+    (
+      v0: 'hermesParseResult_getPositionBufferSize',
+      v1: 'number',
+      v2: ['number'],
+    ): (v: number) => number,
   },
 
   stackAlloc(size: number): number,
@@ -94,4 +106,4 @@ export type HermesParserWASM = Readonly<{
   stackRestore(ptr: number): void,
 }>;
 
-declare module.exports: WASMModuleOverrides => HermesParserWASM;
+declare module.exports: (v: WASMModuleOverrides) => HermesParserWASM;

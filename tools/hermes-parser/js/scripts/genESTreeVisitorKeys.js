@@ -20,7 +20,7 @@ import {
 const ALLOWED_ARG_TYPES = new Set(['NodePtr', 'NodeList']);
 
 // $FlowExpectedError[incompatible-type]
-const visitorKeys: {[string]: Array<string>} = Object.create(null);
+const visitorKeys: {[key: string]: Array<string>} = Object.create(null);
 for (const node of GetHermesESTreeJSON()) {
   visitorKeys[node.name] = node.arguments
     .filter(

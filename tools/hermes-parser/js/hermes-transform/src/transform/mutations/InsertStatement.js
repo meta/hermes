@@ -69,7 +69,7 @@ export function performInsertStatementMutation(
 
   if (insertionParent.type === 'array') {
     const parent: interface {
-      [string]: ReadonlyArray<DetachedNode<Statement | ModuleDeclaration>>,
+      [key: string]: ReadonlyArray<DetachedNode<Statement | ModuleDeclaration>>,
     } = insertionParent.parent;
     switch (mutation.side) {
       case 'before': {
@@ -111,7 +111,7 @@ export function performInsertStatementMutation(
     parent: insertionParent.parent,
   });
 
-  (insertionParent.parent as interface {[string]: unknown})[
+  (insertionParent.parent as interface {[key: string]: unknown})[
     insertionParent.key
   ] = blockStatement;
   statementToWrap.parent = blockStatement;

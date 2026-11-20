@@ -21,7 +21,7 @@
  *  - Remove TS support.
  *  - Rename "Property" alias, ESTree has a "Property" AST node.
  */
-const aliases: Readonly<{[string]: ReadonlyArray<string>}> = {
+const aliases: Readonly<{[key: string]: ReadonlyArray<string>}> = {
   ArrayExpression: ['Expression'],
   AssignmentExpression: ['Expression'],
   BinaryExpression: ['Binary', 'Expression'],

@@ -304,7 +304,7 @@ export function performRemoveNodeMutation(
   mutationContext.markMutation(removalParent.parent, removalParent.key);
 
   const parent: interface {
-    [string]: ReadonlyArray<DetachedNode<RemoveNodeMutation['node']>>,
+    [key: string]: ReadonlyArray<DetachedNode<RemoveNodeMutation['node']>>,
   } = removalParent.parent;
   parent[removalParent.key] = astArrayMutationHelpers.removeFromArray(
     parent[removalParent.key],

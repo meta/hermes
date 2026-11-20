@@ -194,10 +194,10 @@ export const LITERAL_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 export const FLIPPED_ALIAS_KEYS: Readonly<{
-  [string]: ReadonlySet<string>,
+  [key: string]: ReadonlySet<string>,
 }> = (() => {
   // $FlowExpectedError[incompatible-type]
-  const flippedAliasKeys: {[string]: Set<string>} = Object.create(null);
+  const flippedAliasKeys: {[key: string]: Set<string>} = Object.create(null);
 
   for (let typeName of Object.keys(aliasDefs)) {
     for (let aliasName of aliasDefs[typeName]) {
