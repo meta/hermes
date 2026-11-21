@@ -2403,17 +2403,22 @@ jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromAscii(
 #endif
 
   vm::GCScope gcScope(runtime_);
-  auto cr = vm::stringToSymbolID(
-      runtime_,
-      vm::StringPrimitive::createNoThrow(
-          runtime_, llvh::StringRef(str, length)));
+  // Look up the name directly. The identifier table makes a string only when
+  // the name is new, so a known name needs no allocation.
+  vm::ASCIIRef ref(str, length);
+  auto cr = runtime_.getIdentifierTable().getSymbolID(
+      runtime_, ref, ::hermes::hashString(ref));
   checkStatus(cr.getStatus());
-  return add<jsi::PropNameID>(cr->getHermesValue());
+  return add<jsi::PropNameID>(vm::HermesValue::encodeSymbolValue(*cr));
 }
 
 jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromUtf8(
     const uint8_t *utf8,
     size_t length) {
+  // Send an ASCII name to the ASCII path, which does not allocate for a known
+  // name.
+  if (::hermes::isAllASCII(utf8, utf8 + length))
+    return createPropNameIDFromAscii((const char *)utf8, length);
   ExecutionScopeRAII scopeRAII(mutatorScope);
   vm::GCScope gcScope(runtime_);
   auto cr = vm::stringToSymbolID(
