@@ -2402,9 +2402,9 @@ jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromAscii(
   }
 #endif
 
-  vm::GCScope gcScope(runtime_);
   // Look up the name directly. The identifier table makes a string only when
-  // the name is new, so a known name needs no allocation.
+  // the name is new, so a known name needs no allocation. The lookup makes no
+  // handles, so this function needs no GCScope.
   vm::ASCIIRef ref(str, length);
   auto cr = runtime_.getIdentifierTable().getSymbolID(
       runtime_, ref, ::hermes::hashString(ref));
