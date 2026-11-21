@@ -1196,3 +1196,30 @@ try {
 var obj = {length: 2 ** 32};
 try { Array.prototype.with.call(obj, 0, 123) } catch (e) { print(e.name) }
 // CHECK-NEXT: RangeError
+
+print('toSorted');
+// CHECK-LABEL: toSorted
+print(Array.prototype.toSorted.length);
+// CHECK-NEXT: 1
+try {
+  [].toSorted(1);
+} catch (e) {
+  print(e.name)
+}
+// CHECK-NEXT: TypeError
+var a = [ 0, 2, 1, 3 ];
+print(a.toSorted().toString())
+// CHECK-NEXT: 0,1,2,3
+print(a.toString())
+// CHECK-NEXT: 0,2,1,3
+print(arrayEquals([ 'aa', 'a', 'aaa', 0 ].toSorted(), [ 0, 'a', 'aa', 'aaa' ]));
+// CHECK-NEXT: true
+print(arrayEquals(
+    [ 'aa', 'a', 'aaa' ].toSorted(function(a, b) {
+      return b.length - a.length;
+    }),
+    [ 'aaa', 'aa', 'a' ]));
+// CHECK-NEXT: true
+print(Array.prototype.toSorted.call({length : 3, 0 : 'b', 1 : 'c', 2 : 'a'})
+          .toString());
+// CHECK-NEXT: a,b,c
