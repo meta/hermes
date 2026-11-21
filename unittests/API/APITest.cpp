@@ -2049,6 +2049,29 @@ TEST_P(HermesRuntimeTest, PropNameIDFromAsciiAndUtf8) {
   EXPECT_EQ(eval("obj['caf\\u00e9']").getNumber(), 2);
 }
 
+TEST_P(HermesRuntimeTest, PropNameIDFromUtf8NonAscii) {
+  // One non-ASCII character at each position, for lengths that use each
+  // branch of the ASCII check (up to 4, up to 16, and longer).
+  for (size_t length = 1; length <= 40; ++length) {
+    for (size_t pos = 0; pos < length; ++pos) {
+      std::string utf8(length, 'a');
+      std::u16string utf16(length, u'a');
+      utf8.replace(pos, 1, "\xc3\xa9");
+      utf16[pos] = u'é';
+      EXPECT_EQ(PropNameID::forUtf8(*rt, utf8).utf16(*rt), utf16)
+          << "length " << length << ", position " << pos;
+    }
+  }
+
+  // A non-ASCII name that JS made first.
+  auto obj = eval("({'gr\\u00fcn': 3})").getObject(*rt);
+  auto name = PropNameID::forUtf8(*rt, std::string("gr\xc3\xbcn"));
+  EXPECT_EQ(obj.getProperty(*rt, name).getNumber(), 3);
+
+  // Invalid UTF-8 stops the name before the first invalid code point.
+  EXPECT_EQ(PropNameID::forUtf8(*rt, std::string("ab\x80xy")).utf8(*rt), "ab");
+}
+
 TEST_P(HermesRuntimeTest, CreateFromUtf16Test) {
   std::u16string utf16 = u"foobar";
 
