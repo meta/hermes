@@ -297,6 +297,11 @@ inline Array Object::getPropertyNames(IRuntime& runtime) const {
   return runtime.getPropertyNames(*this);
 }
 
+inline std::vector<PropNameID> Object::getPropertyNameIDs(
+    IRuntime& runtime) const {
+  return runtime.getPropertyNameIDs(*this);
+}
+
 inline Value WeakObject::lock(IRuntime& runtime) const {
   return runtime.lockWeakObject(*this);
 }
