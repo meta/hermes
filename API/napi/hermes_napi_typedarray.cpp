@@ -167,11 +167,16 @@ napi_status NAPI_CDECL napi_create_typedarray(
     RETURN_STATUS_IF_FALSE(env, byte_offset % elemSize == 0, napi_invalid_arg);
   }
 
-  // Validate bounds: byte_offset + length * elemSize <= buffer size.
-  size_t byteLength = static_cast<size_t>(length) * elemSize;
+  // Validate bounds without overflow: byte_offset and length * elemSize are
+  // caller-supplied size_t values that get narrowed to the view's uint32
+  // size_type below, so reject anything that does not fit in the buffer using
+  // division and subtraction rather than additions/multiplications that could
+  // wrap. Matches the getTypedArrayBuffer helper in extensions/JSIUtils.cpp.
+  size_t bufferSize = vmcast<JSArrayBuffer>(*abPhv)->size();
   RETURN_STATUS_IF_FALSE(
       env,
-      byte_offset + byteLength <= vmcast<JSArrayBuffer>(*abPhv)->size(),
+      length <= bufferSize / elemSize && byte_offset <= bufferSize &&
+          length * elemSize <= bufferSize - byte_offset,
       napi_invalid_arg);
 
   GCScope gcScope(runtime);

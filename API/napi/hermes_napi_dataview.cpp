@@ -35,9 +35,15 @@ napi_status NAPI_CDECL napi_create_dataview(
 
   Handle<JSArrayBuffer> ab = Handle<JSArrayBuffer>::vmcast(abPhv);
 
-  // Validate bounds: byte_offset + length <= buffer size.
+  // Validate bounds without overflow: byte_offset and length are
+  // caller-supplied size_t values that get narrowed to the view's uint32
+  // size_type below, so compare with subtraction rather than an addition that
+  // could wrap past the end for a large byte_offset.
+  size_t bufferSize = ab->size();
   RETURN_STATUS_IF_FALSE(
-      env, byte_offset + length <= ab->size(), napi_invalid_arg);
+      env,
+      byte_offset <= bufferSize && length <= bufferSize - byte_offset,
+      napi_invalid_arg);
 
   GCScope gcScope(runtime);
 

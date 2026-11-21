@@ -230,10 +230,14 @@ napi_status NAPI_CDECL node_api_create_buffer_from_arraybuffer(
   RETURN_STATUS_IF_FALSE(
       env, abPhv->isObject() && vmisa<JSArrayBuffer>(*abPhv), napi_invalid_arg);
 
-  // Validate bounds.
+  // Validate bounds without overflow: byte_offset and byte_length are
+  // caller-supplied size_t values that get narrowed to the view's uint32
+  // size_type below, so compare with subtraction rather than an addition that
+  // could wrap past the end for a large byte_offset.
+  size_t bufferSize = vmcast<JSArrayBuffer>(*abPhv)->size();
   RETURN_STATUS_IF_FALSE(
       env,
-      byte_offset + byte_length <= vmcast<JSArrayBuffer>(*abPhv)->size(),
+      byte_offset <= bufferSize && byte_length <= bufferSize - byte_offset,
       napi_invalid_arg);
 
   GCScope gcScope(runtime);

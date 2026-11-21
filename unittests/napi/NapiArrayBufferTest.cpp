@@ -307,4 +307,39 @@ TEST_F(NapiTestFixture, GetArrayBufferInfo_BothNull) {
   closeScope(env_, scope);
 }
 
+//===========================================================================
+// node_api_create_buffer_from_arraybuffer - bounds validation
+//===========================================================================
+
+TEST_F(
+    NapiTestFixture,
+    CreateBufferFromArrayBuffer_OffsetPlusLengthOutOfBounds) {
+  napi_handle_scope scope = openScope(env_);
+  napi_value ab = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_arraybuffer(env_, 16, nullptr, &ab));
+
+  napi_value buf = nullptr;
+  EXPECT_EQ(
+      napi_invalid_arg,
+      node_api_create_buffer_from_arraybuffer(env_, ab, 10, 8, &buf));
+  closeScope(env_, scope);
+}
+
+// byte_offset + byte_length is computed in size_t and then narrowed to the
+// view's uint32 size_type. A byte_offset near SIZE_MAX makes the sum wrap so
+// the bounds check passes, after which the truncated offset lands far outside
+// the 16-byte buffer.
+TEST_F(NapiTestFixture, CreateBufferFromArrayBuffer_OffsetLengthOverflow) {
+  napi_handle_scope scope = openScope(env_);
+  napi_value ab = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_arraybuffer(env_, 16, nullptr, &ab));
+
+  napi_value buf = nullptr;
+  size_t hugeOffset = static_cast<size_t>(-1) - 3; // SIZE_MAX - 3
+  EXPECT_EQ(
+      napi_invalid_arg,
+      node_api_create_buffer_from_arraybuffer(env_, ab, hugeOffset, 8, &buf));
+  closeScope(env_, scope);
+}
+
 } // namespace

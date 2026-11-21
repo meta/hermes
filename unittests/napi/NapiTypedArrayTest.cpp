@@ -169,6 +169,23 @@ TEST_F(NapiTestFixture, CreateTypedArray_OutOfBounds) {
   closeScope(env_, scope);
 }
 
+// byte_offset + length * elemSize is computed in size_t and then narrowed to
+// the view's uint32 size_type. A byte_offset near SIZE_MAX makes the sum wrap
+// so the bounds check passes, after which the truncated offset lands far
+// outside the 16-byte buffer.
+TEST_F(NapiTestFixture, CreateTypedArray_OffsetLengthOverflow) {
+  napi_handle_scope scope = openScope(env_);
+  napi_value ab = createArrayBuffer(env_, 16);
+
+  napi_value result = nullptr;
+  size_t hugeOffset = static_cast<size_t>(-1) - 3; // SIZE_MAX - 3
+  EXPECT_EQ(
+      napi_invalid_arg,
+      napi_create_typedarray(
+          env_, napi_uint8_array, 8, ab, hugeOffset, &result));
+  closeScope(env_, scope);
+}
+
 TEST_F(NapiTestFixture, CreateTypedArray_OffsetPlusLengthOutOfBounds) {
   napi_handle_scope scope = openScope(env_);
   napi_value ab = createArrayBuffer(env_, 16);
