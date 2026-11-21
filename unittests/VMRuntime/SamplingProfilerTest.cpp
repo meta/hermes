@@ -13,6 +13,7 @@
 #include "hermes/VM/Runtime.h"
 
 #include "llvh/ADT/ScopeExit.h"
+#include "llvh/Support/Compiler.h"
 #include "llvh/Support/raw_ostream.h"
 
 #include <gtest/gtest.h>
@@ -112,6 +113,14 @@ TEST(SamplingProfilerTest, RegisterIdenticalThread) {
 }
 
 #if defined(HERMESVM_SAMPLING_PROFILER_POSIX)
+// Skipped under TSan, where it deadlocks. TSan defers an asynchronous signal
+// until the target thread passes through a TSan interceptor, and libstdc++'s
+// std::future::wait() blocks in a raw futex syscall that TSan does not
+// intercept. So while the main thread waits on registeredFuture and still owns
+// rt, the timer thread can send it SIGPROF and wait for the handler, holding
+// profilerLock_; the worker then blocks on profilerLock_ in setRuntimeThread()
+// before it can fulfil the future.
+#if !LLVM_THREAD_SANITIZER_BUILD
 TEST(
     SamplingProfilerTest,
     MigrationBeforePreviousThreadExitPreservesOwnership) {
@@ -153,6 +162,7 @@ TEST(
   }
   EXPECT_TRUE(SamplingProfiler::disable());
 }
+#endif // !LLVM_THREAD_SANITIZER_BUILD
 
 TEST(SamplingProfilerTest, RemoteDestructionAllowsThreadGuardReuse) {
   auto rt = makeRuntime(withSamplingProfilerDisabled);
