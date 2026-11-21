@@ -2169,9 +2169,58 @@ void cleanUpAfterDeserializeWithTransfer(
   serialized.content.clear();
 }
 
+/// Call \p onObject with the serialization ID of \p value and \p value itself,
+/// if \p value is a JS object.
+ExecutionStatus reportObject(
+    uint32_t id,
+    SerializationManagedValue *value,
+    SerializedObjectCallback onObject) {
+  if (!vmisa<JSObject>(value->value())) {
+    return ExecutionStatus::RETURNED;
+  }
+  return onObject(id, Handle<JSObject>::vmcast(&value->value()));
+}
+
+/// Call \p onObject for every JS object serialized into \p memoryMap. Does
+/// nothing if \p onObject is not set.
+ExecutionStatus reportSerializedObjects(
+    SerializationValueDenseMap &memoryMap,
+    SerializedObjectCallback onObject) {
+  if (!onObject) {
+    return ExecutionStatus::RETURNED;
+  }
+  for (auto [value, id] : memoryMap) {
+    if (LLVM_UNLIKELY(
+            reportObject(id, value, onObject) == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+  }
+  return ExecutionStatus::RETURNED;
+}
+
+/// Call \p onObject for every JS object deserialized into \p memoryMap. Does
+/// nothing if \p onObject is not set.
+ExecutionStatus reportDeserializedObjects(
+    DeserializationValueDenseMap &memoryMap,
+    SerializedObjectCallback onObject) {
+  if (!onObject) {
+    return ExecutionStatus::RETURNED;
+  }
+  for (auto [id, value] : memoryMap) {
+    if (LLVM_UNLIKELY(
+            reportObject(id, value, onObject) == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+  }
+  return ExecutionStatus::RETURNED;
+}
+
 } // namespace
 
-CallResult<SerializedValue> serialize_RJS(Runtime &runtime, Handle<> value) {
+CallResult<SerializedValue> serialize_RJS(
+    Runtime &runtime,
+    Handle<> value,
+    SerializedObjectCallback onObject) {
   SerializedValue serialized;
   SerializationValueDenseMap memoryMap;
   auto cleanUp = llvh::make_scope_exit(
@@ -2181,12 +2230,18 @@ CallResult<SerializedValue> serialize_RJS(Runtime &runtime, Handle<> value) {
   if (LLVM_UNLIKELY(serializedRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
+  if (LLVM_UNLIKELY(
+          reportSerializedObjects(memoryMap, onObject) ==
+          ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
   return serialized;
 }
 
 CallResult<HermesValue> deserialize(
     Runtime &runtime,
-    const SerializedValue &serialized) {
+    const SerializedValue &serialized,
+    SerializedObjectCallback onObject) {
   if (serialized.content.empty()) {
     return runtime.raiseError("Cannot deserialize empty serialization data");
   }
@@ -2198,13 +2253,19 @@ CallResult<HermesValue> deserialize(
   if (LLVM_UNLIKELY(deserializedRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
+  if (LLVM_UNLIKELY(
+          reportDeserializedObjects(memoryMap, onObject) ==
+          ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
   return *deserializedRes;
 }
 
 CallResult<SerializedValue> serializeWithTransfer_RJS(
     Runtime &runtime,
     Handle<> value,
-    Handle<JSArray> transferList) {
+    Handle<JSArray> transferList,
+    SerializedObjectCallback onObject) {
   // This will hold the copy of the `transferList`. This is because the
   // serialization process can run arbitrary JS, potentially modifying the
   // original JSArray `transferList`. However, StructuredSerializeWithTransfer
@@ -2235,6 +2296,12 @@ CallResult<SerializedValue> serializeWithTransfer_RJS(
     return ExecutionStatus::EXCEPTION;
   }
 
+  if (LLVM_UNLIKELY(
+          reportSerializedObjects(memoryMap, onObject) ==
+          ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+
   // 4-5: Handled in the helper.
   auto serializeTransferListRes =
       serializeTransferList(runtime, serialized, lv.transfersCopy, memoryMap);
@@ -2249,7 +2316,8 @@ CallResult<SerializedValue> serializeWithTransfer_RJS(
 
 CallResult<PseudoHandle<JSArray>> deserializeWithTransfer(
     Runtime &runtime,
-    SerializedValue &serialized) {
+    SerializedValue &serialized,
+    SerializedObjectCallback onObject) {
   if (serialized.content.empty()) {
     return runtime.raiseError("Cannot deserialize empty serialization data");
   }
@@ -2282,6 +2350,12 @@ CallResult<PseudoHandle<JSArray>> deserializeWithTransfer(
     return ExecutionStatus::EXCEPTION;
   }
   lv.deserialized = *valRes;
+
+  if (LLVM_UNLIKELY(
+          reportDeserializedObjects(memoryMap, onObject) ==
+          ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
 
   auto transferLen = transferredIds.size();
   auto arrayLen = transferLen + 1;

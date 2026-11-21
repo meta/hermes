@@ -323,6 +323,21 @@ class JSI_EXPORT ISerialization : public ICast {
   virtual Array deserializeWithTransfer(
       std::unique_ptr<Serialized>& serialized) = 0;
 
+  /// Same as serialize, but the result also keeps a reference to the
+  /// NativeState of every serialized object. deserialize attaches the same
+  /// NativeState instances to the deserialized objects; they are shared, not
+  /// copied. Use this only when the NativeState can be shared with the
+  /// runtimes that deserialize the result, which may run on other threads.
+  virtual std::shared_ptr<Serialized> serializeBound(const Value& value) = 0;
+
+  /// Same as serializeWithTransfer, but the result also keeps a reference to
+  /// the NativeState of every serialized object, including the transferred
+  /// ones. deserializeWithTransfer attaches the same NativeState instances to
+  /// the deserialized objects.
+  virtual std::unique_ptr<Serialized> serializeBoundWithTransfer(
+      const Value& value,
+      const Array& transferList) = 0;
+
  protected:
   ~ISerialization() = default;
 };
