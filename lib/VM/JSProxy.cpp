@@ -12,6 +12,7 @@
 #include "hermes/VM/JSArray.h"
 #include "hermes/VM/JSCallableProxy.h"
 #include "hermes/VM/JSMapImpl.h"
+#include "hermes/VM/Operations.h"
 #include "hermes/VM/PropertyAccessor.h"
 
 #include "llvh/ADT/SetVector.h"
@@ -1497,6 +1498,40 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   if (*extensibleRes && nonConfigurable.empty()) {
     //   a. Return trapResult.
     return filterKeys(selfHandle, trapResult, runtime, okFlags);
+  }
+  // Hermes represents integer-index own-property keys internally as numbers,
+  // but [[OwnPropertyKeys]] is specified to return only Strings and Symbols
+  // (see the assert on step 12 above), and the trap result was already
+  // validated to contain only Strings and Symbols. Convert any numeric index
+  // keys in targetKeys to their canonical string form so the SameValue
+  // comparisons below behave correctly; otherwise an integer-index key such as
+  // "12345" on a non-extensible target would never match its string form in
+  // the trap result. See https://github.com/facebook/hermes/issues/1609.
+  {
+    GCScopeMarkerRAII normalizeMarker{runtime};
+    for (uint32_t i = 0, len = JSArray::getLength(*targetKeys, runtime);
+         i < len;
+         ++i) {
+      HermesValue key = targetKeys->at(runtime, i).unboxToHV(runtime);
+      if (!key.isNumber()) {
+        continue;
+      }
+      normalizeMarker.flush();
+      CallResult<PseudoHandle<StringPrimitive>> keyStrRes =
+          numberToStringPrimitive(runtime, key.getNumber());
+      if (LLVM_UNLIKELY(keyStrRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      if (LLVM_UNLIKELY(
+              JSArray::setElementAt(
+                  targetKeys,
+                  runtime,
+                  i,
+                  runtime.makeHandle(std::move(*keyStrRes))) ==
+              ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+    }
   }
   // 18. Let uncheckedResultKeys be a new List which is a copy of trapResult.
   // 19. For each key that is an element of targetNonconfigurableKeys, do
