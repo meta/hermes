@@ -1438,6 +1438,16 @@ cons.forEach(function(TypedArray) {
 });
 /// @}
 
+/// @name TypedArray.prototype.toReversed
+/// @{
+cons.forEach(function(TypedArray) {
+  var arr = new TypedArray([ 0, 1, 2, 3 ]);
+
+  assert.arrayEqual(arr.toReversed(), [ 3, 2, 1, 0 ]);
+  assert.arrayEqual(new TypedArray([]).toReversed(), []);
+});
+/// @}
+
 /// @name Exception cases
 /// @{
 
