@@ -244,8 +244,9 @@ bool deleteUnusedFunctionsAndVariables(Module *M) {
     for (auto &F : *M) {
       // Delete any functions that do not have any uses other than in their own
       // bodies. The top level function does not have an explicit user, so check
-      // for it directly.
-      if (&F != M->getTopLevelFunction() &&
+      // for it directly. CommonJS module functions are only referenced by the
+      // module's CJS module table, so they must also be kept.
+      if (&F != M->getTopLevelFunction() && !M->findCJSModule(&F) &&
           llvh::all_of(F.getUsers(), [&F](Instruction *user) {
             // Use must be from another function to be meaningful.
             return user->getFunction() == &F;
