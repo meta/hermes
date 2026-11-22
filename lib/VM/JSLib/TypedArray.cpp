@@ -1747,6 +1747,60 @@ typedArrayPrototypeToLocaleString(void *, Runtime &runtime, NativeArgs args) {
   return HermesValue::encodeStringValue(*builder->getStringPrimitive());
 }
 
+/// ES14.0 23.2.3.33
+CallResult<HermesValue>
+typedArrayPrototypeToSorted(void *, Runtime &runtime, NativeArgs args) {
+  GCScope gcScope{runtime};
+
+  // 1. If comparefn is not undefined and IsCallable(comparefn) is false, throw
+  // a TypeError exception.
+  auto compareFn = Handle<Callable>::dyn_vmcast(args.getArgHandle(0));
+  if (!args.getArg(0).isUndefined() && !compareFn) {
+    return runtime.raiseTypeError(
+        "TypedArray toSorted argument must be callable");
+  }
+
+  // 3. Perform ? ValidateTypedArray(O).
+  if (JSTypedArrayBase::validateTypedArray(runtime, args.getThisHandle()) ==
+      ExecutionStatus::EXCEPTION) {
+    return ExecutionStatus::EXCEPTION;
+  }
+
+  // 2. Let O be this value
+  auto self = args.vmcastThis<JSTypedArrayBase>();
+
+  // 4. Let len be O.[[ArrayLength]].
+  double len = self->getLength();
+
+  // 5. Let A be ? TypedArrayCreateSameType(O, « 𝔽(len) »).
+  auto aRes = JSTypedArrayBase::allocateSpecies(runtime, self, len);
+  if (LLVM_UNLIKELY(aRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  auto A = aRes.getValue();
+
+  if (LLVM_UNLIKELY(
+          JSTypedArrayBase::setToCopyOfTypedArray(
+              runtime, A, 0, self, 0, len) == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+
+  // Use our custom sort routine. We can't use std::sort because it performs
+  // optimizations that allow it to bypass calls to std::swap, but our swap
+  // function is special, since it needs to use the internal Object functions.
+  if (compareFn) {
+    TypedArraySortModel<true> sm(runtime, A, compareFn);
+    if (LLVM_UNLIKELY(quickSort(&sm, 0, len) == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  } else {
+    TypedArraySortModel<false> sm(runtime, A, compareFn);
+    if (LLVM_UNLIKELY(quickSort(&sm, 0, len) == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  }
+
+  return A.getHermesValue();
+}
+
 Handle<JSObject> createTypedArrayBaseConstructor(Runtime &runtime) {
   auto proto = Handle<JSObject>::vmcast(&runtime.typedArrayBasePrototype);
 
@@ -2048,6 +2102,14 @@ Handle<JSObject> createTypedArrayBaseConstructor(Runtime &runtime) {
       Predefined::getSymbolID(Predefined::toLocaleString),
       nullptr,
       typedArrayPrototypeToLocaleString,
+      0);
+
+  defineMethod(
+      runtime,
+      proto,
+      Predefined::getSymbolID(Predefined::toSorted),
+      nullptr,
+      typedArrayPrototypeToSorted,
       0);
 
   // TypedArrayBase.xxx
