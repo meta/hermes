@@ -83,7 +83,37 @@ export function replaceNodeOnParent(
   originalNodeParent: ESNode,
   nodeToReplaceWith: ESNode | ReadonlyArray<ESNode>,
   visitorKeys?: ?VisitorKeysType,
+  parentKey?: ?string,
+  parentIndex?: ?number,
 ): void {
+  // Fast path: a caller that already knows where `originalNode` sits (e.g. a
+  // traversal that just walked to it) can pass that position, which lets us skip
+  // both the O(siblings) `getParentKey` scan and the O(siblings) array rebuild in
+  // `replaceInArray`. Without it, replacing every element of an N-element array
+  // costs O(N^2) -- exactly what the `babel: true` AST conversion does when it
+  // maps each literal node to a fresh object.
+  //
+  // The hint is only trusted after an O(1) identity probe, so a stale or
+  // incorrect hint falls through to the slow path instead of corrupting the AST.
+  // Replacements with an array change the sibling count, so they must still go
+  // through `replaceInArray`.
+  if (
+    parentKey != null &&
+    parentIndex != null &&
+    !Array.isArray(nodeToReplaceWith)
+  ) {
+    // $FlowExpectedError[prop-missing]
+    const siblings = originalNodeParent[parentKey];
+    if (Array.isArray(siblings)) {
+      // $FlowFixMe[invalid-compare]
+      const hintIsValid = siblings[parentIndex] === originalNode;
+      if (hintIsValid) {
+        siblings[parentIndex] = nodeToReplaceWith;
+        return;
+      }
+    }
+  }
+
   const replacementParent = getParentKey(
     originalNode,
     originalNodeParent,

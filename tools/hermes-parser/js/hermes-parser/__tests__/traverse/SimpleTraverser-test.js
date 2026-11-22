@@ -13,6 +13,36 @@
 import {SimpleTraverser} from '../../src/traverse/SimpleTraverser';
 
 describe('SimpleTraverser', () => {
+  it('passes the parent key and array index to the callbacks', () => {
+    const traverser = new SimpleTraverser();
+
+    const fakeAst: $FlowFixMe = {
+      type: 'Program',
+      body: [
+        {
+          type: 'ExpressionStatement',
+          expression: {type: 'Identifier', name: 'a'},
+        },
+      ],
+    };
+
+    const entered: Array<string> = [];
+    traverser.traverse(fakeAst, {
+      enter(node, _parent, parentKey, parentIndex) {
+        entered.push(`${node.type}:${String(parentKey)}:${String(parentIndex)}`);
+      },
+      leave() {},
+    });
+
+    expect(entered).toEqual([
+      'Program:undefined:undefined',
+      // array child: both the key and the index are known
+      'ExpressionStatement:body:0',
+      // single child: the key is known, there is no index
+      'Identifier:expression:null',
+    ]);
+  });
+
   it("traverses all keys except 'parent', 'loc', 'range', 'leadingComments', and 'trailingComments'", () => {
     const traverser = new SimpleTraverser();
 
