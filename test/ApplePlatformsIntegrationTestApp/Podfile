@@ -2,7 +2,13 @@ source 'https://cdn.cocoapods.org/'
 
 target 'ApplePlatformsIntegrationMobileTests' do
   use_frameworks!
-  platform :ios, '11'
+  platform :ios, '12.0'
+  pod 'hermes-engine', :path => '../../'
+end
+
+target 'ApplePlatformsIntegrationVisionOSTests' do
+  use_frameworks!
+  platform :visionos, '1.0'
   pod 'hermes-engine', :path => '../../'
 end
 

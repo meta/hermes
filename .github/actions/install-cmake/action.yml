@@ -1,0 +1,11 @@
+name: Install CMake
+runs:
+  using: composite
+  steps:
+    - name: Install CMake
+      shell: bash
+      run: |-
+        if ! brew list cmake &> /dev/null; then
+          echo "Installing CMake"
+          brew install cmake
+        fi
