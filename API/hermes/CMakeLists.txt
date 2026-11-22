@@ -96,6 +96,9 @@ add_hermes_library(hermesapi
   LINK_OBJLIBS hermesPublic LINK_LIBS jsi ${CDP_DEPS} ${API_JNI_DEPS}
   )
 target_include_directories(hermesapi_obj PUBLIC ..)
+target_include_directories(hermesapi_obj PRIVATE
+  ${PROJECT_SOURCE_DIR}/lib/VM
+  )
 
 if(HERMES_HAS_FBJNI)
   target_compile_definitions(hermesapi_obj PRIVATE HERMES_HAS_FBJNI=1)
