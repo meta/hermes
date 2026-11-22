@@ -1961,7 +1961,7 @@ regExpPrototypeSymbolSplit(void *, Runtime &runtime, NativeArgs args) {
   // 2. If Type(rx) is not Object, throw a TypeError exception.
   if (LLVM_UNLIKELY(!vmisa<JSObject>(args.getThisArg()))) {
     return runtime.raiseTypeError(
-        "Cannot call RegExp.protoype[Symbol.split] on a non-object.");
+        "Cannot call RegExp.prototype[Symbol.split] on a non-object.");
   }
   // 3. Let S be ToString(string).
   auto strRes = toString_RJS(runtime, args.getArgHandle(0));
