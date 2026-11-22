@@ -363,3 +363,49 @@ testClear(o1, o2, o3);
 testIteration();
 testForEach();
 testZero();
+
+
+print("Map.groupBy");
+//CHECK-LABEL: Map.groupBy
+
+var map = Map.groupBy([1, 2, 3, 4, 5, 6, 7], function(key) { return key % 2; });
+print(map.get('0'))
+//CHECK-NEXT: 2,4,6
+print(map.get('1'))
+//CHECK-NEXT: 1,3,5,7
+print(map.size);
+//CHECK-NEXT: 2
+
+var map = Map.groupBy([1, 2, 3, 4, 5, 6, 7], function(key) { return key % 3; });
+print(map.get('0'))
+//CHECK-NEXT: 3,6
+print(map.get('1'))
+//CHECK-NEXT: 1,4,7
+print(map.get('2'))
+//CHECK-NEXT: 2,5
+print(map.size);
+//CHECK-NEXT: 3
+
+var map = Map.groupBy([1, 2, 3, 4, 5, 6, 7], function(key) { return key % 1; });
+print(map.get('0'))
+//CHECK-NEXT: 1,2,3,4,5,6,7
+print(map.size);
+//CHECK-NEXT: 1
+
+var map = Map.groupBy([1, 2, 3, 4], function(key) { return key; });
+print(map.size);
+//CHECK-NEXT: 4
+
+var team = [
+  {name: 'Peter', age: 15},
+  {name: 'Mike', age: 20},
+  {name: 'John', age: 22},
+];
+
+var map = Map.groupBy(team, function(p) { return p.age < 18 ? 'underage' : 'adult'; });
+print(map.size);
+//CHECK-NEXT: 2
+print(JSON.stringify(map.get('underage')))
+//CHECK-NEXT: [{"name":"Peter","age":15}]
+print(JSON.stringify(map.get('adult')))
+//CHECK-NEXT: [{"name":"Mike","age":20},{"name":"John","age":22}]
