@@ -552,3 +552,26 @@ print(bomResetDecoder2.decode(Uint8Array.of(0xBF)).length);  // BOM stripped, em
 var utf16OddDecoder = new TextDecoder('utf-16le');
 print(utf16OddDecoder.decode(Uint8Array.of(0x00, 0xD8, 0xD8)).length);
 // CHECK-NEXT: 1
+
+// WebIDL reports a bad receiver and a non-BufferSource input as a TypeError,
+// like the fatal-mode case above. An unknown encoding label stays a RangeError.
+function nameOfThrow(f) {
+  try {
+    f();
+    return 'no throw';
+  } catch (e) {
+    return e.name;
+  }
+}
+print(nameOfThrow(function () {
+  TextDecoder.prototype.decode.call({}, new Uint8Array(1));
+}));
+// CHECK-NEXT: TypeError
+print(nameOfThrow(function () { new TextDecoder().decode({}); }));
+// CHECK-NEXT: TypeError
+print(nameOfThrow(function () { new TextDecoder().decode(123); }));
+// CHECK-NEXT: TypeError
+print(nameOfThrow(function () { new TextDecoder().decode('str'); }));
+// CHECK-NEXT: TypeError
+print(nameOfThrow(function () { new TextDecoder('bogus-enc'); }));
+// CHECK-NEXT: RangeError

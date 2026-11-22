@@ -25,15 +25,17 @@ class TextEncoderNativeState : public jsi::NativeState {
 };
 
 /// Validate that 'thisVal' is a TextEncoder instance (has our NativeState).
-/// Throws a JSError if not.
+/// Throws a TypeError if not.
 inline void validateTextEncoder(
     jsi::Runtime &rt,
     const jsi::Value &thisVal,
     const char *methodName) {
   if (!thisVal.isObject() ||
       !thisVal.asObject(rt).hasNativeState<TextEncoderNativeState>(rt)) {
-    throw jsi::JSError(
-        rt, std::string(methodName) + " called on non-TextEncoder object");
+    throwTypeError(
+        rt,
+        (std::string(methodName) + " called on non-TextEncoder object")
+            .c_str());
   }
 }
 
@@ -98,7 +100,7 @@ jsi::Value textEncoderEncodeInto(
   validateTextEncoder(rt, thisVal, "TextEncoder.prototype.encodeInto()");
 
   if (count < 2) {
-    throw jsi::JSError(rt, "TextEncoder.encodeInto requires 2 arguments");
+    throwTypeError(rt, "TextEncoder.encodeInto requires 2 arguments");
   }
 
   jsi::String inputStr = args[0].toString(rt);
