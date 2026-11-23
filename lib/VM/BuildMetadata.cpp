@@ -38,6 +38,22 @@ Metadata buildMetadata(CellKind kind, BuildMetadataCallback *builder) {
   return meta;
 }
 
+/// \return true if any field or the array in \p offsets is of a slot kind
+/// other than GCSymbolID.
+static bool computeHasPointerSlots(const Metadata::SlotOffsets &offsets) {
+  using ArrayType = Metadata::ArrayData::ArrayType;
+  // The fields are grouped by slot kind, and end##type is one past the last
+  // field of that kind.
+  uint8_t start = 0;
+#define SLOT_TYPE(type)                                                       \
+  if (ArrayType::type != ArrayType::GCSymbolID && offsets.end##type != start) \
+    return true;                                                              \
+  start = offsets.end##type;
+#include "hermes/VM/SlotKinds.def"
+#undef SLOT_TYPE
+  return offsets.array && offsets.array->type != ArrayType::GCSymbolID;
+}
+
 void buildMetadataTable() {
   // Once the storage is initialized, also initialize the global array of VTable
   // pointers using the new metadata.
@@ -50,6 +66,8 @@ void buildMetadataTable() {
 #include "hermes/VM/CellKinds.def"
 #undef CELL_KIND
     };
+    for (Metadata &meta : Metadata::metadataTable)
+      meta.hasPointerSlots = computeHasPointerSlots(meta.offsets);
 
     assert(
         !VTable::vtableArray[0] &&

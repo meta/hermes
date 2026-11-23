@@ -214,6 +214,11 @@ struct Metadata final {
     OptValue<ArrayData> array{};
   } offsets;
 
+  /// Whether any field or the array can hold a pointer to a GCCell, that is,
+  /// whether the cell has slots other than GCSymbolIDs. Set by
+  /// buildMetadataTable. It is true until then, which is always safe to assume.
+  bool hasPointerSlots{true};
+
   using SlotNames = std::array<const char *, kMaxNumFields>;
 
   /// The names of the fields, only used in snapshots. This is placed after the

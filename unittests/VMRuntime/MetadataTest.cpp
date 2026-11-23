@@ -98,4 +98,24 @@ TEST(MetadataTest, TestArray) {
   EXPECT_EQ(array.stride, sizeof(DummyCell));
 }
 
+TEST(MetadataTest, TestHasPointerSlots) {
+  buildMetadataTable();
+  auto hasPointerSlots = [](CellKind kind) {
+    return Metadata::metadataTable[static_cast<size_t>(kind)].hasPointerSlots;
+  };
+  // No slots.
+  EXPECT_FALSE(hasPointerSlots(CellKind::FillerCellKind));
+  EXPECT_FALSE(hasPointerSlots(CellKind::BoxedDoubleKind));
+  // Only an array of GCSymbolIDs.
+  EXPECT_FALSE(hasPointerSlots(CellKind::DictPropertyMapKind));
+  // Pointer fields next to a GCSymbolID field.
+  EXPECT_TRUE(hasPointerSlots(CellKind::HiddenClassKind));
+  EXPECT_TRUE(hasPointerSlots(CellKind::JSSymbolKind));
+  // Pointer fields only.
+  EXPECT_TRUE(hasPointerSlots(CellKind::JSObjectKind));
+  // An array of values.
+  EXPECT_TRUE(hasPointerSlots(CellKind::ArrayStorageKind));
+  EXPECT_TRUE(hasPointerSlots(CellKind::ArrayStorageSmallKind));
+}
+
 } // namespace
