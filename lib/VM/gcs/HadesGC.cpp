@@ -473,8 +473,10 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
           heapLoc < (reinterpret_cast<const char *>(currentCell_) +
                      currentCell_->getAllocatedSizeSlow()) &&
           "currentCell_ must be set for compaction");
-      // If a compaction is about to take place, dirty the card for any newly
-      // evacuated cells, since the marker may miss them.
+      // A compaction is about to take place, so dirty the card of this slot
+      // for the compaction to update it. This is needed both for newly
+      // evacuated cells, which the marker may miss, and for the slots found
+      // by scanDirtyCards, which clears each run of cards before scanning it.
       AlignedHeapSegment::dirtyCardForAddressInLargeObj(currentCell_, heapLoc);
     }
     return ptr;
@@ -495,8 +497,10 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
           heapLoc < (reinterpret_cast<const char *>(currentCell_) +
                      currentCell_->getAllocatedSizeSlow()) &&
           "currentCell_ must be set for compaction");
-      // If a compaction is about to take place, dirty the card for any newly
-      // evacuated cells, since the marker may miss them.
+      // A compaction is about to take place, so dirty the card of this slot
+      // for the compaction to update it. This is needed both for newly
+      // evacuated cells, which the marker may miss, and for the slots found
+      // by scanDirtyCards, which clears each run of cards before scanning it.
       AlignedHeapSegment::dirtyCardForAddressInLargeObj(currentCell_, heapLoc);
     }
     return cptr;
@@ -3029,7 +3033,8 @@ prefetchDirtyCardRun(FixedSizeHeapSegment &seg, size_t iBegin, size_t iEnd) {
 template <bool CompactionEnabled>
 void HadesGC::scanDirtyCardsForSegment(
     EvacAcceptor<CompactionEnabled> &acceptor,
-    FixedSizeHeapSegment &seg) {
+    FixedSizeHeapSegment &seg,
+    bool clearScannedCards) {
   // Use level instead of end in case the OG segment is still in bump alloc
   // mode.
   const char *const origSegLevel = seg.level();
@@ -3071,11 +3076,11 @@ void HadesGC::scanDirtyCardsForSegment(
         "non-dirty card after a sequence of dirty cards");
     assert(iBegin < iEnd && "Indices must be apart by at least one");
 
-    // Scanning this run does not change any card outside of it, so the next
-    // run found now is the one that would be found after scanning this run:
-    // write barriers cannot run, the background thread is blocked on
-    // gcMutex_, and the acceptor only dirties the cards of the slots it
-    // visits, which lie in this run.
+    // Scanning this run (and clearing its cards, see below) does not change
+    // any card outside of it, so the next run found now is the one that would
+    // be found after scanning this run: write barriers cannot run, the
+    // background thread is blocked on gcMutex_, and the acceptor only dirties
+    // the cards of the slots it visits, which lie in this run.
     oiNextBegin = seg.findNextDirtyCard(iEnd, to);
     if (oiNextBegin) {
       nextEnd = findRunEnd(*oiNextBegin);
@@ -3086,6 +3091,11 @@ void HadesGC::scanDirtyCardsForSegment(
     // may dirty the cards of pointers into the compactee anywhere. In that
     // case, find the next run again after scanning this one.
     const size_t numOldCollectionsBefore = numOldCollections_;
+
+    // The acceptor re-dirties the cards of the slots in this run that point
+    // into the compactee (see scanDirtyCards).
+    if (clearScannedCards)
+      seg.clearCardRange(iBegin, iEnd);
 
     const char *const begin = seg.cardIndexToAddress(iBegin);
     const char *const end = seg.cardIndexToAddress(iEnd);
@@ -3154,7 +3164,8 @@ void HadesGC::scanDirtyCardsForSegment(
 template <bool CompactionEnabled>
 void HadesGC::scanDirtyCardsForSegment(
     EvacAcceptor<CompactionEnabled> &acceptor,
-    JumboHeapSegment &seg) {
+    JumboHeapSegment &seg,
+    bool clearScannedCards) {
   auto *cell = reinterpret_cast<GCCell *>(seg.start());
 
   // If it's Sweep phase and the object is dead, don't scan it. For more
@@ -3185,6 +3196,10 @@ void HadesGC::scanDirtyCardsForSegment(
     const char *const begin = seg.cardIndexToAddress(iBegin);
     const char *const end = seg.cardIndexToAddress(iEnd);
 
+    // As for fixed-size segments, the acceptor re-dirties the cards of the
+    // slots in this run that point into the compactee.
+    if (clearScannedCards)
+      seg.clearCardRange(iBegin, iEnd);
     markCellWithinRange(acceptor, cell, begin, end);
 
     from = iEnd;
@@ -3207,10 +3222,17 @@ void HadesGC::scanDirtyCards(
     // It is safe to hold this reference across a push_back into
     // oldGen_.segments_ since references into a deque are not invalidated.
     FixedSizeHeapSegment &seg = oldGen_.getSegments()[i];
-    scanDirtyCardsForSegment(acceptor, seg);
-    // Do not clear the card table if the OG thread is currently marking to
-    // prepare for a compaction. Note that we should clear the card tables if
-    // the compaction is currently ongoing.
+    // While the OG collection is marking to prepare for a compaction, the
+    // cards of the pointers into the compactee must stay dirty until the
+    // compaction. Rather than keeping all cards dirty, clear each run of dirty
+    // cards right before scanning it: the scan visits every object in the
+    // run, marked or not, and the acceptor re-dirties the card of each slot
+    // that points into the compactee. This keeps old-to-young cards from
+    // accumulating until the compaction, and being scanned by every YG.
+    scanDirtyCardsForSegment(
+        acceptor, seg, /*clearScannedCards*/ preparingCompaction);
+    // Otherwise, including in the compacting YG, clear the whole card table
+    // after scanning it.
     if (!preparingCompaction)
       seg.clearAllCards();
   }
@@ -3220,15 +3242,22 @@ void HadesGC::scanDirtyCards(
     // during a YG collection, so we don't need to worry about that. But in
     // principle, it should still be safe to use reference in that case because
     // jumbo segments are stored in a list instead of vector.
-    scanDirtyCardsForSegment(acceptor, seg);
+    scanDirtyCardsForSegment(
+        acceptor, seg, /*clearScannedCards*/ preparingCompaction);
     if (!preparingCompaction)
       seg.clearAllCards();
   }
 
   // No need to search dirty cards in the compactee segment if it is
   // currently being evacuated, since it will be scanned fully.
-  if (preparingCompaction)
-    scanDirtyCardsForSegment(acceptor, *compactee_.segment);
+  if (preparingCompaction) {
+    scanDirtyCardsForSegment(
+        acceptor, *compactee_.segment, /*clearScannedCards*/ false);
+    // Unlike in the other segments, the cards of the pointers into the
+    // compactee need not stay dirty here: the compaction updates the pointers
+    // in the compactee when it scans the evacuated objects.
+    compactee_.segment->clearAllCards();
+  }
 }
 
 void HadesGC::finalizeYoungGenObjects() {

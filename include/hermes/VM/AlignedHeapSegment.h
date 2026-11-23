@@ -369,16 +369,28 @@ class AlignedHeapSegment {
 
   /// Clears the card table.
   void clearAllCards() const {
-    // Use memset for efficiency. This is safe because we only clear cards
-    // after scanning them, which only happens during YG collection. When
-    // YG collection finishes, the background marking thread may continue but
-    // will not access card tables unless preparing for compaction (in which
-    // case this function won't be called).
+    // Use memset for efficiency. This is safe because cards are only cleared
+    // during YG collection, with the GC mutex held: the background thread
+    // only accesses card tables while preparing for a compaction, and only
+    // with the GC mutex held.
     char *cards = reinterpret_cast<char *>(contents()->prefixHeader_.cards_);
     std::memset(
         cards + Contents::kFirstUsedIndex,
         (int)Contents::CardStatus::Clean,
         getEndCardIndex() - Contents::kFirstUsedIndex);
+  }
+
+  /// Clears the cards with indices in [fromIndex, toIndex). Like
+  /// clearAllCards(), this must only be called by the card scan of a YG
+  /// collection, which runs entirely with the GC mutex held, so that the
+  /// background thread cannot dirty cards while they are being scanned and
+  /// cleared.
+  void clearCardRange(size_t fromIndex, size_t toIndex) const {
+    assert(
+        Contents::kFirstUsedIndex <= fromIndex && fromIndex <= toIndex &&
+        toIndex <= getEndCardIndex() && "Invalid card range");
+    cleanOrDirtyRange(
+        contents(), fromIndex, toIndex, Contents::CardStatus::Clean);
   }
 
   /// \return The card boundary table.

@@ -1051,4 +1051,86 @@ TEST_F(GCBasicsTestGCOptions, ExternalMemoryDuringOldGenCollection) {
 }
 #endif
 
+/// Compactions and card tables are specific to Hades. Handle-SAN collects on
+/// allocation and forces a compaction in every OG collection, so the
+/// compaction below could happen before the pointers it should update exist.
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES == 0
+/// Test that a compaction updates the pointers into the compactee whose cards
+/// were scanned, and cleared, by the YG collections that ran while the OG
+/// collection was marking.
+TEST(GCCompactionTest, CompacteePointersSurviveCardClearing) {
+  using SegmentCell = EmptyCell<FixedSizeHeapSegment::maxSize()>;
+  constexpr size_t kNumTargets = 64;
+  auto runtime = DummyRuntime::create(
+      TestGCConfigFixedSize(8 * FixedSizeHeapSegment::storageSize()));
+  DummyRuntime &rt = *runtime;
+  auto &gc = rt.getHeap();
+  struct : Locals {
+    PinnedValue<SegmentCell> filler;
+    /// Objects in the compactee.
+    PinnedValue<DummyObject> targets[kNumTargets];
+    /// OG objects that point to the targets.
+    PinnedValue<DummyObject> holders[kNumTargets];
+    /// OG objects that point to YG objects.
+    PinnedValue<DummyObject> others[kNumTargets];
+  } lv;
+  DummyLocalsRAII lraii{rt, &lv};
+
+  // Fill an OG segment, so that the targets are allocated in a new one. As the
+  // last OG segment, it is the compactee of the OG collection started below,
+  // which is forced to compact.
+  lv.filler = SegmentCell::createLongLived(rt);
+  for (auto &target : lv.targets)
+    target = DummyObject::createLongLived(gc);
+  gc.collectWithOptions(
+      "test",
+      GCBase::GCOptions{
+          GCBase::GCType::Major, GCBase::GCExecutionPolicy::Async});
+
+  // Make each holder point into the compactee. The holders are allocated
+  // while the OG collection is marking, so they are allocated marked and the
+  // marker never visits them: only the write barrier dirties their cards. The
+  // others, allocated in between, add old-to-young pointers to the cards.
+  // The previous addresses of the targets are only compared, never read.
+  const void *oldTargets[kNumTargets];
+  for (size_t i = 0; i < kNumTargets; ++i) {
+    lv.holders[i] = DummyObject::createLongLived(gc);
+    lv.holders[i]->setPointer(gc, *lv.targets[i]);
+    lv.others[i] = DummyObject::createLongLived(gc);
+    DummyObject *young = DummyObject::create(gc, rt);
+    lv.others[i]->setPointer(gc, young);
+    oldTargets[i] = *lv.targets[i];
+  }
+
+  // Collect the YG until the compaction, which happens in the first YG
+  // collection after the end of marking. The YG collections before it clear
+  // the cards that they scan, so the compaction only updates the holders if
+  // those collections re-dirtied their cards.
+  GCBase::HeapInfo info;
+  gc.getHeapInfo(info);
+  const unsigned numCompactions = info.numCompactions;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  do {
+    gc.collectWithOptions("test", GCBase::GCOptions{});
+    gc.getHeapInfo(info);
+    std::this_thread::yield();
+  } while (info.numCompactions == numCompactions &&
+           std::chrono::steady_clock::now() < deadline);
+  ASSERT_EQ(numCompactions + 1, info.numCompactions);
+
+  // Decode the pointers without GCPointer::get, whose vmcast would read the
+  // cell that a pointer that was not updated still points to, which is freed.
+  PointerBase &base = gc.getPointerBase();
+  for (size_t i = 0; i < kNumTargets; ++i) {
+    // The target was evacuated, and the pointer to it updated.
+    EXPECT_NE(oldTargets[i], *lv.targets[i]);
+    const CompressedPointer holderPtr = lv.holders[i]->other;
+    EXPECT_EQ(static_cast<GCCell *>(*lv.targets[i]), holderPtr.get(base));
+    const CompressedPointer otherPtr = lv.others[i]->other;
+    EXPECT_FALSE(gc.inYoungGen(otherPtr.get(base)));
+  }
+}
+#endif
+
 } // namespace

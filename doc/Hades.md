@@ -302,8 +302,13 @@ corresponding to any on-heap pointers that point into the compaction candidate.
 Any YG collection that occurs during marking needs special care. Promoted
 objects will not be scanned by the OG since they are allocated as marked, so
 they need to be scanned for compactee pointers after they have been promoted.
-Furthermore, the card table cannot be cleared at the end of the YG collection,
-since that would erase information from the ongoing compaction.
+Furthermore, the card table cannot simply be cleared at the end of the YG
+collection, since that would erase information from the ongoing compaction.
+Instead, the YG collection clears each run of dirty cards right before scanning
+it. The scan visits every object in the run, marked or not, and dirties the card
+of each pointer into the compactee again. As a result, the cards of the pointers
+into the compactee from outside it stay dirty, while the others are cleared and
+are not scanned again by later YG collections.
 4. During the STW pause, the internal state of the GC is updated to signal that
 all pointers into the compactee have been marked, and that the next YG
 collection should complete the compaction.

@@ -1477,22 +1477,29 @@ class HadesGC final : public GCBase {
   void finalizeCompactee();
 
   /// Search a single segment for pointers that may need to be updated as the
-  /// YG/compactee are evacuated.
+  /// YG/compactee are evacuated. If \p clearScannedCards is true, each run of
+  /// dirty cards is cleared right before it is scanned, and \p acceptor
+  /// re-dirties the cards of the slots in it that point into the compactee.
   template <bool CompactionEnabled>
   void scanDirtyCardsForSegment(
       EvacAcceptor<CompactionEnabled> &acceptor,
-      FixedSizeHeapSegment &segment);
+      FixedSizeHeapSegment &segment,
+      bool clearScannedCards);
   template <bool CompactionEnabled>
   void scanDirtyCardsForSegment(
       EvacAcceptor<CompactionEnabled> &acceptor,
-      JumboHeapSegment &segment);
+      JumboHeapSegment &segment,
+      bool clearScannedCards);
 
   /// Find all pointers from OG into the YG/compactee during a YG collection.
   /// This is done quickly through use of write barriers that detect the
   /// creation of such pointers. By default cards are cleared after they are
   /// scanned, but if \p CompactionEnabled is true, and \p doCompaction is
-  /// false, the cards will be preserved, as they may represent pointers into
-  /// the compactee which is not being evacuated yet.
+  /// false, the compactee is not being evacuated yet, and the cards of the
+  /// pointers into it from other segments must stay dirty until the
+  /// compaction. Then each run of dirty cards in these segments is cleared
+  /// right before it is scanned, and \p acceptor re-dirties the card of every
+  /// scanned slot that points into the compactee.
   template <bool CompactionEnabled>
   void scanDirtyCards(
       EvacAcceptor<CompactionEnabled> &acceptor,
