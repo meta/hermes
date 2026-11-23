@@ -747,6 +747,12 @@ static double parseISODate(
       }
     }
   }
+  // ES15 21.4.1.32: A string containing out-of-bounds or nonconforming
+  // elements is not a valid instance of this format. The day is only checked
+  // against 31, so e.g. 02-30 still rolls over into March.
+  if (m < 1 || m > 12 || d < 1 || d > 31) {
+    return nan;
+  }
 
   // See if there's a time.
   if (consume(u'T') || consume(u' ')) {
@@ -782,6 +788,10 @@ static double parseISODate(
         }
       }
     }
+    // 24:00 is allowed, but only as the exact end of the day.
+    if (h > 24 || min > 59 || s > 59 || (h == 24 && (min || s || ms))) {
+      return nan;
+    }
 
     if (it == end) {
       // ES12 21.4.3.2: When the UTC offset representation is absent, date-only
@@ -809,7 +819,7 @@ static double parseISODate(
       if (it > end - 2) {
         return nan;
       }
-      if (!scanInt(it, it + 2, tzh)) {
+      if (!scanInt(it, it + 2, tzh) || tzh > 23) {
         return nan;
       }
       tzh *= sign;
@@ -817,7 +827,7 @@ static double parseISODate(
       if (it > end - 2) {
         return nan;
       }
-      if (!scanInt(it, it + 2, tzm)) {
+      if (!scanInt(it, it + 2, tzm) || tzm > 59) {
         return nan;
       }
       tzm *= sign;
