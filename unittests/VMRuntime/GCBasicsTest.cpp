@@ -192,7 +192,8 @@ TEST_F(GCBasicsTest, WeakRefSlotTest) {
 
   // Update pointer of unmarked slot.
   auto obj2 = (void *)0x76543210;
-  s.setPointer(CompressedPointer::encode(static_cast<GCCell *>(obj2), rt));
+  s.setPointerForTest(
+      CompressedPointer::encode(static_cast<GCCell *>(obj2), rt));
   EXPECT_FALSE(s.isFree());
   EXPECT_TRUE(s.hasValue());
   EXPECT_EQ(obj2, s.getObjectNoBarrierUnsafe(rt));

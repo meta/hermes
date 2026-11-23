@@ -2646,9 +2646,15 @@ uint64_t HadesGC::youngGenEvacuateImpl(bool doCompaction) {
   // may be dead, but we still end up evacuating their corresponding value.
   // This is done for simplicity, since it lets us avoid needing to iterate to
   // a fixed point as is done during a full collection.
-  weakMapEntrySlots_.forEach([&acceptor](WeakMapEntrySlot &slot) {
+  // Only the recorded entries can have a value in the YG (see
+  // weakMapEntrySlots_), but any entry can have one in the compactee.
+  auto markMappedValue = [&acceptor](WeakMapEntrySlot &slot) {
     acceptor.accept(slot.mappedValue);
-  });
+  };
+  if (doCompaction)
+    weakMapEntrySlots_.forEach(markMappedValue);
+  else
+    weakMapEntrySlots_.forEachRecorded(markMappedValue);
 
   // Find old-to-young pointers, as they are considered roots for YG
   // collection.
@@ -2677,8 +2683,15 @@ uint64_t HadesGC::youngGenEvacuateImpl(bool doCompaction) {
   }
 
   // Mark weak roots. We only need to update the long lived weak roots if we are
-  // evacuating part of the OG.
-  markWeakRoots(acceptor, /*markLongLived*/ doCompaction);
+  // evacuating part of the OG. Similarly, only the recorded weak slots can
+  // point into the YG, but any weak slot can point into the compactee.
+  markWeakRoots(
+      acceptor,
+      /*markLongLived*/ doCompaction,
+      /*onlyRecordedSlots*/ !doCompaction);
+  // No weak slot points into the YG anymore, so the records can be dropped.
+  weakSlots_.clearRecorded();
+  weakMapEntrySlots_.clearRecorded();
 
   return acceptor.evacuatedBytes();
 }
@@ -2701,6 +2714,8 @@ void HadesGC::youngGenCollection(
   checkWellFormed();
   // Check that the card tables are well-formed before the collection.
   verifyCardTable();
+  // Check that the weak slots referring to the YG are recorded.
+  verifyRecordedWeakSlots();
 #endif
   assert(
       youngGen().markBitArray().findNextZeroBitFrom(0) ==
@@ -2912,6 +2927,10 @@ bool HadesGC::promoteYoungGenToOldGen() {
   // require a marking pass through all objects.
   // This will also rename the segment in the crash data.
   oldGen_.addSegment(setYoungGen(std::move(newYoungGen.get())));
+  // Everything that was in the YG is now in the OG, so no weak slot points
+  // into the new YG.
+  weakSlots_.clearRecorded();
+  weakMapEntrySlots_.clearRecorded();
 
   return true;
 }
@@ -3697,6 +3716,58 @@ void HadesGC::verifyCardTable() {
     seg.cardBoundaryTable().verifyBoundaries(seg.start(), seg.level());
   }
   // JumboHeapSegment does not use card boundary table, so don't verify them.
+}
+
+void HadesGC::verifyRecordedWeakSlots() {
+  assert(inGC() && "Must be in GC to call verifyRecordedWeakSlots");
+  /// Determines whether any of the weak roots it accepts points into the YG.
+  struct YoungWeakRootFinder final : public WeakRootAcceptor {
+    HadesGC &gc;
+    bool found{false};
+
+    explicit YoungWeakRootFinder(HadesGC &gc) : gc(gc) {}
+
+    void acceptWeak(WeakRootBase &wr) override {
+      if (wr && gc.inYoungGen(wr.getNoBarrierUnsafe(gc.getPointerBase())))
+        found = true;
+    }
+    void acceptWeak(WeakSmallHermesValue &wshv) override {
+      if (wshv.isPointer() &&
+          gc.inYoungGen(wshv.getPointerNoBarrierUnsafe(gc.getPointerBase())))
+        found = true;
+    }
+    void acceptWeakSym(WeakRootSymbolID &) override {}
+  };
+
+  YoungWeakRootFinder finder{*this};
+  // If records were dropped, YG collections visit every slot of the list.
+  if (!weakSlots_.recordsDropped()) {
+    llvh::DenseSet<const WeakRefSlot *> recorded;
+    weakSlots_.forEachRecorded(
+        [&recorded](WeakRefSlot &slot) { recorded.insert(&slot); });
+    weakSlots_.forEach([&finder, &recorded](WeakRefSlot &slot) {
+      finder.found = false;
+      slot.markWeakRoots(finder);
+      assert(
+          (!finder.found || recorded.count(&slot)) &&
+          "Unrecorded WeakRefSlot refers to the YG");
+    });
+  }
+  if (!weakMapEntrySlots_.recordsDropped()) {
+    llvh::DenseSet<const WeakMapEntrySlot *> recorded;
+    weakMapEntrySlots_.forEachRecorded(
+        [&recorded](WeakMapEntrySlot &slot) { recorded.insert(&slot); });
+    weakMapEntrySlots_.forEach(
+        [this, &finder, &recorded](WeakMapEntrySlot &slot) {
+          // The mapped value is a root for YG collections (see
+          // youngGenEvacuateImpl), not a weak root.
+          finder.found = inYoungGen(slot.mappedValue);
+          slot.markWeakRoots(finder);
+          assert(
+              (!finder.found || recorded.count(&slot)) &&
+              "Unrecorded WeakMapEntrySlot refers to the YG");
+        });
+  }
 }
 
 #endif

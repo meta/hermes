@@ -42,7 +42,7 @@ void JSWeakMapImplBase::setValue(
 
   if (it != self->set_.end()) {
     // Key already exists, update existing value.
-    it->setMappedValue(*value);
+    it->setMappedValue(runtime.getHeap(), *value);
     return;
   }
 

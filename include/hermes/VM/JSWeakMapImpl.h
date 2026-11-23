@@ -72,8 +72,8 @@ class WeakRefKey {
   }
 
   /// Set mapped value in slot_ to \p value.
-  void setMappedValue(HermesValue value) {
-    slot_->mappedValue = value;
+  void setMappedValue(GC &gc, HermesValue value) {
+    gc.setWeakMapEntryValue(*slot_, value);
   }
 
   /// Create an empty key to be used in DenseMap.

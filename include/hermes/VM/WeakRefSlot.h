@@ -80,8 +80,13 @@ class WeakRefSlot {
 
   // GC methods to update slot when referent moves/dies.
 
-  /// Update the stored pointer (because the object moved).
-  inline void setPointer(CompressedPointer ptr);
+#ifdef UNIT_TEST
+  /// Update the stored pointer. Only for tests: once a slot is allocated, only
+  /// the GC changes its referent, through markWeakRoots(). This must not make
+  /// a slot of GCBase::weakSlots_ point into the YG, since YG collections may
+  /// not visit it (see GCBase::weakSlots_).
+  inline void setPointerForTest(CompressedPointer ptr);
+#endif
 
   /// Clear the pointer (because the object died).
   void clearPointer() {
@@ -176,6 +181,8 @@ class WeakMapEntrySlot {
   };
   /// The value mapped by the WeakRef key.
   /// NOTE: It's set to Empty only if either the key or the owner is null.
+  /// Once the slot is allocated, the mutator must only set it with
+  /// GCBase::setWeakMapEntryValue.
   PinnedHermesValue mappedValue;
 
   void markWeakRoots(WeakRootAcceptor &acceptor) {

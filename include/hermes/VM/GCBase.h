@@ -1099,6 +1099,12 @@ class GCBase {
 
   /// \return true if the pointer lives in the young generation.
   virtual bool inYoungGen(const GCCell *) const = 0;
+  /// \return true if \p value is a pointer to a cell that lives in the young
+  /// generation.
+  bool inYoungGen(SmallHermesValue value) const {
+    return value.isPointer() && inYoungGen(value.getPointer(pointerBase_));
+  }
+  inline bool inYoungGen(HermesValue value) const;
 
   /// Returns whether an external allocation of the given \p size fits
   /// within the maximum heap size. (Note that this does not guarantee that the
@@ -1121,6 +1127,11 @@ class GCBase {
       SmallHermesValue key,
       HermesValue value,
       JSWeakMapImplBase *owner);
+
+  /// Set the mapped value of the WeakMap/WeakSet entry \p slot to \p value.
+  /// The mutator must use this to update the mapped value of an entry.
+  /// \pre \p slot must not be free.
+  inline void setWeakMapEntryValue(WeakMapEntrySlot &slot, HermesValue value);
 
 #ifndef NDEBUG
   /// \name Debug APIs
@@ -1372,15 +1383,29 @@ class GCBase {
   }
 
   /// Convenience method to invoke the mark weak roots function provided at
-  /// initialization, using the context provided then (on this heap).
-  void markWeakRoots(WeakRootAcceptor &acceptor, bool markLongLived) {
+  /// initialization, using the context provided then (on this heap), and to
+  /// mark the weak slots. If \p onlyRecordedSlots is true, only mark the slots
+  /// recorded in weakSlots_ and weakMapEntrySlots_ (see
+  /// ManagedChunkedList::forEachRecorded).
+  void markWeakRoots(
+      WeakRootAcceptor &acceptor,
+      bool markLongLived,
+      bool onlyRecordedSlots = false) {
     gcCallbacks_.markWeakRoots(acceptor, markLongLived);
     acceptor.beginRootSection(RootAcceptor::Section::WeakRefSlots);
-    weakSlots_.forEach(
-        [&acceptor](WeakRefSlot &slot) { slot.markWeakRoots(acceptor); });
-
-    weakMapEntrySlots_.forEach(
-        [&acceptor](WeakMapEntrySlot &slot) { slot.markWeakRoots(acceptor); });
+    auto markWeakRefSlot = [&acceptor](WeakRefSlot &slot) {
+      slot.markWeakRoots(acceptor);
+    };
+    auto markWeakMapEntrySlot = [&acceptor](WeakMapEntrySlot &slot) {
+      slot.markWeakRoots(acceptor);
+    };
+    if (onlyRecordedSlots) {
+      weakSlots_.forEachRecorded(markWeakRefSlot);
+      weakMapEntrySlots_.forEachRecorded(markWeakMapEntrySlot);
+    } else {
+      weakSlots_.forEach(markWeakRefSlot);
+      weakMapEntrySlots_.forEach(markWeakMapEntrySlot);
+    }
     acceptor.endRootSection();
   }
 
@@ -1521,11 +1546,22 @@ class GCBase {
   /// weakSlots_ is a list of all the weak pointers in the system. They are
   /// invalidated if they point to an object that is dead, and do not count
   /// towards whether an object is live or dead.
+  /// The referent of a slot is set when the slot is allocated, and afterwards
+  /// only the GC updates it. Since objects never move into the YG, in HadesGC
+  /// only the slots allocated with a YG referent since the last YG collection
+  /// can point into the YG. allocWeakSlot records them, so that non-compacting
+  /// YG collections only need to visit the recorded slots. MallocGC does not
+  /// use or clear the records, so the list ends up dropping them, and then
+  /// stops recording (see ManagedChunkedList::record).
   ManagedChunkedList<WeakRefSlot> weakSlots_;
 
   /// A list of all slots used by WeakMap/WeakSet. They are freed by the mutator
   /// when operating on a WeakMap/WeakSet, or in the finalizer during sweeping.
   /// In collection phase, GC visits each non-free slot to update their values.
+  /// As for weakSlots_, the slots whose key, owner or mapped value was set to a
+  /// YG object since the last YG collection are recorded (by
+  /// allocWeakMapEntrySlot and setWeakMapEntryValue), so that non-compacting
+  /// YG collections of HadesGC only need to visit the recorded slots.
   ManagedChunkedList<WeakMapEntrySlot> weakMapEntrySlots_;
 
   /// Tracks what objects need a stable identity for features such as heap
@@ -1585,6 +1621,22 @@ class GCBase {
   /// True if the tripwire has already been called on this heap.
   bool tripwireCalled_{false};
 };
+
+inline bool GCBase::inYoungGen(HermesValue value) const {
+  return value.isPointer() &&
+      inYoungGen(static_cast<const GCCell *>(value.getPointer()));
+}
+
+inline void GCBase::setWeakMapEntryValue(
+    WeakMapEntrySlot &slot,
+    HermesValue value) {
+  assert(!slot.isFree() && "Setting the mapped value of a free slot");
+  slot.mappedValue = value;
+  // Record the slot if its new mapped value is in the YG (see
+  // weakMapEntrySlots_).
+  if (inYoungGen(value))
+    weakMapEntrySlots_.record(slot);
+}
 
 // Utilities for formatting time durations and memory sizes.
 

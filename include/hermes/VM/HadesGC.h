@@ -632,6 +632,8 @@ class HadesGC final : public GCBase {
   bool inYoungGen(CompressedPointer p) const {
     return p.getSegmentStart() == youngGenCP_;
   }
+  /// Also allow checking SmallHermesValues and HermesValues.
+  using GCBase::inYoungGen;
 
   /// Approximate the dirty memory footprint of the GC's heap. Note that this
   /// does not return the number of dirty pages in the heap, but instead returns
@@ -1632,6 +1634,11 @@ class HadesGC final : public GCBase {
   /// Verify that the card table used to find pointers from OG into YG has the
   /// correct cards dirtied, given the contents of the OG currently.
   void verifyCardTable();
+
+  /// Verify that every weak slot that refers to the YG is recorded in its list
+  /// (see GCBase::weakSlots_ and GCBase::weakMapEntrySlots_), and is therefore
+  /// visited by non-compacting YG collections.
+  void verifyRecordedWeakSlots();
 #endif
 };
 

@@ -224,6 +224,8 @@ class MallocGC final : public GCBase {
   bool inYoungGen(const GCCell *p) const override {
     return CellHeader::from(p)->inYoungGen;
   }
+  /// Also allow checking SmallHermesValues and HermesValues.
+  using GCBase::inYoungGen;
 
   /// Get the cell size. This is used when the size of \p cell is larger than
   /// GCCell::maxNormalSize().

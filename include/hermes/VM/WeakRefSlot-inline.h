@@ -14,10 +14,12 @@
 namespace hermes {
 namespace vm {
 
-void WeakRefSlot::setPointer(CompressedPointer ptr) {
+#ifdef UNIT_TEST
+void WeakRefSlot::setPointerForTest(CompressedPointer ptr) {
   // Cannot check state() here because it can race with marking code.
   value_.root.setObject(ptr);
 }
+#endif
 
 GCCell *WeakRefSlot::getObject(PointerBase &base, GC &gc) const {
   // Cannot check state() here because it can race with marking code.

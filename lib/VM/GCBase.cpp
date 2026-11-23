@@ -991,15 +991,24 @@ bool GCBase::shouldSanitizeHandles() {
 #endif
 
 WeakRefSlot *GCBase::allocWeakSlot(SmallHermesValue target) {
-  return &weakSlots_.add(target);
+  WeakRefSlot &slot = weakSlots_.add(target);
+  // Record the slot if it points into the YG (see weakSlots_).
+  if (inYoungGen(target))
+    weakSlots_.record(slot);
+  return &slot;
 }
 
 WeakMapEntrySlot *GCBase::allocWeakMapEntrySlot(
     SmallHermesValue key,
     HermesValue value,
     JSWeakMapImplBase *owner) {
-  return &weakMapEntrySlots_.add(
+  WeakMapEntrySlot &slot = weakMapEntrySlots_.add(
       key, value, CompressedPointer::encode(owner, getPointerBase()));
+  // Record the slot if its key, mapped value or owner is in the YG (see
+  // weakMapEntrySlots_).
+  if (inYoungGen(key) || inYoungGen(value) || inYoungGen(owner))
+    weakMapEntrySlots_.record(slot);
+  return &slot;
 }
 
 HeapSnapshot::NodeID GCBase::getObjectID(const GCCell *cell) {
