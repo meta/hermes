@@ -20,6 +20,8 @@
 #include "hermes/VM/StringPrimitiveValueDenseMapInfo-inline.h"
 #include "hermes/VM/WeakRoot-inline.h"
 
+#include "llvh/Support/Compiler.h"
+
 namespace hermes {
 namespace vm {
 
@@ -381,11 +383,31 @@ void RuntimeModule::markWeakRoots(
     WeakRootAcceptor &acceptor,
     bool markLongLived) {
   if (markLongLived) {
-    for (auto &cbPtr : functionMap_) {
-      // Only mark a CodeBlock is its non-null, and has not been scanned
+    // Each CodeBlock is a separate allocation, so this walk is dominated by
+    // cache misses on the CodeBlocks. Prefetch the first two 64-byte cache
+    // lines of the CodeBlock kPrefetchDistance slots ahead, which hold its
+    // header and its first cache entries. The distance counts functionMap_
+    // slots, and many of them are null because CodeBlocks are created lazily.
+    constexpr size_t kPrefetchDistance = 16;
+    for (size_t i = 0, e = functionMap_.size(); i < e; ++i) {
+      if (i + kPrefetchDistance < e) {
+        const auto &next = functionMap_[i + kPrefetchDistance];
+        if (next) {
+          LLVM_PREFETCH(next.get(), /*rw*/ 0, /*locality*/ 3);
+          // Compute the address in the second line as an integer, since it may
+          // be past the end of a small CodeBlock. A prefetch never faults.
+          LLVM_PREFETCH(
+              reinterpret_cast<const void *>(
+                  reinterpret_cast<uintptr_t>(next.get()) + 64),
+              /*rw*/ 0,
+              /*locality*/ 3);
+        }
+      }
+      CodeBlock *cb = functionMap_[i].get();
+      // Only mark a CodeBlock if it is non-null and has not been scanned
       // previously in this top-level markRoots invocation.
-      if (cbPtr != nullptr && cbPtr->getRuntimeModule() == this) {
-        cbPtr->markWeakElementsInCaches(runtime_, acceptor);
+      if (cb != nullptr && cb->getRuntimeModule() == this) {
+        cb->markWeakElementsInCaches(runtime_, acceptor);
       }
     }
     for (auto &entry : objectLiteralHiddenClasses_) {
