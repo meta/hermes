@@ -964,6 +964,15 @@ class HadesGC final : public GCBase {
         size_t bucket,
         SegmentBucket *segBucket);
 
+    /// Prefetch the free cell that search() will most likely take the next
+    /// time it allocates from \p bucket: the head of \p segBucket, or the head
+    /// of the first SegmentBucket in the freelist for \p bucket if \p segBucket
+    /// is empty. Called right after a cell is removed from \p segBucket, so
+    /// that the next allocation does not stall on a cache miss on the free
+    /// cell's header. This is only a hint and does not change any state.
+    void prefetchFreelistHead(size_t bucket, const SegmentBucket *segBucket)
+        const;
+
     /// Adds the given region of memory to the free list for the segment that is
     /// currently being swept. \p buckets is a pointer to the array of
     /// SegmentBuckets for the segment. This does not update the Freelist bits,

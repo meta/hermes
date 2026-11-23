@@ -194,6 +194,21 @@ HadesGC::OldGen::FreelistCell *HadesGC::OldGen::removeCellFromFreelist(
   return cell;
 }
 
+void HadesGC::OldGen::prefetchFreelistHead(
+    size_t bucket,
+    const SegmentBucket *segBucket) const {
+  // An empty segBucket has been unlinked from the freelist for bucket, so the
+  // next search will start at the new first SegmentBucket instead.
+  const SegmentBucket *sb = segBucket->head ? segBucket : buckets_[bucket].next;
+  if (!sb)
+    return;
+  // The header of the cell will be read, and then overwritten either by the
+  // allocated object or by the new size when the cell is split, so prefetch it
+  // for writing.
+  LLVM_PREFETCH(
+      sb->head.getNonNull(gc_.getPointerBase()), /*rw*/ 1, /*locality*/ 3);
+}
+
 /* static */
 template <typename CallbackFunction>
 void HadesGC::forAllObjsInSegment(
@@ -2599,8 +2614,10 @@ GCCell *HadesGC::OldGen::search(uint32_t sz) {
             "Found an incorrectly sized block in this bucket");
         // Check if the size is large enough that the cell could be split.
         if (cellSize >= sz + minAllocationSize()) {
-          // Remove the free cell from the freelist.
+          // Remove the free cell from the freelist, and prefetch the cell that
+          // is likely to be taken next from this bucket.
           removeCellFromFreelist(prevLoc, bucket, segBucket);
+          prefetchFreelistHead(bucket, segBucket);
           // Split the free cell. In order to avoid initializing
           // soon-to-be-unused values like the size and the next pointer, copy
           // the return path here.
@@ -2626,6 +2643,7 @@ GCCell *HadesGC::OldGen::search(uint32_t sz) {
         } else if (cellSize == sz) {
           // Exact match, take it.
           removeCellFromFreelist(prevLoc, bucket, segBucket);
+          prefetchFreelistHead(bucket, segBucket);
           return finishAlloc(cell, sz);
         }
         // Non-exact matches, or anything just barely too small to fit, will
