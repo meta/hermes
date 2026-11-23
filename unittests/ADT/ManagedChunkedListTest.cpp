@@ -9,6 +9,8 @@
 
 #include "gtest/gtest.h"
 
+#include <vector>
+
 namespace {
 
 using namespace hermes;
@@ -195,6 +197,128 @@ TEST(ManagedChunkListTest, ChunksAreFreed) {
   EXPECT_EQ(
       list.capacity(),
       kInitialElementCount / kOccupancyRatio / kReductionFactor);
+}
+
+// Return the sum of the values of the elements visited by forEachRecorded.
+int sumRecorded(const IntegerList &list) {
+  int sum = 0;
+  list.forEachRecorded(
+      [&sum](ManagedValue &element) { sum += element.value(); });
+  return sum;
+}
+
+TEST(ManagedChunkListTest, RecordedElements) {
+  IntegerList list(kOccupancyRatio, kSizingWeight);
+  ManagedValue &a = list.add(1);
+  list.add(2);
+  ManagedValue &c = list.add(3);
+  EXPECT_EQ(0, sumRecorded(list));
+
+  // An element may be recorded more than once.
+  list.record(a);
+  list.record(c);
+  list.record(c);
+  EXPECT_EQ(3, list.numRecordedForTests());
+  EXPECT_EQ(1 + 3 + 3, sumRecorded(list));
+
+  // Free elements are skipped.
+  c.free();
+  EXPECT_EQ(1, sumRecorded(list));
+
+  list.clearRecorded();
+  EXPECT_EQ(0, list.numRecordedForTests());
+  EXPECT_EQ(0, sumRecorded(list));
+}
+
+TEST(ManagedChunkListTest, RecordedElementReused) {
+  IntegerList list(kOccupancyRatio, kSizingWeight);
+
+  // Fill a chunk, and record one of its elements.
+  ManagedValue &a = list.add(1);
+  for (size_t value = 2; value <= kElementsPerChunk; value++) {
+    list.add(value);
+  }
+  EXPECT_EQ(kElementsPerChunk, list.capacity());
+  list.record(a);
+  EXPECT_EQ(1, sumRecorded(list));
+
+  // Freeing the element does not remove its record.
+  a.free();
+  EXPECT_EQ(1, list.numRecordedForTests());
+  EXPECT_EQ(0, sumRecorded(list));
+
+  // Collecting keeps the chunk, and puts the freed element on the free list, so
+  // adding a value reuses it. The record then visits the new value.
+  list.collect();
+  ManagedValue &b = list.add(100);
+  EXPECT_EQ(&a, &b);
+  EXPECT_EQ(kElementsPerChunk, list.capacity());
+  EXPECT_FALSE(list.recordsDropped());
+  EXPECT_EQ(100, sumRecorded(list));
+}
+
+TEST(ManagedChunkListTest, RecordedElementsOverflow) {
+  IntegerList list(kOccupancyRatio, kSizingWeight);
+  ManagedValue &a = list.add(1);
+  list.add(2);
+  EXPECT_EQ(kElementsPerChunk, list.capacity());
+
+  // Records are dropped when there would be more than kMaxRecords of them.
+  for (size_t i = 0; i < IntegerList::kMaxRecords; i++) {
+    list.record(a);
+  }
+  EXPECT_FALSE(list.recordsDropped());
+  EXPECT_EQ(IntegerList::kMaxRecords, list.numRecordedForTests());
+  list.record(a);
+  EXPECT_TRUE(list.recordsDropped());
+  EXPECT_EQ(0, list.numRecordedForTests());
+  list.record(a);
+  EXPECT_TRUE(list.recordsDropped());
+  EXPECT_EQ(0, list.numRecordedForTests());
+
+  // After an overflow, forEachRecorded visits every element that is not free.
+  EXPECT_EQ(1 + 2, sumRecorded(list));
+
+  list.clearRecorded();
+  EXPECT_FALSE(list.recordsDropped());
+  EXPECT_EQ(0, sumRecorded(list));
+  list.record(a);
+  EXPECT_EQ(1, list.numRecordedForTests());
+  EXPECT_EQ(1, sumRecorded(list));
+}
+
+TEST(ManagedChunkListTest, RecordedElementsAreDroppedWithTheirChunk) {
+  constexpr size_t kChunkCount = 10;
+  IntegerList list(kOccupancyRatio, kSizingWeight);
+
+  // Populate chunks and record one element in each.
+  std::vector<ManagedValue *> elements;
+  for (size_t value = 0; value < kChunkCount * kElementsPerChunk; value++) {
+    elements.push_back(&list.add(value));
+  }
+  for (size_t i = 0; i < elements.size(); i += kElementsPerChunk) {
+    list.record(*elements[i]);
+  }
+  EXPECT_EQ(kChunkCount, list.numRecordedForTests());
+
+  // Free everything and trigger many collections, which delete chunks.
+  for (ManagedValue *element : elements) {
+    element->free();
+  }
+  for (size_t value = 0; value < kChunkCount * kElementsPerChunk * 100;
+       value++) {
+    list.add(value).free();
+  }
+  EXPECT_EQ(kElementsPerChunk, list.capacity());
+
+  // Deleting a chunk while there are records drops all of them, so that none
+  // of them refers to a deleted chunk.
+  EXPECT_EQ(0, list.numRecordedForTests());
+  EXPECT_TRUE(list.recordsDropped());
+  ManagedValue &a = list.add(1);
+  list.record(a);
+  EXPECT_EQ(0, list.numRecordedForTests());
+  EXPECT_EQ(1, sumRecorded(list));
 }
 
 } // namespace

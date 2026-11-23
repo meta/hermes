@@ -7,6 +7,7 @@ set(ADTSources
   BitArrayTest.cpp
   CompactArrayTest.cpp
   ConsumableRangeTest.cpp
+  ManagedChunkedListTest.cpp
   SafeIntTest.cpp
   ScopedHashTable.cpp
   PersistentScopedMapTest.cpp
