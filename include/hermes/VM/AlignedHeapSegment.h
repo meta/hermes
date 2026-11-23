@@ -353,6 +353,7 @@ class AlignedHeapSegment {
 
   /// If there is a dirty card at or after \p fromIndex, at an index less than
   /// \p endIndex, returns the index of the dirty card, else returns none.
+  /// \pre No other thread writes the card table during the call.
   OptValue<size_t> findNextDirtyCard(size_t fromIndex, size_t endIndex) const {
     return findNextCardWithStatus(
         Contents::CardStatus::Dirty, fromIndex, endIndex);
@@ -360,6 +361,7 @@ class AlignedHeapSegment {
 
   /// If there is a card at or after \p fromIndex, at an index less than
   /// \p endIndex, returns the index of the clean card, else returns none.
+  /// \pre No other thread writes the card table during the call.
   OptValue<size_t> findNextCleanCard(size_t fromIndex, size_t endIndex) const {
     return findNextCardWithStatus(
         Contents::CardStatus::Clean, fromIndex, endIndex);
@@ -521,17 +523,18 @@ class AlignedHeapSegment {
 
   /// \return the index of the first card in the range [fromIndex, endIndex)
   /// with value \p status, or none if one does not exist.
-  OptValue<size_t> findNextCardWithStatus(
+  ///
+  /// Cards are read a word at a time, to quickly skip long runs of cards with
+  /// the other status, using plain (non-atomic) loads.
+  /// \pre No other thread writes the card table during the call. This holds
+  /// during YG collection, where the card table is scanned: it runs on the
+  /// mutator thread (so no write barrier runs concurrently) with the GC mutex
+  /// held (so the background thread, which only dirties cards with the GC
+  /// mutex held, is not running).
+  inline OptValue<size_t> findNextCardWithStatus(
       Contents::CardStatus status,
       size_t fromIndex,
-      size_t endIndex) const {
-    for (size_t idx = fromIndex; idx < endIndex; idx++)
-      if (contents()->prefixHeader_.cards_[idx].load(
-              std::memory_order_relaxed) == status)
-        return idx;
-
-    return llvh::None;
-  }
+      size_t endIndex) const;
 
  private:
   /// Used in move constructor and move assignment operator following the copy
@@ -555,6 +558,53 @@ class AlignedHeapSegment {
     return &contents(segStart)->markBitArray_;
   }
 };
+
+OptValue<size_t> AlignedHeapSegment::findNextCardWithStatus(
+    Contents::CardStatus status,
+    size_t fromIndex,
+    size_t endIndex) const {
+  const char *const cards =
+      reinterpret_cast<const char *>(contents()->prefixHeader_.cards_);
+  const Contents::CardStatus otherStatus = status == Contents::CardStatus::Clean
+      ? Contents::CardStatus::Dirty
+      : Contents::CardStatus::Clean;
+  // A word in which every card has the other status.
+  const uint64_t skipWord =
+      UINT64_C(0x0101010101010101) * static_cast<uint8_t>(otherStatus);
+  // Return the word of cards starting at index \p idx, which need not be
+  // aligned, XORed with skipWord. It is zero iff all of these cards have the
+  // other status.
+  auto diffAt = [cards, skipWord](size_t idx) {
+    uint64_t word;
+    std::memcpy(&word, cards + idx, sizeof(word));
+    return word ^ skipWord;
+  };
+  constexpr size_t kWordSize = sizeof(uint64_t);
+
+  size_t idx = fromIndex;
+  // We don't use std::memchr here because with benchmarking, it turns out that
+  // at 1% dirty bits percentage, memchr is slower than loops below. And typical
+  // hermes workload (e.g., React Native) sees dirty bits percentage ranging
+  // from ~0.5% to ~4%.
+  if (idx + kWordSize <= endIndex && !diffAt(idx)) {
+    // All cards up to the next aligned index have the other status, so
+    // continue from there, four words at a time and then one at a time.
+    idx = (idx + kWordSize) & ~(kWordSize - 1);
+    while (idx + 4 * kWordSize <= endIndex &&
+           !(diffAt(idx) | diffAt(idx + kWordSize) |
+             diffAt(idx + 2 * kWordSize) | diffAt(idx + 3 * kWordSize)))
+      idx += 4 * kWordSize;
+    while (idx + kWordSize <= endIndex && !diffAt(idx))
+      idx += kWordSize;
+  }
+  // Find the exact card. Since every card is either Clean or Dirty, this
+  // checks at most kWordSize cards.
+  for (; idx < endIndex; idx++)
+    if (cards[idx] == static_cast<char>(status))
+      return idx;
+
+  return llvh::None;
+}
 
 /// JumboHeapSegment has custom storage size that must be a multiple of
 /// kSegmentUnitSize. Each such segment can only allocate a single object that

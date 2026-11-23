@@ -16,6 +16,7 @@
 #include "llvh/Support/MathExtras.h"
 
 #include <ios>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -259,6 +260,44 @@ TEST_P(CardTableNCTest, NextDirtyCard) {
     ASSERT_TRUE(inMiddle);
     EXPECT_EQ(ind, *inMiddle);
     from = ind + 1;
+  }
+}
+
+/// Compare findNextDirtyCard and findNextCleanCard against a simple scan, for
+/// random patterns of dirty cards of varying density, and for many ranges,
+/// including ranges that are shorter than a word or not word aligned, at both
+/// ends of the card table.
+TEST_P(CardTableNCTest, FindNextCardMatchesReference) {
+  constexpr size_t kWindow = 100;
+  const size_t lo = AlignedHeapSegment::Contents::kFirstUsedIndex;
+  const size_t hi = seg->getEndCardIndex();
+  std::minstd_rand rng(42);
+  for (size_t base : {lo, hi - kWindow}) {
+    // Vary the density of dirty cards from all clean (0) to all dirty (15).
+    for (unsigned density = 0; density <= 15; ++density) {
+      seg->clearAllCards();
+      std::vector<bool> dirty(kWindow);
+      for (size_t i = 0; i < kWindow; ++i) {
+        dirty[i] = rng() % 15 < density;
+        if (dirty[i])
+          seg->dirtyCardForAddressInLargeObj(seg->cardIndexToAddress(base + i));
+      }
+      for (size_t from = 0; from <= kWindow; from += 1 + rng() % 4) {
+        for (size_t to = from; to <= kWindow; to += 1 + rng() % 6) {
+          hermes::OptValue<size_t> expDirty, expClean;
+          for (size_t i = from; i < to; ++i) {
+            if (dirty[i] && !expDirty)
+              expDirty = base + i;
+            if (!dirty[i] && !expClean)
+              expClean = base + i;
+          }
+          EXPECT_EQ(expDirty, seg->findNextDirtyCard(base + from, base + to))
+              << "dirty [" << from << ", " << to << ") density " << density;
+          EXPECT_EQ(expClean, seg->findNextCleanCard(base + from, base + to))
+              << "clean [" << from << ", " << to << ") density " << density;
+        }
+      }
+    }
   }
 }
 

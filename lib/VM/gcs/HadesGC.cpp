@@ -3008,6 +3008,24 @@ void HadesGC::updateYoungGenSizeFactor() {
     ygSizeFactor_ = std::max(ygSizeFactor_ * 0.9, 0.25);
 }
 
+/// Prefetch the memory that is read first when the run of dirty cards
+/// [iBegin, iEnd) of \p seg is scanned: the head of the first object that
+/// extends onto the run, and the first cards of the run.
+static void
+prefetchDirtyCardRun(FixedSizeHeapSegment &seg, size_t iBegin, size_t iEnd) {
+  // The number of cards to prefetch, and the distance between prefetches (a
+  // common cache line size).
+  constexpr size_t kPrefetchCards = 2;
+  constexpr size_t kPrefetchStride = 64;
+  LLVM_PREFETCH(seg.getFirstCellHead(iBegin), 0, 3);
+  const char *const end =
+      seg.cardIndexToAddress(std::min(iEnd, iBegin + kPrefetchCards));
+  for (const char *p = seg.cardIndexToAddress(iBegin); p < end;
+       p += kPrefetchStride) {
+    LLVM_PREFETCH(p, 0, 3);
+  }
+}
+
 template <bool CompactionEnabled>
 void HadesGC::scanDirtyCardsForSegment(
     EvacAcceptor<CompactionEnabled> &acceptor,
@@ -3015,7 +3033,7 @@ void HadesGC::scanDirtyCardsForSegment(
   // Use level instead of end in case the OG segment is still in bump alloc
   // mode.
   const char *const origSegLevel = seg.level();
-  size_t from = seg.addressToCardIndex(seg.start());
+  const size_t from = seg.addressToCardIndex(seg.start());
   const size_t to = seg.addressToCardIndex(origSegLevel - 1) + 1;
 
   // Do not scan unmarked objects in the OG if we are currently sweeping. We do
@@ -3030,11 +3048,21 @@ void HadesGC::scanDirtyCardsForSegment(
   //    safe to visit.
   const bool visitUnmarked = concurrentPhase_ != Phase::Sweep;
 
-  while (const auto oiBegin = seg.findNextDirtyCard(from, to)) {
-    const auto iBegin = *oiBegin;
-
+  // Return the end of the run of dirty cards that starts at \p iBegin.
+  auto findRunEnd = [&seg, to](size_t iBegin) {
     const auto oiEnd = seg.findNextCleanCard(iBegin, to);
-    const auto iEnd = oiEnd ? *oiEnd : to;
+    return oiEnd ? *oiEnd : to;
+  };
+
+  // Scan the runs of dirty cards in address order. Each run, [*oiNextBegin,
+  // nextEnd), is found before the previous run is scanned, so that its first
+  // object and cards, which are likely cache misses that the hardware
+  // prefetcher cannot predict, can be prefetched in the meantime.
+  OptValue<size_t> oiNextBegin = seg.findNextDirtyCard(from, to);
+  size_t nextEnd = oiNextBegin ? findRunEnd(*oiNextBegin) : to;
+  while (oiNextBegin) {
+    const size_t iBegin = *oiNextBegin;
+    const size_t iEnd = nextEnd;
 
     assert(
         (iEnd == to || !seg.isCardForIndexDirty(iEnd)) &&
@@ -3042,6 +3070,22 @@ void HadesGC::scanDirtyCardsForSegment(
         "end should either be the end of the card table, or the first "
         "non-dirty card after a sequence of dirty cards");
     assert(iBegin < iEnd && "Indices must be apart by at least one");
+
+    // Scanning this run does not change any card outside of it, so the next
+    // run found now is the one that would be found after scanning this run:
+    // write barriers cannot run, the background thread is blocked on
+    // gcMutex_, and the acceptor only dirties the cards of the slots it
+    // visits, which lie in this run.
+    oiNextBegin = seg.findNextDirtyCard(iEnd, to);
+    if (oiNextBegin) {
+      nextEnd = findRunEnd(*oiNextBegin);
+      prefetchDirtyCardRun(seg, *oiNextBegin, nextEnd);
+    }
+    // The exception is an allocation that finds the heap full and finishes
+    // the OG collection on this thread (see OldGen::allocSlow), whose marker
+    // may dirty the cards of pointers into the compactee anywhere. In that
+    // case, find the next run again after scanning this one.
+    const size_t numOldCollectionsBefore = numOldCollections_;
 
     const char *const begin = seg.cardIndexToAddress(iBegin);
     const char *const end = seg.cardIndexToAddress(iEnd);
@@ -3096,7 +3140,14 @@ void HadesGC::scanDirtyCardsForSegment(
       }
     }
 
-    from = iEnd;
+    if (LLVM_UNLIKELY(numOldCollections_ != numOldCollectionsBefore)) {
+      oiNextBegin = seg.findNextDirtyCard(iEnd, to);
+      nextEnd = oiNextBegin ? findRunEnd(*oiNextBegin) : to;
+    }
+    assert(
+        seg.findNextDirtyCard(iEnd, to) == oiNextBegin &&
+        (!oiNextBegin || findRunEnd(*oiNextBegin) == nextEnd) &&
+        "Scanning a run of dirty cards changed the cards after it");
   }
 }
 
