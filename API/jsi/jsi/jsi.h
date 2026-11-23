@@ -1807,7 +1807,17 @@ class JSI_EXPORT Value {
         "Value cannot be constructed directly from const char*");
   }
 
-  Value(Value&& other) noexcept;
+  Value(Value&& other) noexcept : Value(other.kind_) {
+    if (kind_ == BooleanKind) {
+      data_.boolean = other.data_.boolean;
+    } else if (kind_ == NumberKind) {
+      data_.number = other.data_.number;
+    } else if (kind_ >= PointerKind) {
+      new (&data_.pointer) Pointer(std::move(other.data_.pointer));
+    }
+    // when the other's dtor runs, nothing will happen.
+    other.kind_ = UndefinedKind;
+  }
 
   /// Copies a Symbol lvalue into a new JS value.
   Value(IRuntime& runtime, const Symbol& sym) : Value(SymbolKind) {
@@ -1841,7 +1851,11 @@ class JSI_EXPORT Value {
         "Value cannot be constructed directly from const char*");
   }
 
-  ~Value();
+  ~Value() {
+    if (kind_ >= PointerKind) {
+      data_.pointer.~Pointer();
+    }
+  }
   // \return the undefined \c Value.
   static Value undefined() {
     return Value();
