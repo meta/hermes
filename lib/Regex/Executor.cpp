@@ -1550,7 +1550,18 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
           // Here we are entering a loop from outside, not jumping back into
           // it.
           const BeginLoopInsn *loop = llvh::cast<BeginLoopInsn>(base);
-          s->getLoop(loop->loopId).iterations = 0;
+          LoopData &loopData = s->getLoop(loop->loopId);
+          // A loop nested in another loop is entered again on each outer
+          // iteration, and backtracking may resume inside an earlier entry,
+          // which needs its iteration count back.
+          if (loopData.iterations != 0) {
+            auto res = pushBacktrack(
+                backtrackStack,
+                BacktrackInsn::makeSetLoopData(loop->loopId, loopData));
+            if (res != ExecutionStatus::RETURNED)
+              return res;
+          }
+          loopData.iterations = 0;
           // Check to see if the loop body is viable. If not, and the loop has
           // a nonzero minimum iteration, then we know we won't match and we
           // can reject the state. If it does have a minimum iteration, we can
