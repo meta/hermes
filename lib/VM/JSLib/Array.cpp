@@ -2020,6 +2020,127 @@ CallResult<HermesValue> sortSparse(
 
   return O.getHermesValue();
 }
+
+/// \return the number of elements of \p arr, an array of length \p len, that
+/// are not holes.
+/// \pre \p arr passes arrayFastPathCheck with length \p len.
+uint32_t arrayFastPathCountNonHoles(
+    Runtime &runtime,
+    Handle<JSArray> arr,
+    uint32_t len) {
+  assert(
+      arrayFastPathCheck(
+          runtime, arr, Runtime::makeNullHandle<HiddenClass>(), len) &&
+      "arr must pass arrayFastPathCheck");
+  NoAllocScope noAlloc{runtime};
+  auto *storage = arr->getIndexedStorageUnsafe(runtime);
+  uint32_t count = 0;
+  for (uint32_t k = 0; k < len; ++k)
+    count += !storage->at(k).isEmpty();
+  return count;
+}
+
+/// Copy the elements of \p src, an array of length \p len, into \p dest,
+/// skipping holes. Since arrayFastPathCheck ensured that the prototype chain
+/// has no indexed properties, a hole has no property, so
+/// SortIndexedProperties skips it too.
+/// \pre \p src passes arrayFastPathCheck with length \p len.
+/// \pre \p dest is a new array from JSArray::create whose length is the
+///   number of elements of \p src that are not holes.
+void arrayFastPathCopySkipHoles(
+    Runtime &runtime,
+    Handle<JSArray> dest,
+    Handle<JSArray> src,
+    uint32_t len) {
+  assert(
+      arrayFastPathCheck(
+          runtime, src, Runtime::makeNullHandle<HiddenClass>(), len) &&
+      "src must pass arrayFastPathCheck");
+  NoAllocScope noAlloc{runtime};
+  auto *srcStorage = src->getIndexedStorageUnsafe(runtime);
+  auto *destStorage = dest->getIndexedStorageUnsafe(runtime);
+  uint32_t count = 0;
+  for (uint32_t k = 0; k < len; ++k) {
+    SmallHermesValue v = srcStorage->at(k);
+    if (!v.isEmpty())
+      destStorage->set(count++, v, runtime.getHeap());
+  }
+  assert(count == destStorage->size() && "dest has the wrong length");
+}
+
+/// Sort \p arr, an array of length \p len, as ES2025 23.1.3.30 does: copy the
+/// elements into a list, sort the list, write it back, and delete the
+/// remaining indices, which were holes.
+/// \pre \p arr passes arrayFastPathCheck with length \p len.
+ExecutionStatus arrayFastPathSort(
+    Runtime &runtime,
+    Handle<JSArray> arr,
+    Handle<Callable> compareFn,
+    uint32_t len) {
+  assert(
+      arrayFastPathCheck(
+          runtime, arr, Runtime::makeNullHandle<HiddenClass>(), len) &&
+      "arr must pass arrayFastPathCheck");
+  struct : Locals {
+    PinnedValue<JSArray> items;
+    PinnedValue<> index;
+    PinnedValue<> value;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  uint32_t count = arrayFastPathCountNonHoles(runtime, arr, len);
+  // With only holes, there is nothing to sort or write back.
+  if (count == 0)
+    return ExecutionStatus::RETURNED;
+  auto itemsRes = JSArray::create(runtime, count, count);
+  if (LLVM_UNLIKELY(itemsRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  lv.items = std::move(*itemsRes);
+  arrayFastPathCopySkipHoles(runtime, lv.items, arr, len);
+  {
+    DirectSortModel sm(runtime, lv.items, compareFn);
+    if (LLVM_UNLIKELY(quickSort(&sm, 0u, count) == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  }
+
+  // The comparator may have changed arr, so check the fast path again. In
+  // such an array, deleting an element leaves a hole.
+  if (arrayFastPathCheck(
+          runtime, arr, Runtime::makeNullHandle<HiddenClass>(), len)) {
+    NoAllocScope noAlloc{runtime};
+    auto *src = lv.items->getIndexedStorageUnsafe(runtime);
+    auto *dest = arr->getIndexedStorageUnsafe(runtime);
+    for (uint32_t k = 0; k < count; ++k)
+      dest->set(k, src->at(k), runtime.getHeap());
+    for (uint32_t k = count; k < len; ++k)
+      dest->setNonPtr(
+          k, SmallHermesValue::encodeEmptyValue(), runtime.getHeap());
+    return ExecutionStatus::RETURNED;
+  }
+
+  for (uint32_t k = 0; k < len; ++k) {
+    GCScopeMarkerRAII marker{runtime};
+    lv.index = HermesValue::encodeTrustedNumberValue(k);
+    if (k >= count) {
+      if (LLVM_UNLIKELY(
+              JSObject::deleteComputed(
+                  arr, runtime, lv.index, PropOpFlags().plusThrowOnError()) ==
+              ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+      continue;
+    }
+    lv.value = lv.items->at(runtime, k).unboxToHV(runtime);
+    if (LLVM_UNLIKELY(
+            JSObject::putComputed_RJS(
+                arr,
+                runtime,
+                lv.index,
+                lv.value,
+                PropOpFlags().plusThrowOnError()) ==
+            ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  }
+  return ExecutionStatus::RETURNED;
+}
 } // anonymous namespace
 
 /// ES5.1 15.4.4.11.
@@ -2067,7 +2188,20 @@ CallResult<HermesValue> arrayPrototypeSort(void *, Runtime &runtime) {
       !lv.O->hasFastIndexProperties(runtime))
     return sortSparse(runtime, lv.O, compareFn, len);
 
-  // This is the "fast" path. We are sorting an array with indexed storage.
+  if (len > 1 && vmisa<JSArray>(*lv.O)) {
+    auto arr = Handle<JSArray>::vmcast(&lv.O);
+    auto len32 = static_cast<uint32_t>(len);
+    if (arrayFastPathCheck(
+            runtime, arr, Runtime::makeNullHandle<HiddenClass>(), len32)) {
+      if (LLVM_UNLIKELY(
+              arrayFastPathSort(runtime, arr, compareFn, len32) ==
+              ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+      return lv.O.getHermesValue();
+    }
+  }
+
+  // Sort any other object with indexed storage in place.
   StandardSortModel sm(runtime, lv.O, compareFn);
 
   // Use our custom sort routine. We can't use std::sort because it performs
