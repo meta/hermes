@@ -985,6 +985,70 @@ TEST(GCYoungGenSizeTest, CPUTimeShrinksYGWithCPUTimeSizing) {
           experiments::HadesYGSizeByCPUTime, spinFor25msOfCPUTime),
       1);
 }
+
+/// Test that the external memory of OG objects can be credited and debited
+/// while an OG collection is marking and sweeping, both by the mutator and by
+/// the finalizers that run while sweeping (on the background thread if the GC
+/// is concurrent). This checks the accounting, that the finalizers on the
+/// background thread do not try to pause it (which would assert in debug
+/// builds), and that nothing deadlocks. It does not check how long the
+/// mutator waits for gcMutex_: whether an update overlaps a step of the
+/// background thread depends on timing.
+TEST_F(GCBasicsTestGCOptions, ExternalMemoryDuringOldGenCollection) {
+  auto &gc = rt.getHeap();
+  GCBase::HeapInfo info;
+  struct : Locals {
+    PinnedValue<DummyObject> live;
+    PinnedValue<DummyObject> obj;
+  } lv;
+  DummyLocalsRAII lraii{rt, &lv};
+
+  // Allocate OG objects that hold external memory, and keep every other one
+  // reachable from a linked list.
+  constexpr uint32_t kNumObjects = 10000;
+  constexpr uint32_t kExtBytes = 16;
+  for (uint32_t i = 0; i < kNumObjects; ++i) {
+    lv.obj = DummyObject::createLongLived(gc);
+    lv.obj->acquireExtMem(gc, kExtBytes);
+    if (i % 2 == 0) {
+      lv.obj->setPointer(gc, *lv.live);
+      lv.live = *lv.obj;
+    }
+  }
+  lv.obj = nullptr;
+  gc.getHeapInfo(info);
+  EXPECT_EQ(kNumObjects * kExtBytes, info.externalBytes);
+
+  // Debit and credit the external memory of every reachable object. This does
+  // not allocate, so the objects cannot move.
+  const auto updateExtMem = [&]() {
+    for (DummyObject *obj = *lv.live; obj;
+         obj = obj->other.get(gc.getPointerBase())) {
+      obj->releaseExtMem(gc);
+      obj->acquireExtMem(gc, kExtBytes);
+    }
+  };
+
+  // Start an OG collection, and update the external memory while it runs. The
+  // YG collections complete the marking, and publish the OG collection stats
+  // once it has finished.
+  const GCBase::GCOptions options{
+      GCBase::GCType::Major, GCBase::GCExecutionPolicy::Async};
+  gc.collectWithOptions("test", options);
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  do {
+    gc.collectWithOptions("test", GCBase::GCOptions{});
+    updateExtMem();
+    gc.getHeapInfo(info);
+  } while (info.fullStats.numCollections == 0 &&
+           std::chrono::steady_clock::now() < deadline);
+  ASSERT_EQ(1u, info.fullStats.numCollections);
+  // The unreachable objects were swept, and their finalizers debited their
+  // external memory.
+  EXPECT_EQ(kNumObjects / 2 * cellSize<DummyObject>(), info.allocatedBytes);
+  EXPECT_EQ(kNumObjects / 2 * kExtBytes, info.externalBytes);
+}
 #endif
 
 } // namespace

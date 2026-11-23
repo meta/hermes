@@ -109,6 +109,16 @@ class DebugMutex {
     tid_.store(std::this_thread::get_id(), std::memory_order_relaxed);
   }
 
+  /// Try to lock the mutex without blocking.
+  /// \return true if the mutex was locked by this call.
+  bool try_lock() {
+    if (!inner_.try_lock())
+      return false;
+    depth_++;
+    tid_.store(std::this_thread::get_id(), std::memory_order_relaxed);
+    return true;
+  }
+
   void unlock() {
     assert(depth_ && "Should not unlock an unlocked mutex");
     assert(

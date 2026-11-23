@@ -1693,6 +1693,15 @@ void HadesGC::collectOGInBackground() {
 
 std::lock_guard<Mutex> HadesGC::pauseBackgroundTask() {
   assert(kConcurrentGC && "Should not be called in incremental mode");
+  // Fast path: if gcMutex_ is free, the background thread is not in the
+  // middle of a step, so there is nothing to pause. It cannot be waiting for
+  // ogPaused_ to be cleared either, since ogPaused_ is only set below and is
+  // always cleared and notified before returning, so no notification is
+  // needed. This path is also taken when this thread already holds gcMutex_,
+  // which is always the case on the background thread. If try_lock fails
+  // spuriously, this just takes the slow path.
+  if (gcMutex_.try_lock())
+    return std::lock_guard(gcMutex_, std::adopt_lock);
   assert(!calledByBackgroundThread() && "Must be called from mutator");
   // Signal to the background thread that it should stop and wait on
   // ogPauseCondVar_.
@@ -2066,7 +2075,7 @@ void HadesGC::creditExternalMemory(GCCell *cell, uint32_t sz) {
     auto adj = std::min<size_t>(sz, youngGen_.available());
     youngGen_.setEffectiveEnd(youngGen_.effectiveEnd() - adj);
   } else {
-    std::lock_guard<Mutex> lk{gcMutex_};
+    auto lk = ensureBackgroundTaskPaused();
     oldGen_.creditExternalMemory(sz);
     uint64_t totalBytes = oldGen_.allocatedBytes() + oldGen_.externalBytes();
     if (totalBytes > oldGen_.targetSizeBytes())
@@ -2084,7 +2093,10 @@ void HadesGC::debitExternalMemory(GCCell *cell, uint32_t sz) {
     // of tracking this. We don't expect many debits to not be from finalizers
     // anyway.
   } else {
-    std::lock_guard<Mutex> lk{gcMutex_};
+    // This may be called from a finalizer on the background thread while it
+    // is sweeping, with gcMutex_ already held. ensureBackgroundTaskPaused()
+    // then just locks gcMutex_ again.
+    auto lk = ensureBackgroundTaskPaused();
     oldGen_.debitExternalMemory(sz);
   }
 }

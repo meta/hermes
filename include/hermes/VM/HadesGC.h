@@ -1428,6 +1428,11 @@ class HadesGC final : public GCBase {
   /// priority in acquiring gcMutex_, and does not remain blocked on the
   /// background thread for an extended period of time. The background thread
   /// will resume once the lock is released.
+  /// The background thread may only call this while it holds gcMutex_ (e.g.
+  /// in finalizers run while sweeping), in which case this just locks
+  /// gcMutex_ again. Must not be called from any other thread, since only a
+  /// single thread may pause the background thread: entry points that other
+  /// threads may call, such as getHeapInfo(), must lock gcMutex_ directly.
   LLVM_NODISCARD std::lock_guard<Mutex> pauseBackgroundTask();
 
   /// Perform a single step of an OG collection. \p backgroundThread indicates
