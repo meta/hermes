@@ -227,7 +227,10 @@ class Cursor {
     if ((constraints & MatchConstraintNonASCII) &&
         (flags & constants::matchInputAllAscii))
       return false;
-    if ((constraints & MatchConstraintAnchoredAtStart) && current_ != first_)
+    // Backwards (in a lookbehind), the current position is where the
+    // constrained expression ends, not where it starts.
+    if ((constraints & MatchConstraintAnchoredAtStart) && forwards_ &&
+        current_ != first_)
       return false;
     return true;
   }
