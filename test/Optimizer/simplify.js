@@ -111,6 +111,10 @@ function add_null(x, y) {
   sink("hello" + null)
 
   sink(null + null)
+
+  // null coerces to +0, and +0 + -0 is +0, not -0.
+  sink(null + -0)
+  sink(-0 + null)
 }
 
 function mul_null(x, y) {
@@ -657,6 +661,8 @@ function objectCond() {
 // CHECK-NEXT:  %3 = CallInst (:any) %0: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, "nullhello": string
 // CHECK-NEXT:  %4 = CallInst (:any) %0: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, "hellonull": string
 // CHECK-NEXT:  %5 = CallInst (:any) %0: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 0: number
+// CHECK-NEXT:  %6 = CallInst (:any) %0: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 0: number
+// CHECK-NEXT:  %7 = CallInst (:any) %0: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, 0: number
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
