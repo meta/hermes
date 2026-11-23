@@ -19,6 +19,7 @@
 #include "hermes/VM/WeakRef.h"
 #include "hermes/VM/WeakRoot-inline.h"
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <new>
@@ -447,6 +448,270 @@ TEST(GCBasicsTestNCGen, TestIDPersistsAcrossMultipleCollections) {
   EXPECT_GT(newHeapInfo.numCollections, oldHeapInfo.numCollections);
 }
 #endif // #if HERMESVM_GCKIND != _HERMESVM_GCVALUE_MALLOC
+
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
+/// The smallest cell without pointer fields. Its payload is just the word that
+/// holds the copy list link of an evacuated cell.
+using SmallCell = EmptyCell<GC::minAllocationSize()>;
+using SegmentCell = EmptyCell<FixedSizeHeapSegment::maxSize()>;
+
+/// The byte that fills the payload of the EmptyCells in the tests below.
+constexpr char kPayloadByte = 0x5a;
+
+/// \return the GC config of the compaction tests below. It disables handle
+/// sanitization, which would collect at random allocations and move the cells
+/// before the compactions.
+GCConfig compactionTestGCConfig() {
+  return TestGCConfigFixedSize(
+      8 * FixedSizeHeapSegment::storageSize(),
+      GCConfig::Builder(kTestGCConfigBuilder)
+          .withSanitizeConfig(
+              GCSanitizeConfig::Builder().withSanitizeRate(0).build()));
+}
+
+/// Fill the payload of \p cell, which has no pointer fields, with
+/// kPayloadByte.
+template <size_t Size>
+void fillPayload(EmptyCell<Size> *cell) {
+  char *const p = reinterpret_cast<char *>(cell);
+  std::fill(p + sizeof(EmptyCell<Size>), p + Size, kPayloadByte);
+}
+
+/// \return true if the payload of \p cell is filled with kPayloadByte.
+template <size_t Size>
+bool isPayloadFilled(const EmptyCell<Size> *cell) {
+  const char *const p = reinterpret_cast<const char *>(cell);
+  return std::all_of(p + sizeof(EmptyCell<Size>), p + Size, [](char c) {
+    return c == kPayloadByte;
+  });
+}
+
+/// Compact a segment that holds dead cells and live cells with and without
+/// pointer fields. A YG collection does not put evacuated cells without
+/// pointer fields on its copy list, and finalizeCompactee() must still find
+/// their sizes. Check that the live cells survive intact, that every dead cell
+/// with a finalizer is finalized once, and that the allocated bytes are exact.
+TEST(GCCompactionTest, CompactCellsWithAndWithoutPointers) {
+  using LargeCell = EmptyCell<128>;
+  constexpr size_t N = 32;
+
+  // Declared before the runtime, which may run finalizers until destroyed.
+  size_t numFinalized = 0;
+  auto runtime = DummyRuntime::create(compactionTestGCConfig());
+  DummyRuntime &rt = *runtime;
+  auto &gc = rt.getHeap();
+
+  struct : Locals {
+    PinnedValue<SegmentCell> segmentCell;
+    PinnedValue<SmallCell> smallCells[N];
+    PinnedValue<LargeCell> largeCells[N];
+    PinnedValue<DummyObject> objs[N];
+    PinnedValue<DummyObject> child;
+  } lv;
+  DummyLocalsRAII lraii{rt, &lv};
+
+  // Take a whole OG segment, so that the cells below go to a second segment,
+  // the newest one, which the next collection compacts.
+  lv.segmentCell = SegmentCell::createLongLived(rt);
+  for (size_t i = 0; i < N; ++i) {
+    // Interleave dead and live cells, with and without pointer fields.
+    DummyObject *dead = DummyObject::createLongLived(gc);
+    dead->finalizerCallback = std::make_unique<DummyObject::Callback>(
+        [&numFinalized] { ++numFinalized; });
+    fillPayload(SmallCell::createLongLived(rt));
+    lv.smallCells[i] = SmallCell::createLongLived(rt);
+    fillPayload(lv.smallCells[i].get());
+    fillPayload(LargeCell::createLongLived(rt));
+    lv.largeCells[i] = LargeCell::createLongLived(rt);
+    fillPayload(lv.largeCells[i].get());
+    lv.objs[i] = DummyObject::createLongLived(gc);
+    // Only reachable from objs[i], so it is found while visiting its copy.
+    lv.child = DummyObject::createLongLived(gc);
+    lv.objs[i]->setPointer(gc, lv.child.get());
+  }
+  lv.child = nullptr;
+
+  // Get the addresses of the live cells, which are only compared.
+  const auto liveAddresses = [&lv, &rt]() {
+    std::vector<const void *> addresses;
+    for (size_t i = 0; i < N; ++i) {
+      addresses.push_back(lv.smallCells[i].get());
+      addresses.push_back(lv.largeCells[i].get());
+      addresses.push_back(lv.objs[i].get());
+      addresses.push_back(lv.objs[i]->other.get(rt));
+    }
+    return addresses;
+  };
+  const uint64_t liveBytes = SegmentCell::size() +
+      N * (SmallCell::size() + LargeCell::size() + 2 * cellSize<DummyObject>());
+
+  // The first collection compacts the segment with the cells above, and the
+  // second one the segment with their copies, which are all live.
+  for (unsigned numCompactions = 1; numCompactions <= 2; ++numCompactions) {
+    const std::vector<const void *> before = liveAddresses();
+    rt.collect();
+    GCBase::HeapInfo info;
+    gc.getHeapInfo(info);
+    EXPECT_EQ(numCompactions, info.numCompactions);
+    EXPECT_EQ(N, numFinalized);
+    EXPECT_EQ(liveBytes, info.allocatedBytes);
+    const std::vector<const void *> after = liveAddresses();
+    for (size_t i = 0; i < before.size(); ++i)
+      EXPECT_NE(before[i], after[i]) << "Live cell " << i << " did not move";
+    for (size_t i = 0; i < N; ++i) {
+      EXPECT_TRUE(isPayloadFilled(lv.smallCells[i].get()));
+      EXPECT_TRUE(isPayloadFilled(lv.largeCells[i].get()));
+      const DummyObject *child = lv.objs[i]->other.get(rt);
+      ASSERT_TRUE(child && child->isValid());
+      EXPECT_EQ(1u, child->x);
+      EXPECT_FALSE(child->other);
+    }
+  }
+}
+
+/// Compact a segment while the YG holds live cells that point into it, or
+/// that cells in it point to, so that YG and compactee cells are on the copy
+/// list together, and cells without pointer fields are found while it is
+/// processed. Before that, a YG collection runs while the compaction is
+/// pending. If \p trackIDs, every collection tracks object IDs. Check that the
+/// live cells survive intact and keep their IDs, that every dead cell with a
+/// finalizer is finalized once, and that the allocated bytes are exact.
+void compactWithYoungGenCells(bool trackIDs) {
+  constexpr size_t N = 32;
+
+  // Declared before the runtime, which may run finalizers until destroyed.
+  size_t numFinalized = 0;
+  auto runtime = DummyRuntime::create(compactionTestGCConfig());
+  DummyRuntime &rt = *runtime;
+  auto &gc = rt.getHeap();
+
+  struct : Locals {
+    PinnedValue<SegmentCell> segmentCell;
+    /// Live cells in the compactee.
+    PinnedValue<SmallCell> oldSmallCells[N];
+    PinnedValue<DummyObject> oldObjs[N];
+    /// Cells in the compactee that only YG cells point to once the OG
+    /// collection has started.
+    PinnedValue<SmallCell> hiddenSmallCells[N];
+    PinnedValue<DummyObject> hiddenObjs[N];
+    /// Evacuated by the YG collection that runs while the compaction is
+    /// pending.
+    PinnedValue<DummyObject> pendingObjs[N];
+    /// In the YG during the compaction.
+    PinnedValue<SmallCell> youngSmallCells[N];
+    PinnedValue<DummyObject> youngObjs[N];
+    PinnedValue<DummyObject> child;
+  } lv;
+  DummyLocalsRAII lraii{rt, &lv};
+
+  // Take a whole OG segment, so that the cells below go to a second segment,
+  // the newest one, which the OG collection started below compacts.
+  lv.segmentCell = SegmentCell::createLongLived(rt);
+  if (trackIDs)
+    gc.getObjectID(lv.segmentCell.get());
+  for (size_t i = 0; i < N; ++i) {
+    DummyObject *dead = DummyObject::createLongLived(gc);
+    dead->finalizerCallback = std::make_unique<DummyObject::Callback>(
+        [&numFinalized] { ++numFinalized; });
+    fillPayload(SmallCell::createLongLived(rt));
+    lv.oldSmallCells[i] = SmallCell::createLongLived(rt);
+    fillPayload(lv.oldSmallCells[i].get());
+    lv.oldObjs[i] = DummyObject::createLongLived(gc);
+    lv.hiddenSmallCells[i] = SmallCell::createLongLived(rt);
+    fillPayload(lv.hiddenSmallCells[i].get());
+    lv.hiddenObjs[i] = DummyObject::createLongLived(gc);
+  }
+
+  // Start an OG collection, which is forced to compact. The hidden cells are
+  // still roots when it starts marking, so it marks them.
+  gc.collectWithOptions(
+      "test",
+      GCBase::GCOptions{
+          GCBase::GCType::Major, GCBase::GCExecutionPolicy::Async});
+
+  // The compaction stays pending until the OG collection is done marking,
+  // which takes a YG collection. This one evacuates pendingObjs[i], the only
+  // cell that points to hiddenObjs[i], so the compaction only updates that
+  // pointer if this collection dirtied its card.
+  for (size_t i = 0; i < N; ++i) {
+    lv.pendingObjs[i] = DummyObject::create(gc, rt);
+    lv.pendingObjs[i]->setPointer(gc, lv.hiddenObjs[i].get());
+    lv.hiddenObjs[i] = nullptr;
+  }
+  gc.collectWithOptions("test", GCBase::GCOptions{});
+  GCBase::HeapInfo info;
+  gc.getHeapInfo(info);
+  EXPECT_EQ(0u, info.numCompactions);
+
+  // Interleave dead and live YG cells, with and without pointer fields.
+  for (size_t i = 0; i < N; ++i) {
+    fillPayload(SmallCell::create(rt));
+    lv.youngSmallCells[i] = SmallCell::create(rt);
+    fillPayload(lv.youngSmallCells[i].get());
+    // youngObjs[i] is the only cell that points to hiddenSmallCells[i], which
+    // is found while visiting the copy of youngObjs[i]. A HermesValue field
+    // holds it, since DummyObject has no pointer field for other cells.
+    lv.youngObjs[i] = DummyObject::create(gc, rt);
+    lv.youngObjs[i]->hvNull.set(
+        HermesValue::encodeObjectValue(lv.hiddenSmallCells[i].get()), gc);
+    lv.hiddenSmallCells[i] = nullptr;
+    // Only reachable from oldObjs[i], so it is found while visiting the copy
+    // of oldObjs[i].
+    lv.child = DummyObject::create(gc, rt);
+    lv.oldObjs[i]->setPointer(gc, lv.child.get());
+  }
+  lv.child = nullptr;
+
+  // Get the IDs of some of the live cells.
+  const auto liveIDs = [&lv, &gc]() {
+    std::vector<HeapSnapshot::NodeID> ids;
+    for (size_t i = 0; i < N; ++i) {
+      ids.push_back(gc.getObjectID(lv.oldSmallCells[i].get()));
+      ids.push_back(gc.getObjectID(lv.oldObjs[i].get()));
+      ids.push_back(gc.getObjectID(lv.youngSmallCells[i].get()));
+      ids.push_back(gc.getObjectID(lv.youngObjs[i].get()));
+    }
+    return ids;
+  };
+  std::vector<HeapSnapshot::NodeID> idsBefore;
+  if (trackIDs)
+    idsBefore = liveIDs();
+
+  // The first YG collection of collect() runs the compaction, once the OG
+  // collection is done. collect() then runs a second OG collection, and its
+  // compaction, of the newest segment, in its second YG collection.
+  rt.collect();
+  gc.getHeapInfo(info);
+  EXPECT_EQ(2u, info.numCompactions);
+  EXPECT_EQ(N, numFinalized);
+  EXPECT_EQ(
+      SegmentCell::size() +
+          N * (3 * SmallCell::size() + 5 * cellSize<DummyObject>()),
+      info.allocatedBytes);
+  if (trackIDs)
+    EXPECT_EQ(idsBefore, liveIDs());
+  for (size_t i = 0; i < N; ++i) {
+    EXPECT_TRUE(isPayloadFilled(lv.oldSmallCells[i].get()));
+    EXPECT_TRUE(isPayloadFilled(lv.youngSmallCells[i].get()));
+    EXPECT_TRUE(isPayloadFilled(
+        static_cast<const SmallCell *>(lv.youngObjs[i]->hvNull.getPointer())));
+    for (const DummyObject *obj :
+         {lv.oldObjs[i]->other.get(rt), lv.pendingObjs[i]->other.get(rt)}) {
+      ASSERT_TRUE(obj && obj->isValid());
+      EXPECT_EQ(1u, obj->x);
+      EXPECT_FALSE(obj->other);
+    }
+  }
+}
+
+TEST(GCCompactionTest, CompactWithYoungGenCells) {
+  compactWithYoungGenCells(/*trackIDs*/ false);
+}
+
+TEST(GCCompactionTest, CompactWithYoungGenCellsTrackingIDs) {
+  compactWithYoungGenCells(/*trackIDs*/ true);
+}
+#endif // HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
 
 // handlesan allows allocation beyond the max heap size limit, so we need to
 // disable it here.

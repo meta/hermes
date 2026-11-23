@@ -704,9 +704,22 @@ class HadesGC final : public GCBase {
   class OldGen;
   class Executor;
 
+  /// A cell that a YG collection has evacuated. Its header holds the
+  /// forwarding pointer to the copy.
   struct CopyListCell final : public GCCell {
-    // Linked list of cells pointing to the next cell that was copied.
-    AssignableCompressedPointer next_;
+    union {
+      /// Linked list of cells pointing to the next cell that was copied.
+      AssignableCompressedPointer next_;
+      /// In a compacting YG, the size of an evacuated compactee cell, once it
+      /// is off the list, or if it never goes on the list.
+      /// finalizeCompactee() depends on this to walk the compactee without
+      /// following the forwarding pointers.
+      uint32_t size_;
+    };
+
+    static_assert(
+        sizeof(size_) <= sizeof(next_),
+        "The link must be able to hold the size of a cell");
   };
 
   /// Call \p callback on every non-freelist cell allocated in this segment.

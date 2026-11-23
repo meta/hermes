@@ -581,9 +581,14 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
       gc.moveObject(cell, cellSize, newCell, cellSize);
     }
     // Push onto the copied list, so that the fields of the new cell are
-    // updated later. A cell without such fields is complete once copied.
+    // updated later. A cell without such fields is complete once copied and
+    // never uses its link, so the link can hold its size (see CopyListCell).
     if (needsVisit)
       push(copyCell);
+    else if (
+        CompactionEnabled &&
+        compacteeEvacStart == FixedSizeHeapSegment::storageStart(cell))
+      copyCell->size_ = cellSize;
     return convertPtr<T>(pointerBase_, newCell);
   }
 
@@ -1935,16 +1940,34 @@ void HadesGC::prepareCompactee(bool forceCompaction) {
 void HadesGC::finalizeCompactee() {
   char *stop = compactee_.segment->level();
   char *cur = compactee_.segment->start();
-  PointerBase &base = getPointerBase();
   // Calculate the total number of bytes that were allocated in the compactee at
   // the start of compaction.
   int32_t preAllocated = 0;
   while (cur < stop) {
     auto *cell = reinterpret_cast<GCCell *>(cur);
     if (cell->hasMarkedForwardingPointer()) {
-      auto size = cell->getMarkedForwardingPointer()
-                      .getNonNull(base)
-                      ->getAllocatedSize();
+      // The cell was evacuated, and its size is in place of its link (see
+      // CopyListCell).
+      const uint32_t size = static_cast<CopyListCell *>(cell)->size_;
+      assert(
+          size ==
+              cell->getMarkedForwardingPointer()
+                  .getNonNull(getPointerBase())
+                  ->getAllocatedSize() &&
+          "Wrong size stored in an evacuated compactee cell");
+      // Check the size in release builds too. If it was never stored, this
+      // loop would spin on a null link, or jump past the end of the compactee
+      // or into the middle of a cell, and skip the finalizers of its dead
+      // cells. A link left in next_ is either 0 or encodes a pointer into a
+      // segment, which in HV32 is at least FixedSizeHeapSegment::storageSize(),
+      // since segments are aligned to that size and none is encoded at 0. In
+      // HV64, size_ is only half of the link, so a link left there is not
+      // always caught.
+      if (LLVM_UNLIKELY(
+              size < minAllocationSize() ||
+              size > static_cast<size_t>(stop - cur) ||
+              !isSizeHeapAligned(size)))
+        hermes_fatal("Invalid size in an evacuated compactee cell");
       preAllocated += size;
       cur += size;
     } else {
@@ -2812,6 +2835,10 @@ uint64_t HadesGC::youngGenEvacuateImpl(bool doCompaction) {
   scanDirtyCards(acceptor, doCompaction);
   // Iterate through the copy list to find new pointers.
   auto &pb = getPointerBase();
+  // The start of the compactee if it is being evacuated. No segment starts at
+  // null.
+  const void *const compacteeEvacStart =
+      doCompaction ? compactee_.start : nullptr;
   while (acceptor.copyListHead) {
     // Pop copyCell from the copy list.
     auto *copyCell = (CopyListCell *)acceptor.copyListHead.getNonNull(pb);
@@ -2829,6 +2856,11 @@ uint64_t HadesGC::youngGenEvacuateImpl(bool doCompaction) {
     // Update the pointers inside the forwarded object, since the old
     // object is only there for the forwarding pointer.
     GCCell *const cell = copyCell->getMarkedForwardingPointer().getNonNull(pb);
+    // copyCell is off the list, so its link can hold its size (see
+    // CopyListCell).
+    if (CompactionEnabled &&
+        FixedSizeHeapSegment::storageStart(copyCell) == compacteeEvacStart)
+      copyCell->size_ = cell->getAllocatedSize();
     acceptor.setCurrentCell(cell);
     markCell(acceptor, cell);
   }
