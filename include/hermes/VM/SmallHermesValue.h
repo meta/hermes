@@ -504,6 +504,14 @@ class HermesValue32 {
 
   CompressedPointer getPointer() const {
     assert(isPointer());
+    return getPointerBitsUnsafe();
+  }
+
+  /// \return the raw value with the tag bits cleared. If this value is a
+  /// pointer, this is the same as getPointer(). Otherwise, the result is not a
+  /// valid pointer and must never be dereferenced, but it may be compared, for
+  /// instance against the start of a heap segment.
+  CompressedPointer getPointerBitsUnsafe() const {
     return CompressedPointer::fromRaw(_sh_shv_get_pointer(raw_).raw);
   }
 

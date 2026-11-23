@@ -437,6 +437,59 @@ template <>
   return CompressedPointer::encodeNonNull(a, base);
 }
 
+/// \return true if a cell of kind \p kind may have fields that need to be
+/// updated after the cell is evacuated by a YG collection. Symbols are not
+/// collected by YG collections, so a cell whose only fields are GCSymbolIDs
+/// (or that has no fields) is complete once it has been copied.
+static inline bool needsVisitAfterEvacuation(CellKind kind) {
+  return Metadata::metadataTable[static_cast<size_t>(kind)].hasPointerSlots;
+}
+
+/// Cells of up to this many bytes are copied with a few fixed-size copies
+/// instead of a call to memcpy. Cells are larger when values and pointers take
+/// 8 bytes (HV64) rather than 4 (HV32).
+static constexpr uint32_t kMaxInlineCopySize =
+    sizeof(SmallHermesValue) == 4 ? 64 : 128;
+
+/// Copy \p size bytes from the cell at \p src to the cell at \p dst, which must
+/// not overlap. \p size must be heap aligned. Most cells are small, so copy
+/// those with a few fixed-size copies instead of a call to memcpy.
+static inline void copyCellContents(void *dst, const void *src, uint32_t size) {
+  static_assert(HeapAlign == 8, "The copy below assumes 8 byte alignment");
+  assert(isSizeHeapAligned(size) && "Cell size must be heap aligned");
+  char *const d = static_cast<char *>(dst);
+  const char *const s = static_cast<const char *>(src);
+  // Only expect cells of up to 64 bytes in HV32. In HV64, common cells such as
+  // plain objects are larger.
+  if (kMaxInlineCopySize == 64 ? LLVM_LIKELY(size <= 64) : size <= 64) {
+    if (HadesGC::minAllocationSize() < 16 && LLVM_UNLIKELY(size < 16)) {
+      assert(size == 8 && "Cells are at least 8 bytes");
+      std::memcpy(d, s, 8);
+      return;
+    }
+    // Copy the first and the last 16 bytes, which may overlap, and then the
+    // middle, if any.
+    std::memcpy(d, s, 16);
+    std::memcpy(d + size - 16, s + size - 16, 16);
+    if (size > 32) {
+      std::memcpy(d + 16, s + 16, 16);
+      if (size > 48)
+        std::memcpy(d + 32, s + 32, 16);
+    }
+    return;
+  }
+  if (kMaxInlineCopySize > 64 && LLVM_LIKELY(size <= kMaxInlineCopySize)) {
+    // Copy the first and the last 16 bytes, which may overlap, and then the
+    // 16 byte chunks between them.
+    std::memcpy(d, s, 16);
+    std::memcpy(d + size - 16, s + size - 16, 16);
+    for (uint32_t off = 16; off + 16 < size; off += 16)
+      std::memcpy(d + off, s + off, 16);
+    return;
+  }
+  std::memcpy(d, s, size);
+}
+
 template <bool CompactionEnabled>
 class HadesGC::EvacAcceptor final : public RootAcceptor,
                                     public WeakRootAcceptor {
@@ -444,6 +497,8 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
   EvacAcceptor(HadesGC &gc, bool doCompaction)
       : gc{gc},
         pointerBase_{gc.getPointerBase()},
+        youngGenStart_{gc.youngGen_.lowLim()},
+        youngGenStartCP_{gc.youngGenCP_},
         isTrackingIDs_{gc.isTrackingIDs()} {
     if constexpr (CompactionEnabled) {
       // If we are compacting, populate the compactee start pointer so we
@@ -451,6 +506,11 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
       if (doCompaction) {
         compacteeEvacStart = gc.compactee_.start;
         compacteeEvacStartCP = gc.compactee_.startCP;
+      } else {
+        // Otherwise the compaction is still pending: populate the compactee
+        // start pointer so we dirty the cards of pointers into it.
+        compacteeDirtyStart_ = gc.compactee_.start;
+        compacteeDirtyStartCP_ = gc.compactee_.startCP;
       }
     } else {
       assert(!doCompaction && "Compaction is not enabled");
@@ -460,65 +520,26 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
   ~EvacAcceptor() override {}
 
   inline bool shouldForward(const void *ptr) const {
-    return gc.inYoungGen(ptr) ||
-        (CompactionEnabled &&
-         compacteeEvacStart == FixedSizeHeapSegment::storageStart(ptr));
+    const void *const segStart = FixedSizeHeapSegment::storageStart(ptr);
+    assert(
+        (segStart == youngGenStart_) == gc.inYoungGen(ptr) &&
+        "Cached YG start is stale");
+    return segStart == youngGenStart_ ||
+        (CompactionEnabled && compacteeEvacStart == segStart);
   }
   inline bool shouldForward(CompressedPointer ptr) const {
-    return gc.inYoungGen(ptr) ||
-        (CompactionEnabled && compacteeEvacStartCP == ptr.getSegmentStart());
+    const CompressedPointer segStart = ptr.getSegmentStart();
+    assert(
+        (segStart == youngGenStartCP_) == gc.inYoungGen(ptr) &&
+        "Cached YG start is stale");
+    return segStart == youngGenStartCP_ ||
+        (CompactionEnabled && compacteeEvacStartCP == segStart);
   }
 
   LLVM_NODISCARD GCCell *acceptRoot(GCCell *ptr) {
     if (shouldForward(ptr))
       return forwardCell<GCCell *>(ptr);
     return ptr;
-  }
-
-  LLVM_NODISCARD GCCell *acceptHeap(GCCell *ptr, void *heapLoc) {
-    if (shouldForward(ptr)) {
-      assert(
-          AlignedHeapSegment::getCellMarkBit(ptr) &&
-          "Should only evacuate marked objects.");
-      return forwardCell<GCCell *>(ptr);
-    }
-    if (CompactionEnabled && gc.compactee_.contains(ptr)) {
-      assert(
-          currentCell_ < heapLoc &&
-          heapLoc < (reinterpret_cast<const char *>(currentCell_) +
-                     currentCell_->getAllocatedSizeSlow()) &&
-          "currentCell_ must be set for compaction");
-      // A compaction is about to take place, so dirty the card of this slot
-      // for the compaction to update it. This is needed both for newly
-      // evacuated cells, which the marker may miss, and for the slots found
-      // by scanDirtyCards, which clears each run of cards before scanning it.
-      AlignedHeapSegment::dirtyCardForAddressInLargeObj(currentCell_, heapLoc);
-    }
-    return ptr;
-  }
-
-  LLVM_NODISCARD CompressedPointer
-  acceptHeap(CompressedPointer cptr, void *heapLoc) {
-    if (shouldForward(cptr)) {
-      GCCell *ptr = cptr.getNonNull(pointerBase_);
-      assert(
-          AlignedHeapSegment::getCellMarkBit(ptr) &&
-          "Should only evacuate marked objects.");
-      return forwardCell<CompressedPointer>(ptr);
-    }
-    if (CompactionEnabled && gc.compactee_.contains(cptr)) {
-      assert(
-          currentCell_ < heapLoc &&
-          heapLoc < (reinterpret_cast<const char *>(currentCell_) +
-                     currentCell_->getAllocatedSizeSlow()) &&
-          "currentCell_ must be set for compaction");
-      // A compaction is about to take place, so dirty the card of this slot
-      // for the compaction to update it. This is needed both for newly
-      // evacuated cells, which the marker may miss, and for the slots found
-      // by scanDirtyCards, which clears each run of cards before scanning it.
-      AlignedHeapSegment::dirtyCardForAddressInLargeObj(currentCell_, heapLoc);
-    }
-    return cptr;
   }
 
   template <typename T>
@@ -544,9 +565,14 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
         AlignedHeapSegment::getCellMarkBit(newCell) &&
         "Cell must be marked when it is allocated into the old gen");
     // Copy the contents of the existing cell over before modifying it.
-    std::memcpy((void *)newCell, cell, cellSize);
+    copyCellContents(newCell, cell, cellSize);
+    HERMES_SLOW_ASSERT(
+        std::memcmp(newCell, cell, cellSize) == 0 &&
+        "Cell contents were copied incorrectly");
     assert(newCell->isValid() && "Cell was copied incorrectly");
     evacuatedBytes_ += cellSize;
+    // Read the kind before the forwarding pointer overwrites the header.
+    const bool needsVisit = needsVisitAfterEvacuation(cell->getKind());
     CopyListCell *const copyCell = static_cast<CopyListCell *>(cell);
     // Set the forwarding pointer in the old spot
     copyCell->setMarkedForwardingPointer(
@@ -554,8 +580,10 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
     if (isTrackingIDs_) {
       gc.moveObject(cell, cellSize, newCell, cellSize);
     }
-    // Push onto the copied list.
-    push(copyCell);
+    // Push onto the copied list, so that the fields of the new cell are
+    // updated later. A cell without such fields is complete once copied.
+    if (needsVisit)
+      push(copyCell);
     return convertPtr<T>(pointerBase_, newCell);
   }
 
@@ -564,7 +592,15 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
   }
 
   void accept(GCPointerBase &ptr) {
-    ptr.setInGC(acceptHeap(ptr, &ptr));
+    // Like the other heap slot accepts, only write to the slot if its cell is
+    // forwarded, since most slots do not change.
+    const CompressedPointer cptr = ptr;
+    if (shouldForward(cptr)) {
+      ptr.setInGC(
+          forwardCell<CompressedPointer>(cptr.getNonNull(pointerBase_)));
+    } else {
+      dirtyCardForCompactee(cptr, &ptr);
+    }
   }
 
   void accept(PinnedHermesValue &hv) override {
@@ -588,18 +624,51 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
   }
 
   void accept(GCHermesValueBase &hv) {
-    if (hv.isPointer()) {
-      GCCell *forwardedPtr =
-          acceptHeap(static_cast<GCCell *>(hv.getPointer()), &hv);
-      hv.setInGC(hv.updatePointer(forwardedPtr), gc);
+    if (!hv.isPointer())
+      return;
+    GCCell *const ptr = static_cast<GCCell *>(hv.getPointer());
+    if (shouldForward(ptr)) {
+      hv.setInGC(hv.updatePointer(forwardCell<GCCell *>(ptr)), gc);
+    } else {
+      dirtyCardForCompactee(ptr, &hv);
     }
   }
 
   void accept(GCSmallHermesValueBase &hv) {
-    if (hv.isPointer()) {
-      CompressedPointer forwardedPtr = acceptHeap(hv.getPointer(), &hv);
-      hv.setInGC(hv.updatePointer(forwardedPtr), gc);
+#ifdef HERMESVM_BOXED_DOUBLES
+    // Check the segment before the tag. Most values either are not pointers or
+    // point outside the segments being evacuated, and a single comparison of
+    // the pointer bits rejects both. For a value that is not a pointer, these
+    // bits are only compared, never dereferenced.
+    const CompressedPointer cptr = hv.getPointerBitsUnsafe();
+    if (LLVM_LIKELY(!shouldForward(cptr))) {
+      assert(
+          (!hv.isPointer() ||
+           compacteeDirtyContains(cptr) ==
+               (CompactionEnabled && gc.compactee_.contains(cptr))) &&
+          "Cached compactee start is stale");
+      // Only check the tag if the value may point into a compactee that is
+      // not being evacuated.
+      if (CompactionEnabled && LLVM_UNLIKELY(compacteeDirtyContains(cptr)) &&
+          hv.isPointer())
+        dirtyCardForCompactee(cptr, &hv);
+      return;
     }
+    if (LLVM_UNLIKELY(!hv.isPointer()))
+      return;
+#else
+    if (!hv.isPointer())
+      return;
+    const CompressedPointer cptr = hv.getPointer();
+    if (!shouldForward(cptr)) {
+      dirtyCardForCompactee(cptr, &hv);
+      return;
+    }
+#endif
+    hv.setInGC(
+        hv.updatePointer(
+            forwardCell<CompressedPointer>(cptr.getNonNull(pointerBase_))),
+        gc);
   }
 
   void acceptWeak(WeakRootBase &wr) override {
@@ -646,6 +715,8 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
   // collection.
   void acceptWeakSym(WeakRootSymbolID &ws) override {}
   void accept(const RootSymbolID &sym) override {}
+  // needsVisitAfterEvacuation relies on this doing nothing, and leaves cells
+  // whose only fields are GCSymbolIDs off the copy list.
   void accept(const GCSymbolID &sym) {}
 
   uint64_t evacuatedBytes() const {
@@ -665,6 +736,11 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
  private:
   HadesGC &gc;
   PointerBase &pointerBase_;
+  /// The start of the YG segment, as a pointer and as a compressed pointer.
+  /// Keeping a copy here saves two dependent loads through gc for every
+  /// visited slot. The YG does not change during a collection.
+  const void *const youngGenStart_;
+  const CompressedPointer youngGenStartCP_;
   const bool isTrackingIDs_;
   uint64_t evacuatedBytes_{0};
 
@@ -676,9 +752,50 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
   AssignableCompressedPointer compacteeEvacStartCP{
       CompressedPointer::fromRaw(CompacteeState::kInvalidCompacteeStart)};
 
+  /// If a compaction is about to take place, but the compactee is not being
+  /// evacuated, then these are set to gc.compactee_.start and
+  /// gc.compactee_.startCP. This allows us to efficiently check for whether
+  /// we need to dirty the card of a pointer into the compactee.
+  void *compacteeDirtyStart_{
+      reinterpret_cast<void *>(CompacteeState::kInvalidCompacteeStart)};
+  AssignableCompressedPointer compacteeDirtyStartCP_{
+      CompressedPointer::fromRaw(CompacteeState::kInvalidCompacteeStart)};
+
   /// Current GCCell being visited. For heap locations that could be from a
   /// large object, we need this pointer to get the correct card table.
   const GCCell *currentCell_{nullptr};
+
+  /// \return true if \p p points into a compactee that is not being evacuated
+  /// (see compacteeDirtyStart_).
+  bool compacteeDirtyContains(const void *p) const {
+    return compacteeDirtyStart_ == FixedSizeHeapSegment::storageStart(p);
+  }
+  bool compacteeDirtyContains(CompressedPointer p) const {
+    return compacteeDirtyStartCP_ == p.getSegmentStart();
+  }
+
+  /// \p ptr is the value of the slot at \p heapLoc in currentCell_, and is not
+  /// forwarded by this collection. If a compaction is about to take place and
+  /// \p ptr points into the compactee, dirty the card for \p heapLoc for the
+  /// compaction to update it. This is needed both for newly evacuated cells,
+  /// which the marker may miss, and for the slots found by scanDirtyCards,
+  /// which clears each run of cards before scanning it.
+  template <typename PtrT>
+  void dirtyCardForCompactee(PtrT ptr, void *heapLoc) {
+    assert(!shouldForward(ptr) && "Forwarded pointers are updated instead");
+    assert(
+        compacteeDirtyContains(ptr) ==
+            (CompactionEnabled && gc.compactee_.contains(ptr)) &&
+        "Cached compactee start is stale");
+    if (CompactionEnabled && compacteeDirtyContains(ptr)) {
+      assert(
+          currentCell_ < heapLoc &&
+          heapLoc < (reinterpret_cast<const char *>(currentCell_) +
+                     currentCell_->getAllocatedSizeSlow()) &&
+          "currentCell_ must be set for compaction");
+      AlignedHeapSegment::dirtyCardForAddressInLargeObj(currentCell_, heapLoc);
+    }
+  }
 
   void push(CopyListCell *cell) {
     cell->next_ = copyListHead;
