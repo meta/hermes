@@ -1081,7 +1081,8 @@ class HadesGC final : public GCBase {
     ///   if no such space exists.
     GCCell *search(uint32_t sz);
 
-    /// Common path for when an allocation has succeeded.
+    /// Common path for when an allocation has succeeded. During an OG
+    /// collection, this also marks \p cell, so that it is treated as live.
     /// \param cell The free memory that will soon have an object allocated into
     ///   it.
     /// \param sz The number of bytes associated with the free memory.
@@ -1157,6 +1158,14 @@ class HadesGC final : public GCBase {
   /// Represents the current phase the concurrent GC is in. The main difference
   /// between phases is their effect on read and write barriers. Should only be
   /// accessed if gcMutex_ is acquired.
+  /// OG mark bits are only maintained from their reset at the start of
+  /// oldGenCollection(), which marks the roots while the phase is still None,
+  /// until sweeping ends. Outside of that window they are stale, because OG
+  /// allocations in Phase::None do not set them (see OldGen::finishAlloc), so
+  /// nothing may rely on them. The exception is the compactee, which receives
+  /// no allocations and keeps the marks of the collection that chose it. With
+  /// HERMES_SLOW_DEBUG, every YG collection that starts in Phase::None clears
+  /// the other OG mark bits, to catch code that relies on them.
   Phase concurrentPhase_{Phase::None};
 
   /// Represents whether the background thread is currently marking. Should only
@@ -1423,6 +1432,10 @@ class HadesGC final : public GCBase {
   /// \param forceCompaction If true, ensure compaction is performed as part of
   ///   the collection regardless of heap conditions.
   void oldGenCollection(std::string cause, bool forceCompaction);
+
+  /// Clear the mark bits of every OG segment. The compactee is not in the OG,
+  /// so it keeps its marks.
+  void clearOldGenMarkBits();
 
   /// If there's an OG collection going on, wait for it to complete. This
   /// function is synchronous and will block the caller if the GC background

@@ -72,8 +72,11 @@ void FreelistBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
 GCCell *HadesGC::OldGen::finishAlloc(GCCell *cell, uint32_t sz) {
   // Track the number of allocated bytes in a segment.
   incrementAllocatedBytes(sz);
-  // Write a mark bit so this entry doesn't get free'd by the sweeper.
-  AlignedHeapSegment::setCellMarkBit(cell);
+  // During an OG collection, mark the cell so that marking treats it as live
+  // and the sweeper doesn't free it. Outside of one, OG mark bits are not read
+  // (see concurrentPhase_), so skip the write.
+  if (gc_.concurrentPhase_ != Phase::None)
+    AlignedHeapSegment::setCellMarkBit(cell);
   // Could overwrite the VTable, but the allocator will write a new one in
   // anyway.
   return cell;
@@ -562,8 +565,10 @@ class HadesGC::EvacAcceptor final : public RootAcceptor,
     HERMES_SLOW_ASSERT(
         gc.inOldGen(newCell) && "Evacuated cell not in the old gen");
     assert(
-        AlignedHeapSegment::getCellMarkBit(newCell) &&
-        "Cell must be marked when it is allocated into the old gen");
+        (gc.concurrentPhase_ == Phase::None ||
+         AlignedHeapSegment::getCellMarkBit(newCell)) &&
+        "Cell must be marked when it is allocated into the old gen during an "
+        "OG collection");
     // Copy the contents of the existing cell over before modifying it.
     copyCellContents(newCell, cell, cellSize);
     HERMES_SLOW_ASSERT(
@@ -1216,13 +1221,18 @@ class HadesGC::Executor {
 };
 
 bool HadesGC::OldGen::sweepNext(bool backgroundThread) {
+  assert(gc_.gcMutex_ && "gcMutex_ must be held while sweeping.");
+  // Sweeping frees the cells that are not marked, and OG mark bits are only
+  // valid during a collection (see concurrentPhase_).
+  assert(
+      gc_.concurrentPhase_ == Phase::Sweep &&
+      "sweepNext should only be called during sweeping.");
   // Check if there are any more segments to sweep. This could be triggered when
   // OG has zero FixedSizeHeapSegment (but could have JumboHeapSegment).
   if (!sweepIterator_.segNumber) {
     endSweep();
     return false;
   }
-  assert(gc_.gcMutex_ && "gcMutex_ must be held while sweeping.");
 
   sweepIterator_.segNumber--;
 
@@ -1694,6 +1704,12 @@ void HadesGC::waitForCollectionToFinish(std::string cause) {
   }
 }
 
+void HadesGC::clearOldGenMarkBits() {
+  oldGen_.forAllSegments(
+      [](auto &&seg) { seg.markBitArray().reset(); },
+      [](auto &&seg) { seg.markBitArray().reset(); });
+}
+
 void HadesGC::oldGenCollection(std::string cause, bool forceCompaction) {
   // Full collection:
   //  * Mark all live objects by iterating through a worklist.
@@ -1736,10 +1752,9 @@ void HadesGC::oldGenCollection(std::string cause, bool forceCompaction) {
   promoteYGToOG_ = false;
 
   // First, clear any mark bits that were set by a previous collection or
-  // direct-to-OG allocation, they aren't needed anymore.
-  oldGen_.forAllSegments(
-      [](auto &&seg) { seg.markBitArray().reset(); },
-      [](auto &&seg) { seg.markBitArray().reset(); });
+  // direct-to-OG allocation, they aren't needed anymore. OG mark bits are only
+  // maintained from here until the collection ends, see concurrentPhase_.
+  clearOldGenMarkBits();
 
   // Mark phase: discover all pointers that are live.
   // Initialize the marking state.
@@ -2133,6 +2148,9 @@ void HadesGC::completeMarking() {
 void HadesGC::OldGen::freeUnusedJumboSegments() {
   assert(
       gc_.gcMutex_ && "GC mutex must be held when freeing dead jumbo segments");
+  assert(
+      gc_.concurrentPhase_ == Phase::Sweep &&
+      "Dead jumbo segments can only be identified during sweeping.");
   for (auto it = jumboSegments_.begin(); it != jumboSegments_.end();) {
     auto *cell = reinterpret_cast<GCCell *>(it->start());
     if (AlignedHeapSegment::getCellMarkBit(cell)) {
@@ -2390,6 +2408,8 @@ void HadesGC::forAllObjs(const std::function<void(GCCell *)> &callback) {
     // compaction, there might be some objects that are dead, and could
     // potentially have garbage in them. There's no need to check the
     // pointers of those objects.
+    // In Phase::None, only the compactee's mark bits are valid (see
+    // concurrentPhase_), so this is only used for OG segments during Sweep.
     if (AlignedHeapSegment::getCellMarkBit(cell)) {
       callback(cell);
     }
@@ -2899,6 +2919,14 @@ void HadesGC::youngGenCollection(
   verifyCardTable();
   // Check that the weak slots referring to the YG are recorded.
   verifyRecordedWeakSlots();
+  if (concurrentPhase_ == Phase::None) {
+    // Outside of an OG collection, OG mark bits are stale (see
+    // concurrentPhase_). Clear them, so that code relying on them would see
+    // every OG object as unmarked and fail in tests, rather than misjudge only
+    // the objects allocated since the last collection. The compactee is not in
+    // oldGen_, so it keeps the marks that the compaction needs.
+    clearOldGenMarkBits();
+  }
 #endif
   assert(
       youngGen().markBitArray().findNextZeroBitFrom(0) ==
@@ -3218,6 +3246,12 @@ void HadesGC::scanDirtyCardsForSegment(
   // 3. If a compaction was completed during this cycle, unmarked objects may
   //    contain references into the now freed compactee. These pointers are not
   //    safe to visit.
+  // In any other phase, unmarked objects may be live: either marking is still
+  // in progress, or the mark bits are stale (see concurrentPhase_).
+  // If an evacuation below finds the OG full and finishes the sweep (see
+  // OldGen::allocSlow), the rest of this segment is still filtered by mark
+  // bits. That is safe: the only live cells left unmarked are the copies made
+  // after that point, which are visited through the copy list.
   const bool visitUnmarked = concurrentPhase_ != Phase::Sweep;
 
   // Return the end of the run of dirty cards that starts at \p iBegin.
