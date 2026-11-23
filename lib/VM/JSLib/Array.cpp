@@ -1793,6 +1793,10 @@ class StandardSortModel : public SortModel {
 /// and reads/writes via storage->at()/storage->set() directly.
 /// The array must not contain any holes (empty values). Its beginIndex must be
 /// 0 and elements count must be equal to length.
+/// Without a comparator, it caches ToString of the elements that are
+/// primitives but not strings. ToString of a primitive has no side effects,
+/// so converting it once is unobservable. Objects are converted on every
+/// comparison, as the spec does.
 class DirectSortModel : public SortModel {
  private:
   Runtime &runtime_;
@@ -1804,6 +1808,9 @@ class DirectSortModel : public SortModel {
     PinnedValue<> aValue;
     PinnedValue<> bValue;
     PinnedValue<> tmpValue;
+    /// The cached ToString of the element at the same index of arr_, or
+    /// empty. Created when the first one is cached.
+    PinnedValue<JSArray> keys;
   } lv_;
   LocalsRAII lraii_;
   GCScope::Marker gcMarker_;
@@ -1811,6 +1818,49 @@ class DirectSortModel : public SortModel {
   /// Get the indexed storage, which must be re-fetched after any GC safepoint.
   JSArray::StorageType *storage() {
     return arr_->getIndexedStorageUnsafe(runtime_);
+  }
+
+  /// Swap the elements at \p a and \p b of \p arr.
+  void swapElements(JSArray *arr, uint32_t a, uint32_t b) {
+    auto *s = arr->getIndexedStorageUnsafe(runtime_);
+    auto tmp = s->at(a);
+    s->set(a, s->at(b), runtime_.getHeap());
+    s->set(b, tmp, runtime_.getHeap());
+  }
+
+  /// \return ToString of \p value, the element at \p i, if it is \p value
+  /// itself or cached, and null otherwise.
+  StringPrimitive *knownString(uint32_t i, SmallHermesValue value) {
+    if (value.isString())
+      return value.getString(runtime_);
+    if (!lv_.keys.get())
+      return nullptr;
+    SmallHermesValue key = lv_.keys->getIndexedStorageUnsafe(runtime_)->at(i);
+    return key.isEmpty() ? nullptr : key.getString(runtime_);
+  }
+
+  /// Replace \p value, the element at \p i, with its ToString, and cache the
+  /// result if \p value is a primitive.
+  ExecutionStatus convertToString(uint32_t i, PinnedValue<> &value) {
+    bool isPrimitive = !value->isObject();
+    auto strRes = toString_RJS(runtime_, value);
+    if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    value = strRes->getHermesValue();
+    if (!isPrimitive)
+      return ExecutionStatus::RETURNED;
+    if (!lv_.keys.get()) {
+      uint32_t len = arr_->getElemCount();
+      auto keysRes = JSArray::create(runtime_, len, len);
+      if (LLVM_UNLIKELY(keysRes == ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+      lv_.keys = std::move(*keysRes);
+    }
+    lv_.keys->getIndexedStorageUnsafe(runtime_)->set(
+        i,
+        SmallHermesValue::encodeStringValue(value->getString(), runtime_),
+        runtime_.getHeap());
+    return ExecutionStatus::RETURNED;
   }
 
  public:
@@ -1840,10 +1890,9 @@ class DirectSortModel : public SortModel {
 
   ExecutionStatus swap(uint32_t a, uint32_t b) override {
     NoAllocScope noAlloc{runtime_};
-    auto *s = storage();
-    auto tmp = s->at(a);
-    s->set(a, s->at(b), runtime_.getHeap());
-    s->set(b, tmp, runtime_.getHeap());
+    swapElements(arr_.get(), a, b);
+    if (lv_.keys.get())
+      swapElements(lv_.keys.get(), a, b);
     return ExecutionStatus::RETURNED;
   }
 
@@ -1859,8 +1908,19 @@ class DirectSortModel : public SortModel {
       if (bSmall.isUndefined()) {
         return -1;
       }
-      lv_.aValue = aSmall.unboxToHV(runtime_);
-      lv_.bValue = bSmall.unboxToHV(runtime_);
+      if (compareFn_) {
+        lv_.aValue = aSmall.unboxToHV(runtime_);
+        lv_.bValue = bSmall.unboxToHV(runtime_);
+      } else {
+        StringPrimitive *aStr = knownString(a, aSmall);
+        StringPrimitive *bStr = knownString(b, bSmall);
+        if (aStr && bStr)
+          return aStr->compare(bStr);
+        lv_.aValue = aStr ? HermesValue::encodeStringValue(aStr)
+                          : aSmall.unboxToHV(runtime_);
+        lv_.bValue = bStr ? HermesValue::encodeStringValue(bStr)
+                          : bSmall.unboxToHV(runtime_);
+      }
     }
 
     GCScopeMarkerRAII gcMarker{gcScope_, gcMarker_};
@@ -1882,18 +1942,16 @@ class DirectSortModel : public SortModel {
       auto res = intRes->getNumber();
       return (res < 0) ? -1 : (res > 0 ? 1 : 0);
     } else {
-      auto aValueRes = toString_RJS(runtime_, lv_.aValue);
-      if (LLVM_UNLIKELY(aValueRes == ExecutionStatus::EXCEPTION)) {
+      if (!lv_.aValue->isString() &&
+          LLVM_UNLIKELY(
+              convertToString(a, lv_.aValue) == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      lv_.aValue = aValueRes->getHermesValue();
-
-      auto bValueRes = toString_RJS(runtime_, lv_.bValue);
-      if (LLVM_UNLIKELY(bValueRes == ExecutionStatus::EXCEPTION)) {
+      if (!lv_.bValue->isString() &&
+          LLVM_UNLIKELY(
+              convertToString(b, lv_.bValue) == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      lv_.bValue = bValueRes->getHermesValue();
-
       return lv_.aValue->getString()->compare(lv_.bValue->getString());
     }
   }
