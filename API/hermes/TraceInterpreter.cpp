@@ -15,7 +15,6 @@
 #include <hermes/VM/instrumentation/PerfEvents.h>
 #include <jsi/instrumentation.h>
 #include <llvh/ADT/ScopeExit.h>
-#include <llvh/Support/MathExtras.h>
 #include <llvh/Support/SHA1.h>
 #include <llvh/Support/SaveAndRestore.h>
 
@@ -215,23 +214,6 @@ bool isBitwiseEqual(llvh::ArrayRef<double> a, llvh::ArrayRef<double> b) {
       memcmp(a.data(), b.data(), a.size() * sizeof(double)) == 0;
 }
 
-/// \return \p result with its last bit cleared, as TracingRuntime returned
-/// Math results before MathCallRecords existed.
-double clearLastBit(double result) {
-  if (!std::isfinite(result)) {
-    return result;
-  }
-  return llvh::BitsToDouble(llvh::DoubleToBits(result) & ~uint64_t{1});
-}
-
-/// \return Whether \p trace has any MathCallRecord.
-bool hasMathCallRecords(const SynthTrace &trace) {
-  return std::any_of(
-      trace.records().begin(), trace.records().end(), [](const auto &rec) {
-        return rec->getType() == RecordType::MathCall;
-      });
-}
-
 } // namespace
 
 /// Assert that \p val seen at replay matches the recorded \p traceValue
@@ -265,15 +247,14 @@ double TraceInterpreter::replayMathCall(
     llvh::StringRef name,
     llvh::ArrayRef<double> args,
     double libmResult) {
-  if (!traceHasMathCalls_) {
-    return clearLastBit(libmResult);
-  }
   const auto &records = trace_.records();
   if (nextExecIndex_ >= records.size() ||
       records[nextExecIndex_]->getType() != RecordType::MathCall) {
-    // A truncated trace has no record for this call. Otherwise, replay made a
-    // Math call the recording didn't.
-    TRACE_EXPECT_TRUE(nextExecIndex_ >= records.size());
+    // If the trace was recorded without MathCallRecords, use this platform's
+    // libm result. The same goes for a call after a truncated trace ends, and
+    // for a Math call that the recording didn't make: replay doesn't check
+    // whether the trace has any MathCallRecords, so verification doesn't
+    // report such a call.
     return libmResult;
   }
   const auto &mcr =
@@ -292,7 +273,6 @@ TraceInterpreter::TraceInterpreter(
       options_(options),
       bundles_(std::move(bundles)),
       trace_(trace),
-      traceHasMathCalls_(hasMathCallRecords(trace)),
       gom_() {
   // Add the global object to the global object map
   if (trace.globalObjID()) {
@@ -313,7 +293,6 @@ TraceInterpreter::TraceInterpreter(
       options_(options),
       shermesUnitCreatorFns_(std::move(shermesUnitCreatorFns)),
       trace_(trace),
-      traceHasMathCalls_(hasMathCallRecords(trace)),
       gom_() {
   // Add the global object to the global object map
   if (trace.globalObjID()) {

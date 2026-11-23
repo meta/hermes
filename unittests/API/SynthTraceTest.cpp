@@ -1968,7 +1968,7 @@ TEST_F(SynthTraceReplayTest, MathCallRecordsCanonicalNaNArgs) {
   replay();
 }
 
-TEST_F(SynthTraceReplayTest, MathCallClearsLastBitWithoutRecords) {
+TEST_F(SynthTraceReplayTest, MathCallReturnsLibmResultWithoutRecords) {
   // A runtime made for replay doesn't record Math calls, so this trace has no
   // MathCallRecords, like traces recorded before they existed.
   traceRt.reset();
@@ -1994,7 +1994,7 @@ TEST_F(SynthTraceReplayTest, MathCallClearsLastBitWithoutRecords) {
   for (size_t i = 0; i < inputs.size(); ++i) {
     volatile double input = inputs[i];
     EXPECT_EQ(
-        llvh::DoubleToBits(std::cos(input)) & ~uint64_t{1},
+        llvh::DoubleToBits(std::cos(input)),
         llvh::DoubleToBits(results.getValueAtIndex(rt, i).getNumber()));
   }
 }

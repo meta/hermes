@@ -134,9 +134,6 @@ class TraceInterpreter final {
   // Map from source hash to shermes unit creator function.
   std::map<::hermes::SHA1, SHUnitCreator> shermesUnitCreatorFns_;
   const SynthTrace &trace_;
-  /// Whether the trace has MathCallRecords. Without them, replay clears the
-  /// last bit of libm results, as TracingRuntime did before they existed.
-  const bool traceHasMathCalls_;
 
   /// The last use of each object.
   std::unordered_map<SynthTrace::ObjectID, uint64_t> lastUsePerObj_;
