@@ -318,8 +318,9 @@ struct Context {
     /// Fields used by EnterNonGreedyLoop instruction.
     struct {
       BacktrackOp op;
-      uint32_t bodyIp; /// The IP of the loop body.
-      LoopData loopData; /// Data for the loop to set.
+      /// Index of the CodeUnit where the deferred iteration starts.
+      uint32_t iterationStart;
+      LoopData loopData; /// Data for the loop before entering the body.
       const BeginLoopInsn *loopInsn; /// The loop instruction.
     } enterNonGreedyLoop;
 
@@ -364,10 +365,10 @@ struct Context {
     /// \return an EnterNonGreedyLoop instruction.
     static BacktrackInsn makeEnterNonGreedyLoop(
         const BeginLoopInsn *loopInsn,
-        uint32_t bodyIp,
+        uint32_t iterationStart,
         LoopData loopData) {
       BacktrackInsn result = BacktrackOp::EnterNonGreedyLoop;
-      result.enterNonGreedyLoop.bodyIp = bodyIp;
+      result.enterNonGreedyLoop.iterationStart = iterationStart;
       result.enterNonGreedyLoop.loopInsn = loopInsn;
       result.enterNonGreedyLoop.loopData = loopData;
       return result;
@@ -449,13 +450,14 @@ struct Context {
   LLVM_NODISCARD
   ExecutorResult<bool> backtrack(BacktrackStack &bts, State<Traits> *s);
 
-  /// Set the state's position to the body of a non-greedy loop.
+  /// Restore \p loopData and enter the body of the non-greedy \p loop at
+  /// CodeUnit index \p iterationStart.
   /// \return RETURNED if backtracking was prepared, STACK_OVERFLOW otherwise.
   LLVM_NODISCARD
   ExecutionStatus performEnterNonGreedyLoop(
       State<Traits> *s,
       const BeginLoopInsn *loop,
-      uint32_t bodyIp,
+      uint32_t iterationStart,
       LoopData loopData,
       BacktrackStack &backtrackStack);
 
@@ -774,16 +776,19 @@ template <class Traits>
 ExecutionStatus Context<Traits>::performEnterNonGreedyLoop(
     State<Traits> *s,
     const BeginLoopInsn *loop,
-    uint32_t bodyIp,
+    uint32_t iterationStart,
     LoopData loopData,
     BacktrackStack &backtrackStack) {
   assert(loop->opcode == Opcode::BeginLoop && "Not a BeginLoopInsn");
+  // prepareToEnterLoopBody() records this value, so backtracking out of the
+  // body restores the iteration that preceded it.
   s->getLoop(loop->loopId) = loopData;
 
-  // Set the IP and input position, and initialize the state for entering the
-  // loop.
-  s->ip_ = bodyIp;
-  s->cursor_.setCurrentPointer(first_ + loopData.entryPosition);
+  // Set the IP to the loop body and the input position, and initialize the
+  // state for entering the loop.
+  const uint8_t *bytecode = &bytecodeStream_[sizeof(RegexBytecodeHeader)];
+  s->ip_ = reinterpret_cast<const uint8_t *>(loop + 1) - bytecode;
+  s->cursor_.setCurrentPointer(first_ + iterationStart);
   return prepareToEnterLoopBody(s, loop, backtrackStack);
 }
 
@@ -815,7 +820,7 @@ ExecutorResult<bool> Context<Traits>::backtrack(
         auto fields = binsn.enterNonGreedyLoop;
         bts.pop_back();
         auto res = performEnterNonGreedyLoop(
-            s, fields.loopInsn, fields.bodyIp, fields.loopData, bts);
+            s, fields.loopInsn, fields.iterationStart, fields.loopData, bts);
         if (res != ExecutionStatus::RETURNED) {
           return res;
         }
@@ -1620,12 +1625,13 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
             // should continue or exit.
             assert(iteration >= loop->min && iteration < loop->max);
             if (!loop->greedy) {
-              // Backtrack by entering this non-greedy loop.
-              loopData.entryPosition = c.offsetFromLeft();
+              // Backtrack by entering this non-greedy loop. Leave loopData
+              // alone: backtracking may still resume inside the iteration
+              // that just finished, which needs its own entry position.
               auto res = pushBacktrack(
                   backtrackStack,
                   BacktrackInsn::makeEnterNonGreedyLoop(
-                      loop, loopTakenIp, loopData));
+                      loop, c.offsetFromLeft(), loopData));
               if (res != ExecutionStatus::RETURNED) {
                 return res;
               }
