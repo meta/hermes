@@ -251,43 +251,55 @@ void hermes::vm::sh_unit_mark_weak_roots(
     SHUnit *unit,
     WeakRootAcceptor &acceptor,
     bool markLongLived) {
+  // Many of these weak roots are empty. Acceptors ignore empty weak roots, so
+  // skip them here instead of making a virtual call for each of them.
   if (markLongLived) {
     for (auto &prop : llvh::makeMutableArrayRef(
              reinterpret_cast<ReadPropertyCacheEntry *>(unit->read_prop_cache),
              unit->num_read_prop_cache_entries)) {
-      acceptor.acceptWeak(prop.clazz);
-      acceptor.acceptWeak(prop.negMatchClazz);
+      if (prop.clazz)
+        acceptor.acceptWeak(prop.clazz);
+      if (prop.negMatchClazz)
+        acceptor.acceptWeak(prop.negMatchClazz);
     }
     for (auto &prop : llvh::makeMutableArrayRef(
              reinterpret_cast<WritePropertyCacheEntry *>(
                  unit->write_prop_cache),
              unit->num_write_prop_cache_entries)) {
-      acceptor.acceptWeak(prop.clazz);
+      if (prop.clazz)
+        acceptor.acceptWeak(prop.clazz);
     }
     for (auto &prop : llvh::makeMutableArrayRef(
              reinterpret_cast<PrivateNameCacheEntry *>(
                  unit->private_name_cache),
              unit->num_private_name_cache_entries)) {
-      acceptor.acceptWeak(prop.clazz);
-      acceptor.acceptWeakSym(prop.nameVal);
+      if (prop.clazz)
+        acceptor.acceptWeak(prop.clazz);
+      if (!prop.nameVal.isInvalid())
+        acceptor.acceptWeakSym(prop.nameVal);
     }
 
     for (auto &entry : llvh::makeMutableArrayRef(
              reinterpret_cast<WeakRootBase *>(unit->object_literal_class_cache),
              unit->obj_shape_table_count)) {
-      acceptor.acceptWeak(entry);
+      if (entry)
+        acceptor.acceptWeak(entry);
     }
   }
 
   if (markLongLived) {
     for (auto &entry : unit->runtime_ext->addCacheEntries) {
-      acceptor.acceptWeak(entry.startClazz);
-      acceptor.acceptWeak(entry.resultClazz);
-      acceptor.acceptWeak(entry.parent);
+      if (entry.startClazz)
+        acceptor.acceptWeak(entry.startClazz);
+      if (entry.resultClazz)
+        acceptor.acceptWeak(entry.resultClazz);
+      if (entry.parent)
+        acceptor.acceptWeak(entry.parent);
     }
   } else {
     for (auto &entry : unit->runtime_ext->addCacheEntries) {
-      acceptor.acceptWeak(entry.parent);
+      if (entry.parent)
+        acceptor.acceptWeak(entry.parent);
     }
   }
 }

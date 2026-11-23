@@ -382,6 +382,8 @@ void RuntimeModule::markRoots(RootAcceptor &acceptor, bool markLongLived) {
 void RuntimeModule::markWeakRoots(
     WeakRootAcceptor &acceptor,
     bool markLongLived) {
+  // Many of these weak roots are empty. Acceptors ignore empty weak roots, so
+  // skip them here instead of making a virtual call for each of them.
   if (markLongLived) {
     // Each CodeBlock is a separate allocation, so this walk is dominated by
     // cache misses on the CodeBlocks. Prefetch the first two 64-byte cache
@@ -411,19 +413,24 @@ void RuntimeModule::markWeakRoots(
       }
     }
     for (auto &entry : objectLiteralHiddenClasses_) {
-      acceptor.acceptWeak(entry);
+      if (entry)
+        acceptor.acceptWeak(entry);
     }
   }
 
   if (markLongLived) {
     for (auto &entry : addCacheEntries_) {
-      acceptor.acceptWeak(entry.startClazz);
-      acceptor.acceptWeak(entry.resultClazz);
-      acceptor.acceptWeak(entry.parent);
+      if (entry.startClazz)
+        acceptor.acceptWeak(entry.startClazz);
+      if (entry.resultClazz)
+        acceptor.acceptWeak(entry.resultClazz);
+      if (entry.parent)
+        acceptor.acceptWeak(entry.parent);
     }
   } else {
     for (auto &entry : addCacheEntries_) {
-      acceptor.acceptWeak(entry.parent);
+      if (entry.parent)
+        acceptor.acceptWeak(entry.parent);
     }
   }
 }

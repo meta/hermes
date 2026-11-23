@@ -109,6 +109,9 @@ struct RootAcceptorWithNames : public RootAcceptor {
       const std::function<void(HeapSnapshot &)> &func) {}
 };
 
+/// Acceptor for weak roots. Implementations must do nothing for a null
+/// WeakRootBase or an invalid WeakRootSymbolID, so callers may skip such roots
+/// instead of making a virtual call for each of them.
 struct WeakRootAcceptor : RootSectionAcceptor {
   ~WeakRootAcceptor() override = default;
 

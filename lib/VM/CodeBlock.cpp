@@ -343,19 +343,26 @@ OptValue<uint32_t> CodeBlock::getFunctionSourceID() const {
 void CodeBlock::markWeakElementsInCaches(
     Runtime &runtime,
     WeakRootAcceptor &acceptor) {
+  // Most cache entries are empty. Acceptors ignore empty weak roots, so skip
+  // them here instead of making a virtual call for each of them.
   for (auto &prop :
        llvh::makeMutableArrayRef(readPropertyCache(), readPropertyCacheSize_)) {
-    acceptor.acceptWeak(prop.clazz);
-    acceptor.acceptWeak(prop.negMatchClazz);
+    if (prop.clazz)
+      acceptor.acceptWeak(prop.clazz);
+    if (prop.negMatchClazz)
+      acceptor.acceptWeak(prop.negMatchClazz);
   }
   for (auto &prop : llvh::makeMutableArrayRef(
            writePropertyCache(), writePropertyCacheSize_)) {
-    acceptor.acceptWeak(prop.clazz);
+    if (prop.clazz)
+      acceptor.acceptWeak(prop.clazz);
   }
   for (auto &prop :
        llvh::makeMutableArrayRef(privateNameCache(), privateNameCacheSize_)) {
-    acceptor.acceptWeak(prop.clazz);
-    acceptor.acceptWeakSym(prop.nameVal);
+    if (prop.clazz)
+      acceptor.acceptWeak(prop.clazz);
+    if (!prop.nameVal.isInvalid())
+      acceptor.acceptWeakSym(prop.nameVal);
   }
 #if HERMESVM_JIT
   // Polymorphic GetById shape records hold weak hidden-class references.
