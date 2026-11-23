@@ -101,6 +101,11 @@ TEST_F(SynthTraceParserTest, SynthVersionMismatch) {
 }
   )";
   EXPECT_DEATH_IF_SUPPORTED(parseSynthTrace(bufFromStr(src)), "");
+
+  const std::string newer =
+      "{\"version\": " + std::to_string(SynthTrace::synthVersion() + 1) +
+      ", \"globalObjID\": 258, \"runtimeConfig\": {}, \"trace\": []}";
+  EXPECT_DEATH_IF_SUPPORTED(parseSynthTrace(bufFromStr(newer)), "");
 }
 
 TEST_F(SynthTraceParserTest, ParsePropID) {

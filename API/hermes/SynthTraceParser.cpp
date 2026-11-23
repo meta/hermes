@@ -747,15 +747,21 @@ parseSynthTrace(std::unique_ptr<llvh::MemoryBuffer> trace) {
   JSLexer::Allocator alloc;
   JSONObject *root = llvh::cast<JSONObject>(parseJSON(alloc, std::move(trace)));
   if (auto *ver = root->get("version")) {
-    // Version exists, validate that it is a number, and the correct version.
+    // Version exists, validate that it is a number, and a supported version.
     if (auto *verNum = llvh::dyn_cast<JSONNumber>(ver)) {
-      // version is a number.
+      // Traces from before version 6 may lack MathCallRecords. They still
+      // replay unless they hit precision differences between this platform's
+      // Math functions and the recording platform's. Before version 5, strings
+      // were encoded differently.
+      constexpr uint32_t kOldestSupportedVersion = 5;
       const uint32_t version = verNum->getValue();
-      if (version != SynthTrace::synthVersion()) {
+      if (version < kOldestSupportedVersion ||
+          version > SynthTrace::synthVersion()) {
         ::hermes::hermes_fatal(
             "Trace version mismatch, expected " +
-            std::to_string(SynthTrace::synthVersion()) + ", actual: " +
-            std::to_string(static_cast<uint32_t>(verNum->getValue())));
+            std::to_string(kOldestSupportedVersion) + " to " +
+            std::to_string(SynthTrace::synthVersion()) +
+            ", actual: " + std::to_string(version));
       }
     } else {
       ::hermes::hermes_fatal(
