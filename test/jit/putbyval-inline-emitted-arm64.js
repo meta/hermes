@@ -39,9 +39,9 @@
 // out of a 24-bit size field, the element scale, and the form of the hole
 // test -- an ETag test where a slot is eight bytes, a comparison against the
 // whole encoded empty value where it is four. On top of those, the two boxed
-// modes encode the value into a SmallHermesValue before any guard runs; the
-// shape of that dispatch is pinned by putbyid-inline-emitted-arm64.js and
-// only its comment line is checked here.
+// modes encode the value inside the barrier predicate and box a double that
+// needs it; the encode's dispatch is pinned by putbyid-inline-emitted-arm64.js,
+// its position and the box arm here too.
 //
 // UNSUPPORTED under HERMESVM_SANITIZE_HANDLES (the `handle_san` lit feature)
 // for the same reason its siblings are: there the runtime boxes every number,
@@ -93,13 +93,9 @@ print(f32[1]);
 // SPEC-LABEL:store:
 // SPEC: // Inline fast array store
 //
-// Under boxed doubles the value is encoded into a SmallHermesValue first,
-// ahead of every guard, so that a value with no inline encoding is rejected
-// before the tier pays for anything else. Nothing is emitted here in HV64.
-// SPEC-HV32: // Encode the value as a SmallHermesValue
-// SPEC-HV32: b.ne [[SLOW:L[0-9]+]]
-// SPEC-BOXED: // Encode the value as a SmallHermesValue
-// SPEC-BOXED: b.ne [[SLOW:L[0-9]+]]
+// In every mode the object check below is the tier's first exit, so it is
+// where the helper label gets its name: the value is encoded inside the
+// barrier predicate, not ahead of the guards.
 //
 // The shape guards, in the order putByValWithReceiver_RJS makes them. arm64
 // tests a tag by shifting it down and adding, so "is an object" is
@@ -107,8 +103,8 @@ print(f32[1]);
 // SPEC: asr {{x[0-9]+}}, {{x[0-9]+}}, 0x30
 // SPEC: cmn {{x[0-9]+}}, 1
 // SPEC-HV64: b.ne [[SLOW:L[0-9]+]]
-// SPEC-HV32: b.ne [[SLOW]]
-// SPEC-BOXED: b.ne [[SLOW]]
+// SPEC-HV32: b.ne [[SLOW:L[0-9]+]]
+// SPEC-BOXED: b.ne [[SLOW:L[0-9]+]]
 // SPEC: and {{x[0-9]+}}, {{x[0-9]+}}, 0xFFFFFFFFFFFF
 // ... of cell kind JSArray exactly ...
 // SPEC: ldrb {{w[0-9]+}}, [{{x[0-9]+}}, {{[0-9]+}}]
@@ -117,8 +113,7 @@ print(f32[1]);
 // ... whose hidden class has indexedStorage set and hasIndexLikeProperties
 // and frozen clear. The mask is three non-adjacent bits, which is not an
 // AArch64 logical immediate, so unlike x86-64 it has to be materialized
-// first -- in x16, because the other temporary is carrying the encoded value
-// in the two boxed modes.
+// first -- in x16, the backend's non-allocated scratch.
 // SPEC: ldrh {{w[0-9]+}}, [{{x[0-9]+}}, {{[0-9]+}}]
 // SPEC: mov w16, 0x884
 // SPEC: and {{w[0-9]+}}, {{w[0-9]+}}, w16
@@ -192,11 +187,59 @@ print(f32[1]);
 // putbyid-inline-emitted-arm64.js.
 // SPEC: // Inline store with barrier predicate
 // SPEC: and {{x[0-9]+}}, {{x[0-9]+}}, 0xFFFFFFFFFFC00000
+// Under boxed doubles a young target jumps to the join, where the value is
+// encoded once every declining check has run; a double with no inline
+// encoding goes to the box arm rather than to the helper.
+// SPEC-HV32: b.eq [[JOIN:L[0-9]+]]{{$}}
+// SPEC-HV32: {{^}}[[JOIN]]:
+// SPEC-HV32-NEXT: // Encode the value as a SmallHermesValue
+// SPEC-HV32: tst {{x[0-9]+}}, 0x7FFFFFFFF
+// SPEC-HV32-NEXT: b.ne [[BOX:L[0-9]+]]{{$}}
+// SPEC-BOXED: b.eq [[JOIN:L[0-9]+]]{{$}}
+// SPEC-BOXED: {{^}}[[JOIN]]:
+// SPEC-BOXED-NEXT: // Encode the value as a SmallHermesValue
+// SPEC-BOXED: tst {{x[0-9]+}}, 7
+// SPEC-BOXED-NEXT: b.ne [[BOX:L[0-9]+]]{{$}}
 // SPEC-HV64: str {{x[0-9]+}}, {{\[}}{{x[0-9]+}}]
 // SPEC-HV32: str {{w[0-9]+}}, {{\[}}{{x[0-9]+}}]
 // SPEC-BOXED: str {{x[0-9]+}}, {{\[}}{{x[0-9]+}}]
+// The inline value's path ends in a jump to the card block it shares with
+// the box arm, which follows at once (no counting block without
+// -Xjit-emit-counters). The box arm bump-allocates the BoxedDouble -- a
+// full young generation goes to the helper -- writes the double, tags the
+// (under HV32, compressed) pointer, stores it, and dirties an old target's
+// card unconditionally: a box is always young.
+// SPEC-HV32: {{^ *}}b [[DIRTY:L[0-9]+]]{{$}}
+// SPEC-HV32-NEXT: {{^}}[[BOX]]:
+// SPEC-HV32-NEXT: // Box the double in the young generation
+// SPEC-HV32-NEXT: ldr [[CELL:x[0-9]+]], [x19, {{[0-9]+}}]
+// SPEC-HV32: b.hi [[SLOW]]{{$}}
+// SPEC-HV32: str {{x[0-9]+}}, {{\[}}[[CELL]], {{[0-9]+}}]
+// SPEC-HV32-NEXT: sub [[CELL]], [[CELL]], x19
+// SPEC-HV32-NEXT: orr [[CELL]], [[CELL]], {{(0x)?}}4
+// SPEC-HV32-NEXT: str {{w[0-9]+}}, {{\[}}{{x[0-9]+}}]
+// SPEC-HV32-NEXT: and {{x[0-9]+}}, {{x[0-9]+}}, 0xFFFFFFFFFFC00000
+// SPEC-HV32-NEXT: ldr x16, [x19, {{[0-9]+}}]
+// SPEC-HV32-NEXT: cmp {{x[0-9]+}}, x16
+// SPEC-HV32-NEXT: b.eq [[DONE:L[0-9]+]]{{$}}
+// SPEC-HV32-NEXT: {{^}}[[DIRTY]]:
+// SPEC-BOXED: {{^ *}}b [[DIRTY:L[0-9]+]]{{$}}
+// SPEC-BOXED-NEXT: {{^}}[[BOX]]:
+// SPEC-BOXED-NEXT: // Box the double in the young generation
+// SPEC-BOXED-NEXT: ldr [[CELL:x[0-9]+]], [x19, {{[0-9]+}}]
+// SPEC-BOXED: b.hi [[SLOW]]{{$}}
+// SPEC-BOXED: str {{x[0-9]+}}, {{\[}}[[CELL]], {{[0-9]+}}]
+// SPEC-BOXED-NEXT: orr [[CELL]], [[CELL]], {{(0x)?}}4
+// SPEC-BOXED-NEXT: str [[CELL]], {{\[}}{{x[0-9]+}}]
+// SPEC-BOXED-NEXT: and {{x[0-9]+}}, {{x[0-9]+}}, 0xFFFFFFFFFFC00000
+// SPEC-BOXED-NEXT: ldr x16, [x19, {{[0-9]+}}]
+// SPEC-BOXED-NEXT: cmp {{x[0-9]+}}, x16
+// SPEC-BOXED-NEXT: b.eq [[DONE:L[0-9]+]]{{$}}
+// SPEC-BOXED-NEXT: {{^}}[[DIRTY]]:
 // SPEC: mov w16, 1
 // SPEC: strb w16, {{\[}}{{x[0-9]+}}, {{x[0-9]+}}]
+// SPEC-HV32-NEXT: {{^}}[[DONE]]:
+// SPEC-BOXED-NEXT: {{^}}[[DONE]]:
 //
 // And the helper call the guards fall back to: an INDIRECT call through this
 // site's own mutable helper slot (spec: "Slow-path demotion: the pointer

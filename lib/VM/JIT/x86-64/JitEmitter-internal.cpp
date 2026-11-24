@@ -9,6 +9,7 @@
 #if HERMESVM_JIT_X86_64
 #include "JitEmitter-internal.h"
 
+#include "hermes/VM/BoxedDouble.h"
 #include "hermes/VM/JSObject-inline.h"
 
 #define DEBUG_TYPE "jit"
@@ -153,7 +154,8 @@ void emit_shv_encode_or_slow(
     const x86::Gp &out,
     const x86::Gp &in,
     const x86::Gp &temp,
-    const asmjit::Label &slowLab) {
+    const asmjit::Label &slowLab,
+    const asmjit::Label &boxLab) {
   assert(out != in && "the output must not alias the input");
   assert(temp != in && temp != out && "the scratch must differ from both");
   static_assert(HERMESVALUE_VERSION == 2, "Reading a HermesValue's ETag");
@@ -171,8 +173,8 @@ void emit_shv_encode_or_slow(
 
   // HermesValue32::encodeHermesValue(), case for case:
   //
-  //   number or compressible -> a right shift, or a BoxedDouble allocation
-  //                             this cannot do: decline;
+  //   number or compressible -> a right shift, or a BoxedDouble, which the
+  //                             caller allocates: jump to boxLab;
   //   String/BigInt/Object   -> a compressed pointer with a remapped tag;
   //   Symbol                 -> the id shifted up over the tag.
   //
@@ -199,8 +201,10 @@ void emit_shv_encode_or_slow(
   // number, so that callers cannot get away with treating a
   // SmallHermesValue holding one as anything but a pointer, and
   // encodeHermesValue() additionally forces a throwaway encodeNumberValue()
-  // for its side effect of moving the heap. Emitted code cannot allocate, so
-  // this whole case is declined to the helper, which does both.
+  // for its side effect of moving the heap. The caller's inline box
+  // allocation would skip the young collection HadesGC::makeAImpl() forces
+  // in that mode, so this whole case is declined to the helper, which does
+  // both, and boxLab is never taken.
   //
   // Be honest about what that does NOT cover: only this arm declines. The
   // symbol arm below still encodes inline, so a JIT symbol store skips the
@@ -210,6 +214,7 @@ void emit_shv_encode_or_slow(
   // the encoding written is the one the runtime writes -- and closing it
   // would mean declining every store under Handle-San, which is a bigger
   // behavior change than the sanitizer is worth here.
+  (void)boxLab;
   a.jmp(slowLab);
 #else
   // canInlineCompressibleOrNumberHV64(): the value is inline-representable
@@ -218,10 +223,9 @@ void emit_shv_encode_or_slow(
   // result -- and costs no immediate wide enough to need a register.
   a.mov(temp, in);
   a.shl(temp, RuntimeOffsets::kShvValueBits);
-  // A double that does not fit has to become a heap-allocated BoxedDouble.
-  // Nothing has been stored at this point, so declining is free and the
-  // helper does the allocation.
-  a.jnz(slowLab);
+  // A double that does not fit has to become a heap-allocated BoxedDouble,
+  // which the caller allocates at boxLab. Nothing has been stored yet.
+  a.jnz(boxLab);
   // bitsToCompressedHV64(): the CompressedHV64 tag is zero, so the encode is
   // the shift alone, and it is not even that when a SmallHermesValue is as
   // wide as a HermesValue (the boxed build without compressed pointers).
@@ -493,6 +497,20 @@ asmjit::Error OurLogger::_log(const char *data, size_t size) noexcept {
 #endif
 
 #if HERMES_JIT_INLINE_SAFE_STORE
+#ifdef HERMESVM_BOXED_DOUBLES
+void Emitter::emitSafeStoreOrSlow(
+    const x86::Gp &loc,
+    const x86::Gp &value,
+    const x86::Gp &t1,
+    const x86::Gp &t2,
+    const x86::Gp &t3,
+    JitCounter boxCounter,
+    const asmjit::Label &slowLab) {
+  assert(t1 != loc && t1 != value && "t1 must not alias loc or value");
+  assert(t2 != loc && t2 != value && "t2 must not alias loc or value");
+  assert(t3 != loc && t3 != value && "t3 must not alias loc or value");
+  assert(t1 != t2 && t1 != t3 && t2 != t3 && "the temporaries must differ");
+#else
 void Emitter::emitSafeStoreOrSlow(
     const x86::Gp &loc,
     const x86::Gp &shv,
@@ -505,13 +523,25 @@ void Emitter::emitSafeStoreOrSlow(
   assert(t1 != t2 && "the two temporaries must differ");
   assert(
       shv != loc && shv != t1 && "the encoded value must survive to the store");
-  // \p shv MAY be \p t2, and under boxed doubles it is: the caller encoded
-  // into t2 before its guards. That is safe because t2 is not touched here
-  // until after the store, by which point the encoded value is dead.
+  // In the default heap-value mode a slot holds the HermesValue itself, so
+  // the tiers pass \p value as \p shv.
+#endif
 
   comment("// Inline store with barrier predicate");
 
+#ifdef HERMESVM_BOXED_DOUBLES
+  // A young target skips the barrier checks but not the encode: it jumps to
+  // the join, where every path that stores begins.
+  asmjit::Label joinLab = a.newLabel();
+  const asmjit::Label &youngTargetLab = joinLab;
+  asmjit::Label boxLab = a.newLabel();
+  asmjit::Label dirtyCardLab = a.newLabel();
+  // With -Xjit-emit-counters a full young generation goes through an
+  // out-of-line block that counts it; otherwise straight to the helper.
+  asmjit::Label slowFullLab = emitCounters_ ? a.newLabel() : slowLab;
+#else
   asmjit::Label youngTargetLab = a.newLabel();
+#endif
   asmjit::Label doneLab = a.newLabel();
 
   // The mask that turns a pointer into the start of its segment. It is
@@ -570,16 +600,34 @@ void Emitter::emitSafeStoreOrSlow(
   a.cmp(x86::word_ptr(t1, RuntimeOffsets::segmentShiftedSize), asmjit::Imm(1));
   a.jne(slowLab);
 
+#ifdef HERMESVM_BOXED_DOUBLES
+  // The join. Live: loc, value and t1, the segment start; t2 and t3 are
+  // free, and nothing is live in a vector register or xScratch, which is
+  // what allocInYoung() below needs under ASan. The structural guards and
+  // the barrier checks have run; the declines left are the encode's RawHV32
+  // and Handle-San rejections, inside it, and the box arm's full young
+  // generation, which branches from the bump before the new level is
+  // stored. Each precedes the slot store and the publication of a box.
+  a.bind(joinLab);
+  emit_shv_encode_or_slow(a, t2, value, t3, slowLab, boxLab);
+  emit_store_shv(a, t2, x86::ptr(loc));
+  // HadesGC::writeBarrier() step (1) again: a young target needs no barrier
+  // for any value. The compare is repeated because the encode clobbered
+  // EFLAGS.
+  a.cmp(t1, x86::qword_ptr(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
+  a.je(doneLab);
+#else
   // The barrier is now known to be at most a card-dirty. Store.
   emit_store_shv(a, shv, x86::ptr(loc));
+#endif
 
   // relocationWriteBarrier() is only reached for a pointer value. The test is
   // made on the ORIGINAL HermesValue rather than on what was just stored,
   // which is both cheaper and more accurate: a HermesValue carries its
-  // pointer uncompressed, which is what the segment compare below needs, and
-  // the one pointer a SmallHermesValue has that a HermesValue does not -- a
-  // BoxedDouble -- can never be here, because the encode declined it. \p t2
-  // is dead once the store above has consumed it.
+  // pointer uncompressed, which is what the segment compare below needs. The
+  // one pointer a SmallHermesValue has that a HermesValue does not -- a
+  // BoxedDouble -- never reaches this test: the box arm below stores it. \p
+  // t2 is dead once the store above has consumed it.
   emit_sh_ljs_get_tag(a, t2, value);
   emit_sh_ljs_tag_is_pointer(a, t2);
   a.jb(doneLab);
@@ -592,6 +640,60 @@ void Emitter::emitSafeStoreOrSlow(
   a.cmp(t2, x86::qword_ptr(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
   a.jne(doneLab);
 
+#ifdef HERMESVM_BOXED_DOUBLES
+  a.jmp(dirtyCardLab);
+
+  if (emitCounters_) {
+    // Out of line: doneLab falls through into the tier's jump to its
+    // continuation, so nothing may sit between them.
+    a.bind(slowFullLab);
+    comment("// Young generation full: count the fallback");
+    emitIncrementCounter(JitCounter::NumStoreBoxFallbacks);
+    a.jmp(slowLab);
+  }
+
+  // The box arm, HermesValue32::encodeHermesValue()'s BoxedDouble::create()
+  // inline: bump-allocate the box in the young generation (t2 the cell, t1
+  // and t3 its temporaries), write the double into it, and store the tagged
+  // compressed pointer. A full young generation jumps before the new level
+  // is published, so a box is never allocated and abandoned. Nothing here
+  // is a GC safepoint: in ASan builds the bump calls
+  // __asan_unpoison_memory_region with the GP temps saved, and that is the
+  // only call.
+  a.bind(boxLab);
+  comment("// Box the double in the young generation");
+  allocInYoung(
+      CellKind::BoxedDoubleKind,
+      cellSize<BoxedDouble>(),
+      t2,
+      t1,
+      t3,
+      slowFullLab);
+  static_assert(
+      RuntimeOffsets::boxedDoubleValue <= (uint32_t)INT32_MAX,
+      "the double's offset in a BoxedDouble must fit a disp32");
+  a.mov(x86::qword_ptr(t2, (int32_t)RuntimeOffsets::boxedDoubleValue), value);
+  // encodePointerImpl(box, Tag::BoxedDouble): the compressed pointer with the
+  // tag in its low bits, which heap alignment leaves clear.
+  emit_sh_cp_encode_non_null(a, t2);
+  static_assert(
+      (uint32_t)HermesValue32::Tag::BoxedDouble <
+          ((uint32_t)1 << RuntimeOffsets::kShvTagBits),
+      "the BoxedDouble tag must fit the bits heap alignment leaves clear");
+  a.or_(t2, asmjit::Imm((uint32_t)HermesValue32::Tag::BoxedDouble));
+  emit_store_shv(a, t2, x86::ptr(loc));
+  emitIncrementCounter(boxCounter);
+  // t1 was an allocation temporary: recompute the segment start. A young
+  // target is done; an old one always needs its card, because the box is
+  // young by construction.
+  a.mov(t1, loc);
+  a.and_(t1, asmjit::Imm(kSegmentMask));
+  a.cmp(t1, x86::qword_ptr(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
+  a.je(doneLab);
+
+  a.bind(dirtyCardLab);
+#endif
+
   // FixedSizeHeapSegment::dirtyCardForAddress(loc), inline:
   //   segLoc[(loc - segLoc) >> kLogCardSize] = CardStatus::Dirty
   // The card array base is the segment start itself, since
@@ -603,10 +705,12 @@ void Emitter::emitSafeStoreOrSlow(
   a.mov(
       x86::byte_ptr(t1, t2, 0, (int32_t)RuntimeOffsets::segmentInlineCards),
       asmjit::Imm(RuntimeOffsets::kCardDirty));
+#ifndef HERMESVM_BOXED_DOUBLES
   a.jmp(doneLab);
 
   a.bind(youngTargetLab);
   emit_store_shv(a, shv, x86::ptr(loc));
+#endif
 
   a.bind(doneLab);
 }

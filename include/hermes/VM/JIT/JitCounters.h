@@ -43,7 +43,17 @@ namespace vm {
   X(NumByIdChainHits)                                              \
   /* Inline hits of the GetById string blocks (Length and Method), \
    * counted by the emitted code only with -Xjit-emit-counters. */ \
-  X(NumByIdStringHits)
+  X(NumByIdStringHits)                                             \
+  /* Doubles the PutByVal JSArray tier boxed in a young-generation \
+   * BoxedDouble and stored inline (HERMESVM_BOXED_DOUBLES only),  \
+   * counted by the emitted code only with -Xjit-emit-counters. */ \
+  X(NumPutByValBoxes)                                              \
+  /* The same for the PutById inline tier. */                      \
+  X(NumPutByIdBoxes)                                               \
+  /* Box allocations of either store tier that found the young     \
+   * generation full and declined to the helper, counted by the    \
+   * emitted code only with -Xjit-emit-counters. */                \
+  X(NumStoreBoxFallbacks)
 
 /// Enum with an entry for each JIT counter. This is used to index into the
 /// list of counters.

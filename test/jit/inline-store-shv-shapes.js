@@ -27,17 +27,17 @@
 // WHY THIS FILE EXISTS. Under HERMESVM_BOXED_DOUBLES (both the HV32 and the
 // BOXED trees) a heap slot does not hold the HermesValue the emitter carries
 // in a register: it holds a SmallHermesValue, which the store site has to
-// ENCODE first (emit_shv_encode_for_slot_or_slow -> emit_shv_encode_or_slow,
-// at the top of each tier).
-// The encoding is per-tag, and one of the cases cannot be done inline at
-// all: a double whose bits do not survive the compression has to be boxed on
-// the heap, which allocates, so the inline path declines that value to the
-// runtime helper without storing anything. Every arm of that dispatch is
+// ENCODE first (Emitter::emitSafeStoreOrSlow, through
+// emit_shv_encode_or_slow). The encoding is per-tag, and one case
+// allocates: a double whose bits do not survive the compression is boxed
+// in a BoxedDouble, which the tiers bump-allocate in the young generation
+// (only a full young generation sends it to the runtime helper, which
+// allocates it there). Every arm of that dispatch is
 // exercised below:
 //
 //   undefined / null / true / false   compressible non-numbers
 //   a small integer, 3.5, -0.25       doubles that compress
-//   0.1, 1e300                        doubles that do NOT: helper + BoxedDouble
+//   0.1, 1e300                        doubles that do NOT: inline BoxedDouble
 //   a string, an object, a bigint     the three pointer tags
 //   a symbol                          the symbol tag
 //
@@ -148,9 +148,11 @@ for (var i = 0; i < 8; ++i) {
 print("fresh", sum);
 // CHECK-NEXT:fresh 224
 
-// A non-compressible double stored repeatedly into an old object: every one
-// of these declines to the helper, which boxes it on the heap, and the boxed
-// double must survive the collections that follow.
+// A non-compressible double stored repeatedly into an old object: the
+// tier boxes each one in the young generation and dirties the slot's
+// card, and the box must survive the collections that follow -- a missed
+// card would leave the old slot pointing at a box a young collection
+// freed.
 var acc = 0;
 for (var i = 0; i < 8; ++i) {
   storeProp(holder, 0.1 + i);

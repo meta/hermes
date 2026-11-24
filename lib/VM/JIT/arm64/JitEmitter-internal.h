@@ -716,23 +716,26 @@ inline void emit_sh_shv_decode(
 /// Encode the HermesValue in \p xIn into the SmallHermesValue that a heap slot
 /// holds, leaving the result in \p xOut. This is the inverse of
 /// Emit_sh_shv_decode and mirrors HermesValue32::encodeHermesValue() case for
-/// case, with one difference that is the whole reason it takes a label: a
+/// case, with one difference that is the whole reason it takes labels: a
 /// double whose bits do not fit an inline "compressed HV64" has to be boxed
-/// in a heap-allocated BoxedDouble, and emitted code cannot allocate. Such a
-/// value is DECLINED -- control jumps to \p slowLab with nothing written --
-/// and the caller's slow path, which reaches the runtime, boxes it there.
+/// in a heap-allocated BoxedDouble, which this function does not allocate.
+/// Such a value jumps to \p boxLab with nothing stored, where the caller
+/// allocates the box. A value this code produces no encoding for -- a
+/// RawHV32, or under HERMESVM_SANITIZE_HANDLES any number -- jumps to
+/// \p slowLab, with nothing stored either.
 ///
 /// Declared only under HERMESVM_BOXED_DOUBLES, unlike Emit_sh_shv_decode
 /// which is always declared and emits nothing in the default build. The
 /// decode can afford that because it works in place; an encode that produced
 /// nothing would still owe its caller a register, so the caller selects
 /// between this and using the HermesValue itself with the same #ifdef. Its
-/// one caller is emit_shv_encode_for_slot_or_slow() below.
+/// one caller is Emitter::emitSafeStoreOrSlow().
 ///
 /// \param xOut receives the SmallHermesValue. Must differ from \p xIn.
 /// \param xIn the HermesValue to encode; preserved.
 /// \param xTemp scratch, clobbered. Must differ from \p xIn and \p xOut.
-/// \param slowLab where to jump when the value cannot be encoded inline.
+/// \param slowLab where to jump when the value has no encoding here.
+/// \param boxLab where to jump with a double that needs a BoxedDouble.
 ///
 /// NZCV is clobbered.
 void emit_shv_encode_or_slow(
@@ -740,40 +743,9 @@ void emit_shv_encode_or_slow(
     const a64::GpX &xOut,
     const a64::GpX &xIn,
     const a64::GpX &xTemp,
-    const asmjit::Label &slowLab);
+    const asmjit::Label &slowLab,
+    const asmjit::Label &boxLab);
 #endif
-
-/// Encode \p xValue into the SmallHermesValue a heap slot holds, ready to be
-/// handed to Emitter::emitSafeStoreOrSlow(), and return the register that
-/// holds it. This is the mode-selecting wrapper the inline write tiers call,
-/// so that they need no #ifdef of their own: under boxed doubles it emits
-/// emit_shv_encode_or_slow() above and returns \p xOut; in the default build a
-/// slot holds the HermesValue itself, so it emits nothing at all and returns
-/// \p xValue.
-///
-/// Call it BEFORE the tier's guards. Nothing has been stored at that point,
-/// so the decline costs nothing -- and a value that cannot be encoded is by
-/// far the cheapest thing to reject, because rejecting it there skips the
-/// whole guard chain. See doc/JIT.md's "Inline write barrier".
-///
-/// \param xOut receives the SmallHermesValue under boxed doubles; unused
-///   otherwise. Must differ from \p xValue and \p xTemp.
-/// \param xValue the HermesValue to encode; preserved.
-/// \param xTemp scratch, clobbered under boxed doubles.
-/// \param slowLab where to jump when the value cannot be encoded inline.
-[[nodiscard]] inline const a64::GpX &emit_shv_encode_for_slot_or_slow(
-    [[maybe_unused]] a64::Assembler &a,
-    [[maybe_unused]] const a64::GpX &xOut,
-    const a64::GpX &xValue,
-    [[maybe_unused]] const a64::GpX &xTemp,
-    [[maybe_unused]] const asmjit::Label &slowLab) {
-#ifdef HERMESVM_BOXED_DOUBLES
-  emit_shv_encode_or_slow(a, xOut, xValue, xTemp, slowLab);
-  return xOut;
-#else
-  return xValue;
-#endif
-}
 
 /// Load the SmallHermesValue at \p mem into \p xTempReg and compare it against
 /// the "empty" value, i.e. an array hole. NZCV is updated as a result; b.eq

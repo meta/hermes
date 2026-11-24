@@ -72,8 +72,9 @@
 // backends otherwise cover every heap-value mode, including the two that do
 // not store a HermesValue verbatim -- HERMESVM_COMPRESSED_POINTERS, where a
 // slot is a 32-bit compressed value, and HERMESVM_BOXED_DOUBLES, where
-// encoding some doubles requires a heap allocation. Each tier encodes the
-// value first and declines the one case emitted code cannot perform.
+// encoding some doubles requires a heap allocation. The store predicate
+// encodes the value after its barrier checks; under boxed doubles it boxes a
+// double that needs it inline, in the young generation.
 //
 // This stays one definition rather than a copy in each backend header
 // because a translation unit that sees both must never see them disagree.

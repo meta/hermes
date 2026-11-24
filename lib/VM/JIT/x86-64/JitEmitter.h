@@ -1582,49 +1582,67 @@ class Emitter {
       bool recording);
 
 #if HERMES_JIT_INLINE_SAFE_STORE
-  /// Emit an inline store of the already-encoded slot value in \p shv to the
-  /// heap slot whose address is in \p loc, performed only when the Hades
-  /// write barrier for that store is provably either a no-op or a single
-  /// card-dirty. In every other case -- concurrent marking active, a
-  /// compaction in progress, or a segment whose card array is not the inline
-  /// one -- nothing is stored and control jumps to \p slowLab, whose code is
-  /// expected to perform the store through the runtime, barrier included.
+  /// Emit an inline store of \p value to the heap slot whose address is in
+  /// \p loc, performed only when the Hades write barrier for that store is
+  /// provably either a no-op or a single card-dirty. In every other case --
+  /// concurrent marking active, a compaction in progress, or a segment whose
+  /// card array is not the inline one -- nothing is stored and control jumps
+  /// to \p slowLab, whose code is expected to perform the store through the
+  /// runtime, barrier included.
   ///
   /// A heap slot holds a SmallHermesValue, not a HermesValue, and under
-  /// HERMESVM_BOXED_DOUBLES the two differ. Callers produce \p shv with
-  /// emit_shv_encode_for_slot_or_slow(), which is where the one value this
-  /// path cannot store is declined -- a double whose bits do not fit inline
-  /// needs a heap-allocated BoxedDouble. That happens BEFORE the caller's
-  /// guards, not here, because a value that cannot be encoded is the cheapest
-  /// thing to reject and rejecting it early skips the whole guard chain; on
-  /// Box2D two thirds of the stores reaching these tiers are exactly that.
-  /// In the default heap-value mode the encode emits nothing and \p shv is
-  /// \p value.
+  /// HERMESVM_BOXED_DOUBLES the two differ. There this function encodes
+  /// \p value itself, with emit_shv_encode_or_slow(), after the structural
+  /// and barrier checks, and stores a double the encoding cannot hold inline
+  /// through a box arm: it bump-allocates a BoxedDouble in the young
+  /// generation, writes the double into it, and stores the tagged
+  /// compressed pointer. The box arm's only decline is a full young
+  /// generation, taken before anything is published or stored, through an
+  /// out-of-line block that counts it (JitCounter::NumStoreBoxFallbacks)
+  /// under -Xjit-emit-counters. In the default heap-value mode a slot holds
+  /// the HermesValue itself, nothing is encoded, and the caller passes
+  /// \p value as \p shv.
   ///
-  /// Everything here, the card decision included, is phrased in terms of the
-  /// ORIGINAL 64-bit \p value rather than \p shv: the two agree on which
-  /// values are pointers (the BoxedDouble that would not is already gone),
-  /// and a HermesValue carries its pointer uncompressed, which is what the
-  /// segment compare needs.
+  /// The card decision for an inline-encoded value is phrased in terms of
+  /// the ORIGINAL 64-bit \p value: the two agree on which values are
+  /// pointers, and a HermesValue carries its pointer uncompressed, which is
+  /// what the segment compare needs. A box is young by construction, so the
+  /// box arm dirties an old target's card unconditionally.
   ///
   /// The emitted predicate mirrors HadesGC::writeBarrier() and
   /// HadesGC::relocationWriteBarrier() exactly:
   ///
   ///     segLoc = loc & ~(kSegmentUnitSize-1)
-  ///     if (segLoc == runtime.heap_.youngGen_.lowLim_)  // young target
-  ///       *loc = shv; done                              //   no barrier
+  ///     if (segLoc == runtime.heap_.youngGen_.lowLim_)  // young target:
+  ///       goto store                                    //   no barrier
   ///     if (runtime.heap_.ogMarkingBarriers_)  goto slow  // snapshot barrier
   ///     if (compactee active)                  goto slow  // relocation into
   ///     if (segLoc's size != 1 unit)           goto slow  //   the compactee
+  ///   store:
+  ///     shv = encode(value)            // boxed doubles; a box: goto box
   ///     *loc = shv
+  ///     if (segLoc == youngGen lowLim)  goto done         // young: no card
   ///     if (value is a pointer &&
   ///         (value.ptr & ~(kSegmentUnitSize-1)) == youngGen lowLim)
   ///       segLoc[(loc - segLoc) >> kLogCardSize] = CardStatus::Dirty
+  ///     goto done
+  ///   box:                             // boxed doubles only
+  ///     cell = bump-allocate a BoxedDouble    // young gen full: goto slow
+  ///     cell->value_ = value
+  ///     *loc = compress(cell) | Tag::BoxedDouble
+  ///     if (segLoc != youngGen lowLim)
+  ///       segLoc[(loc - segLoc) >> kLogCardSize] = CardStatus::Dirty
+  ///   done:
   ///
   /// The order matters: the snapshot barrier reads the OLD contents of the
   /// slot, so the marking test has to precede the store. It does, and the
   /// path that stores is precisely the path on which marking is off, so the
-  /// requirement holds by construction rather than by convention.
+  /// requirement holds by construction rather than by convention. Every
+  /// decline also precedes the slot store and the publication of a
+  /// successful box allocation: the structural and barrier checks precede
+  /// the encode, the encode's own rejection precedes the box arm, and a full
+  /// young generation branches from the bump before the new level is
+  /// stored. So a box is never allocated and then abandoned.
   ///
   /// PRECONDITION on \p loc: it must lie within the first kSegmentUnitSize
   /// bytes of its segment. Everything here derives the segment start as
@@ -1654,19 +1672,37 @@ class Emitter {
   /// segment holds that array out of line, so its stores go to the helper.
   ///
   /// \param loc address of the slot; preserved.
-  /// \param shv the encoded slot value to store; read only up to the store.
-  ///   It MAY be \p t2 -- and under boxed doubles it is, because the caller
-  ///   encoded into t2 before its guards -- which is sound precisely because
-  ///   t2 is not touched here until after the store.
-  /// \param value the original 64-bit HermesValue, used for the card
-  ///   decision; preserved.
+  /// \param shv (default heap-value mode only) the value to store, which is
+  ///   \p value: there a slot holds the HermesValue itself.
+  /// \param value the original 64-bit HermesValue; preserved.
   /// \param t1 scratch, clobbered. Must differ from \p loc and \p value.
-  /// \param t2 scratch, clobbered after the store. Must differ from \p loc
-  ///   and \p value.
+  /// \param t2 scratch, clobbered. Must differ from \p loc and \p value.
+  /// \param t3 (boxed doubles only) scratch, clobbered: the encode's
+  ///   temporary and the box allocation's second one. Must differ from
+  ///   \p loc, \p value, \p t1 and \p t2.
+  /// \param boxCounter (boxed doubles only) the counter the box arm
+  ///   increments after its store under -Xjit-emit-counters.
   /// \param slowLab where to jump when the store was NOT performed.
   ///
-  /// EFLAGS are clobbered. Nothing else is touched: in particular this
-  /// emits no call, so no register needs to be synced or freed around it.
+  /// EFLAGS are clobbered. In the default heap-value mode nothing else is
+  /// touched and no call is emitted, so no register needs to be synced or
+  /// freed around it. Under boxed doubles the same holds except in two
+  /// cases. With -Xjit-emit-counters, the counting blocks write xScratch
+  /// (and EFLAGS), so no live value may be held in xScratch across this
+  /// function. In ASan builds, the box allocation calls
+  /// __asan_unpoison_memory_region with the eight GP temps saved around it
+  /// (bumpAllocAndUnpoison()), so no live value may be held in a vector temp
+  /// or in xScratch.
+#ifdef HERMESVM_BOXED_DOUBLES
+  void emitSafeStoreOrSlow(
+      const x86::Gp &loc,
+      const x86::Gp &value,
+      const x86::Gp &t1,
+      const x86::Gp &t2,
+      const x86::Gp &t3,
+      JitCounter boxCounter,
+      const asmjit::Label &slowLab);
+#else
   void emitSafeStoreOrSlow(
       const x86::Gp &loc,
       const x86::Gp &shv,
@@ -1674,6 +1710,7 @@ class Emitter {
       const x86::Gp &t1,
       const x86::Gp &t2,
       const asmjit::Label &slowLab);
+#endif
 
   /// Emit the PutById inline tier: a guard that the target is an object of
   /// the hidden class the write cache recorded at compile time, followed by

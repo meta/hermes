@@ -10,6 +10,7 @@
 
 #include "JitEmitter-internal.h"
 
+#include "hermes/VM/BoxedDouble.h"
 #include "hermes/VM/JSObject-inline.h"
 #include "llvh/Support/Debug.h"
 
@@ -121,7 +122,8 @@ void emit_shv_encode_or_slow(
     const a64::GpX &xOut,
     const a64::GpX &xIn,
     const a64::GpX &xTemp,
-    const asmjit::Label &slowLab) {
+    const asmjit::Label &slowLab,
+    const asmjit::Label &boxLab) {
   assert(xOut != xIn && "the output must not alias the input");
   assert(xTemp != xIn && xTemp != xOut && "the scratch must differ from both");
   static_assert(HERMESVALUE_VERSION == 2, "Reading a HermesValue's ETag");
@@ -139,8 +141,8 @@ void emit_shv_encode_or_slow(
 
   // HermesValue32::encodeHermesValue(), case for case:
   //
-  //   number or compressible -> a right shift, or a BoxedDouble allocation
-  //                             this cannot do: decline;
+  //   number or compressible -> a right shift, or a BoxedDouble, which the
+  //                             caller allocates: jump to boxLab;
   //   String/BigInt/Object   -> a compressed pointer with a remapped tag;
   //   Symbol                 -> the id shifted up over the tag.
   //
@@ -172,8 +174,10 @@ void emit_shv_encode_or_slow(
   // number, so that callers cannot get away with treating a
   // SmallHermesValue holding one as anything but a pointer, and
   // encodeHermesValue() additionally forces a throwaway encodeNumberValue()
-  // for its side effect of moving the heap. Emitted code cannot allocate, so
-  // this whole case is declined to the helper, which does both.
+  // for its side effect of moving the heap. The caller's inline box
+  // allocation would skip the young collection HadesGC::makeAImpl() forces
+  // in that mode, so this whole case is declined to the helper, which does
+  // both, and boxLab is never taken.
   //
   // Be honest about what that does NOT cover: only this arm declines. The
   // symbol arm below still encodes inline, so a JIT symbol store skips the
@@ -183,6 +187,7 @@ void emit_shv_encode_or_slow(
   // the encoding written is the one the runtime writes -- and closing it
   // would mean declining every store under Handle-San, which is a bigger
   // behavior change than the sanitizer is worth here.
+  (void)boxLab;
   a.b(slowLab);
 #else
   // canInlineCompressibleOrNumberHV64(): the value is inline-representable
@@ -201,10 +206,9 @@ void emit_shv_encode_or_slow(
       a64::Utils::isLogicalImm(kInlineMask, 64) &&
       "the inline-representability mask must encode as a logical immediate");
   a.tst(xIn, kInlineMask);
-  // A double that does not fit has to become a heap-allocated BoxedDouble.
-  // Nothing has been stored at this point, so declining is free and the
-  // helper does the allocation.
-  a.b_ne(slowLab);
+  // A double that does not fit has to become a heap-allocated BoxedDouble,
+  // which the caller allocates at boxLab. Nothing has been stored yet.
+  a.b_ne(boxLab);
   // bitsToCompressedHV64(): the CompressedHV64 tag is zero, so the encode is
   // the shift alone, and it is not even that when a SmallHermesValue is as
   // wide as a HermesValue (the boxed build without compressed pointers).
@@ -485,6 +489,28 @@ asmjit::Error OurLogger::_log(const char *data, size_t size) noexcept {
 #endif
 
 #if HERMES_JIT_INLINE_SAFE_STORE
+#ifdef HERMESVM_BOXED_DOUBLES
+void Emitter::emitSafeStoreOrSlow(
+    const a64::GpX &loc,
+    const a64::GpX &value,
+    const a64::GpX &t1,
+    const a64::GpX &t2,
+    const a64::GpX &t3,
+    JitCounter boxCounter,
+    const asmjit::Label &slowLab) {
+  assert(t1 != loc && t1 != value && "t1 must not alias loc or value");
+  assert(t2 != loc && t2 != value && "t2 must not alias loc or value");
+  assert(t3 != loc && t3 != value && "t3 must not alias loc or value");
+  assert(t1 != t2 && t1 != t3 && t2 != t3 && "the temporaries must differ");
+  // Every runtime word tested below is loaded into xScratch rather than into
+  // a temporary -- x86-64 can compare against memory and so needs no
+  // register at all for those, while arm64 must load first -- and consumed
+  // by the next instruction: t1 holds the segment start from the first
+  // instruction to the card store, except across the box allocation, which
+  // uses it as a temporary and then recomputes it, and t2 and t3 belong to
+  // the encode and the box arm. So nothing is held in xScratch across the
+  // box allocation, whose ASan build calls out (see allocInYoung()).
+#else
 void Emitter::emitSafeStoreOrSlow(
     const a64::GpX &loc,
     const a64::GpX &shv,
@@ -497,11 +523,13 @@ void Emitter::emitSafeStoreOrSlow(
   assert(t1 != t2 && "the two temporaries must differ");
   assert(
       shv != loc && shv != t1 && "the encoded value must survive to the store");
-  // \p shv MAY be \p t2, and under boxed doubles it is: the caller encoded
-  // into t2 before its guards. Keeping that sound is why every runtime word
-  // tested below is loaded into xScratch rather than into t2 -- x86-64 can
-  // compare against memory and so needs no register at all for those, while
-  // arm64 must load first, and t2 is not free to be that register.
+  // In the default heap-value mode a slot holds the HermesValue itself, so
+  // the tiers pass \p value as \p shv. Every runtime word tested below is
+  // loaded into xScratch rather than into a temporary: x86-64 can compare
+  // against memory and so needs no register at all for those, while arm64
+  // must load first, and t1 holds the segment start the card store indexes
+  // off.
+#endif
 
   // The two 64-bit runtime words below are loaded with LDR's unsigned-offset
   // form, whose immediate is a 12-bit multiple of the access width. Both
@@ -520,7 +548,19 @@ void Emitter::emitSafeStoreOrSlow(
 
   comment("// Inline store with barrier predicate");
 
+#ifdef HERMESVM_BOXED_DOUBLES
+  // A young target skips the barrier checks but not the encode: it jumps to
+  // the join, where every path that stores begins.
+  asmjit::Label joinLab = a.newLabel();
+  const asmjit::Label &youngTargetLab = joinLab;
+  asmjit::Label boxLab = a.newLabel();
+  asmjit::Label dirtyCardLab = a.newLabel();
+  // With -Xjit-emit-counters a full young generation goes through an
+  // out-of-line block that counts it; otherwise straight to the helper.
+  asmjit::Label slowFullLab = emitCounters_ ? a.newLabel() : slowLab;
+#else
   asmjit::Label youngTargetLab = a.newLabel();
+#endif
   asmjit::Label doneLab = a.newLabel();
 
   // The mask that turns a pointer into the start of its segment. A power of
@@ -580,19 +620,40 @@ void Emitter::emitSafeStoreOrSlow(
   a.cmp(xScratch.w(), 1);
   a.b_ne(slowLab);
 
+#ifdef HERMESVM_BOXED_DOUBLES
+  // The join. Live: loc, value and t1, the segment start; t2 and t3 are
+  // free, and nothing is live in a vector temp or xScratch, which is
+  // what allocInYoung() below needs under ASan. The structural guards and
+  // the barrier checks have run; the declines left are the encode's RawHV32
+  // and Handle-San rejections, inside it, and the box arm's full young
+  // generation, which branches from the bump before the new level is
+  // stored. Each precedes the slot store and the publication of a box. The
+  // slot is one SmallHermesValue wide -- four bytes under compressed
+  // pointers, eight otherwise -- which is why the stores go through
+  // emit_store_shv() rather than a bare str.
+  a.bind(joinLab);
+  emit_shv_encode_or_slow(a, t2, value, t3, slowLab, boxLab);
+  emit_store_shv(a, t2, a64::Mem(loc));
+  // HadesGC::writeBarrier() step (1) again: a young target needs no barrier
+  // for any value.
+  a.ldr(xScratch, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
+  a.cmp(t1, xScratch);
+  a.b_eq(doneLab);
+#else
   // The barrier is now known to be at most a card-dirty. Store. The slot is
   // one SmallHermesValue wide -- four bytes under compressed pointers, eight
   // otherwise -- which is why this goes through emit_store_shv() rather than
   // a bare str.
   emit_store_shv(a, shv, a64::Mem(loc));
+#endif
 
   // relocationWriteBarrier() is only reached for a pointer value. The test is
   // made on the ORIGINAL HermesValue rather than on what was just stored,
   // which is both cheaper and more accurate: a HermesValue carries its
-  // pointer uncompressed, which is what the segment compare below needs, and
-  // the one pointer a SmallHermesValue has that a HermesValue does not -- a
-  // BoxedDouble -- can never be here, because the encode declined it. \p t2
-  // is dead once the store above has consumed it.
+  // pointer uncompressed, which is what the segment compare below needs. The
+  // one pointer a SmallHermesValue has that a HermesValue does not -- a
+  // BoxedDouble -- never reaches this test: the box arm below stores it. \p
+  // t2 is dead once the store above has consumed it.
   emit_sh_ljs_get_tag(a, t2, value);
   emit_sh_ljs_tag_is_pointer(a, t2);
   a.b_lo(doneLab);
@@ -606,6 +667,66 @@ void Emitter::emitSafeStoreOrSlow(
   a.ldr(xScratch, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
   a.cmp(t2, xScratch);
   a.b_ne(doneLab);
+
+#ifdef HERMESVM_BOXED_DOUBLES
+  a.b(dirtyCardLab);
+
+  if (emitCounters_) {
+    // Out of line: doneLab falls through into the tier's branch to its
+    // continuation, so nothing may sit between them.
+    a.bind(slowFullLab);
+    comment("// Young generation full: count the fallback");
+    emitIncrementCounter(JitCounter::NumStoreBoxFallbacks);
+    a.b(slowLab);
+  }
+
+  // The box arm, HermesValue32::encodeHermesValue()'s BoxedDouble::create()
+  // inline: bump-allocate the box in the young generation (t2 the cell, t1
+  // and t3 its temporaries), write the double into it, and store the tagged
+  // compressed pointer. A full young generation branches before the new
+  // level is published, so a box is never allocated and abandoned. Nothing
+  // here is a GC safepoint: in ASan builds the bump calls
+  // __asan_unpoison_memory_region with x0-x15 saved, and that is the only
+  // call.
+  a.bind(boxLab);
+  comment("// Box the double in the young generation");
+  allocInYoung(
+      CellKind::BoxedDoubleKind,
+      cellSize<BoxedDouble>(),
+      t2,
+      t1,
+      t3,
+      slowFullLab);
+  static_assert(
+      RuntimeOffsets::boxedDoubleValue % 8 == 0 &&
+          RuntimeOffsets::boxedDoubleValue < maxNaturalBaseOffset(8),
+      "the double in a BoxedDouble must be reachable by an unsigned-offset "
+      "STR");
+  a.str(value, a64::Mem(t2, RuntimeOffsets::boxedDoubleValue));
+  // encodePointerImpl(box, Tag::BoxedDouble): the compressed pointer with the
+  // tag in its low bits, which heap alignment leaves clear. 0b100 is a single
+  // bit, an AArch64 logical immediate.
+  emit_sh_cp_encode_non_null(a, t2);
+  static_assert(
+      (uint32_t)HermesValue32::Tag::BoxedDouble <
+          ((uint32_t)1 << RuntimeOffsets::kShvTagBits),
+      "the BoxedDouble tag must fit the bits heap alignment leaves clear");
+  assert(
+      a64::Utils::isLogicalImm((uint64_t)HermesValue32::Tag::BoxedDouble, 64) &&
+      "the BoxedDouble tag must encode as a logical immediate");
+  a.orr(t2, t2, (uint64_t)HermesValue32::Tag::BoxedDouble);
+  emit_store_shv(a, t2, a64::Mem(loc));
+  emitIncrementCounter(boxCounter);
+  // t1 was an allocation temporary: recompute the segment start. A young
+  // target is done; an old one always needs its card, because the box is
+  // young by construction.
+  a.and_(t1, loc, kSegmentMask);
+  a.ldr(xScratch, a64::Mem(xRuntime, RuntimeOffsets::runtimeHadesYGStart));
+  a.cmp(t1, xScratch);
+  a.b_eq(doneLab);
+
+  a.bind(dirtyCardLab);
+#endif
 
   // FixedSizeHeapSegment::dirtyCardForAddress(loc), inline:
   //   segLoc[(loc - segLoc) >> kLogCardSize] = CardStatus::Dirty
@@ -621,10 +742,12 @@ void Emitter::emitSafeStoreOrSlow(
   a.lsr(t2, t2, RuntimeOffsets::kLogCardSize);
   a.mov(xScratch.w(), RuntimeOffsets::kCardDirty);
   a.strb(xScratch.w(), a64::Mem(t1, t2));
+#ifndef HERMESVM_BOXED_DOUBLES
   a.b(doneLab);
 
   a.bind(youngTargetLab);
   emit_store_shv(a, shv, a64::Mem(loc));
+#endif
 
   a.bind(doneLab);
 }

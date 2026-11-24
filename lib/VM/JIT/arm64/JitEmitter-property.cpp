@@ -59,6 +59,11 @@ void Emitter::emitPutByValFastArrayTier(
   HWReg hwIdx = allocTempGpX();
   HWReg hwTemp1 = allocTempGpX();
   HWReg hwTemp2 = allocTempGpX();
+#ifdef HERMESVM_BOXED_DOUBLES
+  // emitSafeStoreOrSlow()'s third temporary, for the encode and the box arm.
+  // Allocated last, so the registers above are the default mode's.
+  HWReg hwTemp3 = allocTempGpX();
+#endif
   HWReg hwKeyTmp = allocTempVecD();
   const a64::GpX xTarget = hwTarget.a64GpX();
   const a64::GpX xValue = hwValue.a64GpX();
@@ -68,11 +73,17 @@ void Emitter::emitPutByValFastArrayTier(
   const a64::GpX xIdx = hwIdx.a64GpX();
   const a64::GpX xTemp1 = hwTemp1.a64GpX();
   const a64::GpX xTemp2 = hwTemp2.a64GpX();
+#ifdef HERMESVM_BOXED_DOUBLES
+  const a64::GpX xTemp3 = hwTemp3.a64GpX();
+#endif
   const a64::VecD dKeyTmp = hwKeyTmp.a64VecD();
   freeReg(hwLoc);
   freeReg(hwIdx);
   freeReg(hwTemp1);
   freeReg(hwTemp2);
+#ifdef HERMESVM_BOXED_DOUBLES
+  freeReg(hwTemp3);
+#endif
   freeReg(hwKeyTmp);
   freeFRTemp(frTarget);
   freeFRTemp(frKey);
@@ -80,19 +91,6 @@ void Emitter::emitPutByValFastArrayTier(
   assert(dKeyTmp != dKey && "emit_double_is_uint32() needs a distinct temp");
 
   // Code generation starts here.
-
-  // The value has to be encoded into the SmallHermesValue an element slot
-  // actually holds, and one value cannot be: a double that would need a
-  // heap-allocated BoxedDouble is declined here. Doing that FIRST, before any
-  // guard, is what makes the decline cheap -- it skips the whole chain below
-  // rather than running it and then giving up. xTemp2 holds the result from
-  // here to the store; no guard touches it, which on arm64 is a property the
-  // guards below had to be written for rather than one they had for free (see
-  // the xScratch uses). In the default heap-value mode this emits nothing at
-  // all -- not even the comment, which the encoder itself writes -- and
-  // `xShv` is `xValue`.
-  const a64::GpX &xShv =
-      emit_shv_encode_for_slot_or_slow(a, xTemp2, xValue, xTemp1, helperLab);
 
   // Is the target an object? At a duo site the typed-array tier ahead of this
   // one has already proved that, and nothing runs between the two tiers that
@@ -122,10 +120,9 @@ void Emitter::emitPutByValFastArrayTier(
   //
   // arm64: the mask is three non-adjacent bits, which is not a run of ones
   // and therefore not an AArch64 logical immediate, so it has to be
-  // materialized in a register first. It goes in xScratch, not in a
-  // temporary: xTemp2 is carrying the encoded value across every guard in
-  // this tier. The value it is compared against is a single bit and encodes
-  // directly.
+  // materialized in a register first. It goes in xScratch, the backend's
+  // non-allocated scratch, so this sequence needs no temporary of its own.
+  // The value it is compared against is a single bit and encodes directly.
   static_assert(
       RuntimeOffsets::hiddenClassFlags % 2 == 0 &&
           RuntimeOffsets::hiddenClassFlags < maxNaturalBaseOffset(2),
@@ -245,8 +242,21 @@ void Emitter::emitPutByValFastArrayTier(
   emit_shv_load_is_empty(a, xTemp1, a64::Mem(xLoc));
   a.b_eq(helperLab);
 
-  // Store, if the write barrier for it is a no-op or a card-dirty.
-  emitSafeStoreOrSlow(xLoc, xShv, xValue, xTemp1, xTemp2, helperLab);
+  // Store, if the write barrier for it is a no-op or a card-dirty. Under
+  // boxed doubles this also encodes the value, boxing a double that needs
+  // it.
+#ifdef HERMESVM_BOXED_DOUBLES
+  emitSafeStoreOrSlow(
+      xLoc,
+      xValue,
+      xTemp1,
+      xTemp2,
+      xTemp3,
+      JitCounter::NumPutByValBoxes,
+      helperLab);
+#else
+  emitSafeStoreOrSlow(xLoc, xValue, xValue, xTemp1, xTemp2, helperLab);
+#endif
 }
 #endif // HERMES_JIT_INLINE_SAFE_STORE
 
@@ -1718,8 +1728,8 @@ void Emitter::emitGetByValFastArrayTier(
   // hold. HV64: identity, nothing is emitted. HV32/BOXED: the same total
   // (never-declining) small-value/compressed-pointer/boxed-double decode
   // getOwnBySlotIdx() uses for a property slot's SmallHermesValue -- this is
-  // the load side's mirror of emit_shv_encode_for_slot_or_slow(), and unlike
-  // that encode it never has anything to decline: every SmallHermesValue
+  // the load side's mirror of emit_shv_encode_or_slow(), and unlike that
+  // encode it never has anything to decline or to box: every SmallHermesValue
   // this element slot can hold decodes to some HermesValue.
   asmjit::Label doneLab = a.newLabel();
   emit_sh_shv_decode(a, xRes, doneLab);
@@ -2531,29 +2541,29 @@ void Emitter::emitPutByIdInlineTier(
   HWReg hwLoc = allocTempGpX();
   HWReg hwTemp1 = allocTempGpX();
   HWReg hwTemp2 = allocTempGpX();
+#ifdef HERMESVM_BOXED_DOUBLES
+  // emitSafeStoreOrSlow()'s third temporary, for the encode and the box arm.
+  // Allocated last, so the registers above are the default mode's.
+  HWReg hwTemp3 = allocTempGpX();
+#endif
   const a64::GpX xTarget = hwTarget.a64GpX();
   const a64::GpX xValue = hwValue.a64GpX();
   const a64::GpX xLoc = hwLoc.a64GpX();
   const a64::GpX xTemp1 = hwTemp1.a64GpX();
   const a64::GpX xTemp2 = hwTemp2.a64GpX();
+#ifdef HERMESVM_BOXED_DOUBLES
+  const a64::GpX xTemp3 = hwTemp3.a64GpX();
+#endif
   freeReg(hwLoc);
   freeReg(hwTemp1);
   freeReg(hwTemp2);
+#ifdef HERMESVM_BOXED_DOUBLES
+  freeReg(hwTemp3);
+#endif
   freeFRTemp(frTarget);
   freeFRTemp(frValue);
 
   // Code generation starts here.
-
-  // The value has to be encoded into the SmallHermesValue a property slot
-  // actually holds, and one value cannot be: a double that would need a
-  // heap-allocated BoxedDouble is declined here. Doing that FIRST, before any
-  // guard, is what makes the decline cheap -- it skips the whole chain below
-  // rather than running it and then giving up. xTemp2 holds the result from
-  // here to the store; no guard touches it. In the default heap-value mode
-  // this emits nothing at all -- not even the comment, which the encoder
-  // itself writes -- and `xShv` is `xValue`.
-  const a64::GpX &xShv =
-      emit_shv_encode_for_slot_or_slow(a, xTemp2, xValue, xTemp1, helperLab);
 
   // Is the target an object?
   emit_sh_ljs_is_object(a, xTemp1, xTarget);
@@ -2566,7 +2576,7 @@ void Emitter::emitPutByIdInlineTier(
   emit_sh_cp_decode_non_null(a, xTemp1);
   // xTemp1 = hc->lazyJITId, a zero-extending 16-bit load.
   a.ldrh(xTemp1.w(), a64::Mem(xTemp1, RuntimeOffsets::hiddenClassLazyJITId));
-  // xScratch, not xTemp2: xTemp2 is carrying the encoded value to the store.
+  // xScratch holds the id when it is not a compare immediate.
   emit_cmp_imm32(a, xTemp1.w(), clazzID, xScratch.w());
   a.b_ne(helperLab);
 
@@ -2590,8 +2600,21 @@ void Emitter::emitPutByIdInlineTier(
   assert(ofs <= 0xFFFFFF && "slot offset must fit emit_add_imm_u24()");
   emit_add_imm_u24(a, xLoc, (uint32_t)ofs);
 
-  // Store, if the write barrier for it is a no-op or a card-dirty.
-  emitSafeStoreOrSlow(xLoc, xShv, xValue, xTemp1, xTemp2, helperLab);
+  // Store, if the write barrier for it is a no-op or a card-dirty. Under
+  // boxed doubles this also encodes the value, boxing a double that needs
+  // it.
+#ifdef HERMESVM_BOXED_DOUBLES
+  emitSafeStoreOrSlow(
+      xLoc,
+      xValue,
+      xTemp1,
+      xTemp2,
+      xTemp3,
+      JitCounter::NumPutByIdBoxes,
+      helperLab);
+#else
+  emitSafeStoreOrSlow(xLoc, xValue, xValue, xTemp1, xTemp2, helperLab);
+#endif
 }
 #endif // HERMES_JIT_INLINE_SAFE_STORE
 

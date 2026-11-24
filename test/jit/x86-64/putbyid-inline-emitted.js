@@ -26,14 +26,15 @@
 // slot is four bytes wide under compressed pointers and eight otherwise, so
 // the store is a dword there and a qword elsewhere. And under boxed doubles
 // a slot holds a SmallHermesValue rather than a HermesValue, so the value is
-// encoded first -- the dispatch pinned below, whose one declining arm is a
-// double that would have to be boxed on the heap.
+// encoded -- the dispatch pinned below, whose number arm sends a double that
+// does not fit inline to the box arm.
 //
-// THE ENCODE COMES FIRST, ahead of every guard, and the order below pins
-// that. It is not cosmetic: a value with no inline encoding is the cheapest
-// thing this tier can reject, and rejecting it before the guards is what
-// keeps a store that will decline from paying for the class check as well.
-// On Box2D two thirds of the stores reaching these tiers decline.
+// THE ENCODE FOLLOWS THE BARRIER PREDICATE'S DECLINING CHECKS, and the
+// order below pins that: once a double that needs a box is boxed inline
+// instead of declined, no encode outcome is a cheap early reject any more,
+// and the box allocation must follow every check that can decline, so
+// that a box is never allocated and abandoned (spec
+// 2026-10-29-jit-inline-boxed-double-store-design.md).
 //
 // Threshold mode, not -Xjit=force: the tier is emitted only when the site's
 // write cache already names a hidden class, which needs the function to have
@@ -67,75 +68,21 @@ print(o.p);
 // SPEC-LABEL:setIndirect:
 // SPEC: // Put to object specialization
 //
-// Under boxed doubles the value is encoded into a SmallHermesValue before
-// anything else, mirroring HermesValue32::encodeHermesValue(): the ETag
-// selects between the inline ("compressed HV64") case, the three pointer
-// tags and Symbol. The inline case is the one that can fail -- a double
-// whose low bits are not zero would need a heap-allocated BoxedDouble, and
-// emitted code cannot allocate, so it goes to the helper with nothing
-// stored. Nothing at all is emitted here in HV64, not even the comment,
-// because there a slot holds the HermesValue itself.
-// SPEC-HV32: // Encode the value as a SmallHermesValue
-// SPEC-HV32: sar {{.*}}, 0x2F
-// SPEC-HV32: cmp {{.*}}, 0xFFFFFFFFFFFFFFF6
-// SPEC-HV32: ja [[NOTNUM:L[0-9]+]]
-// The compression test: with a 29-bit payload, the low 35 bits must be zero.
-// SPEC-HV32: shl {{.*}}, 0x1D
-// SPEC-HV32: jnz [[SLOW:L[0-9]+]]
-// SPEC-HV32: shr {{.*}}, 0x20
-// SPEC-HV32: [[NOTNUM]]:
-// SPEC-HV32: cmp {{.*}}, 0xFFFFFFFFFFFFFFFA
-// SPEC-HV32: jb [[SYM:L[0-9]+]]
-// A pointer: the HermesValue tag biased into the HV32 one, or-ed into the
-// compressed pointer.
-// SPEC-HV32: sar {{.*}}, 1
-// SPEC-HV32: add {{.*}}, 4
-// SPEC-HV32: sub {{.*}}, r15
-// SPEC-HV32: or {{.*}}
-// SPEC-HV32: [[SYM]]:
-// SPEC-HV32: cmp {{.*}}, 0xFFFFFFFFFFFFFFF7
-// SPEC-HV32: jne [[SLOW]]
-// SPEC-HV32: shl {{.*}}, 3
-// SPEC-HV32: or {{.*}}, 5
-//
-// The same dispatch in the boxed build without compressed pointers: a slot
-// is a full eight bytes there, so the payload is 61 bits, the compression
-// test is on the low three bits alone, the inline case needs no shift at
-// all, and a pointer needs no compression either.
-// SPEC-BOXED: // Encode the value as a SmallHermesValue
-// SPEC-BOXED: sar {{.*}}, 0x2F
-// SPEC-BOXED: cmp {{.*}}, 0xFFFFFFFFFFFFFFF6
-// SPEC-BOXED: ja [[NOTNUM:L[0-9]+]]
-// SPEC-BOXED: shl {{.*}}, 0x3D
-// SPEC-BOXED: jnz [[SLOW:L[0-9]+]]
-// SPEC-BOXED: [[NOTNUM]]:
-// SPEC-BOXED: cmp {{.*}}, 0xFFFFFFFFFFFFFFFA
-// SPEC-BOXED: jb [[SYM:L[0-9]+]]
-// SPEC-BOXED: sar {{.*}}, 1
-// SPEC-BOXED: add {{.*}}, 4
-// SPEC-BOXED: or {{.*}}
-// SPEC-BOXED: [[SYM]]:
-// SPEC-BOXED: cmp {{.*}}, 0xFFFFFFFFFFFFFFF7
-// SPEC-BOXED: jne [[SLOW]]
-// SPEC-BOXED: shl {{.*}}, 3
-// SPEC-BOXED: or {{.*}}, 5
-//
-// Only now the guard: the target must be an object, and its hidden class
-// must be the one the write cache recorded, compared by lazy JIT id. In HV64
-// this is the first thing in the tier, so it is where the helper label gets
-// its name there; in the two boxed modes the encode above already named it.
+// The guard comes first in every mode: the target must be an object, and
+// its hidden class must be the one the write cache recorded, compared by
+// lazy JIT id. It is the tier's first exit, so it is where the helper label
+// gets its name.
 // SPEC: sar {{.*}}, 0x30
 // SPEC: cmp {{.*}}, 0xFFFFFFFFFFFFFFFF
 // SPEC-HV64: jne [[SLOW:L[0-9]+]]
-// SPEC-HV32: jne [[SLOW]]
-// SPEC-BOXED: jne [[SLOW]]
+// SPEC-HV32: jne [[SLOW:L[0-9]+]]
+// SPEC-BOXED: jne [[SLOW:L[0-9]+]]
 // SPEC: movzx {{.*}}, word ptr {{.*}}
 // SPEC: cmp {{.*}}
 // SPEC: jne [[SLOW]]
 //
-// The barrier predicate. The young-generation exit stores with no barrier at
-// all; every other exit either stores and dirties one card, or declines to
-// the helper without storing.
+// The barrier predicate. Every exit before the store goes to the helper
+// without storing, or, for a young target, to the store.
 // SPEC: // Inline store with barrier predicate
 // SPEC: and {{.*}}, 0xFFFFFFFFFFC00000
 // SPEC: je [[YOUNG:L[0-9]+]]
@@ -145,23 +92,119 @@ print(o.p);
 // SPEC: jne [[SLOW]]
 // SPEC: cmp word ptr {{.*}}, 1
 // SPEC: jne [[SLOW]]
-// The store itself: one slot wide, which is four bytes only under compressed
-// pointers.
+//
+// Under boxed doubles the young exit lands on the join, after the last
+// declining check, where the value is encoded into a SmallHermesValue,
+// mirroring HermesValue32::encodeHermesValue(): the ETag selects between
+// the inline ("compressed HV64") case, the three pointer tags and Symbol. A
+// double whose low bits are not zero goes to the box arm; only a value with
+// no SmallHermesValue encoding (RawHV32) still declines. Nothing at all is
+// emitted for this in HV64, not even the comment.
+// SPEC-HV32: {{^}}[[YOUNG]]:
+// SPEC-HV32-NEXT: // Encode the value as a SmallHermesValue
+// SPEC-HV32: sar {{.*}}, 0x2F
+// SPEC-HV32: cmp {{.*}}, 0xFFFFFFFFFFFFFFF6
+// SPEC-HV32: ja [[NOTNUM:L[0-9]+]]
+// The compression test: with a 29-bit payload, the low 35 bits must be zero.
+// SPEC-HV32: shl {{.*}}, 0x1D
+// SPEC-HV32-NEXT: jnz [[BOX:L[0-9]+]]{{$}}
+// SPEC-HV32: shr {{.*}}, 0x20
+// SPEC-HV32: {{^}}[[NOTNUM]]:
+// SPEC-HV32: cmp {{.*}}, 0xFFFFFFFFFFFFFFFA
+// SPEC-HV32: jb [[SYM:L[0-9]+]]
+// A pointer: the HermesValue tag biased into the HV32 one, or-ed into the
+// compressed pointer.
+// SPEC-HV32: sar {{.*}}, 1
+// SPEC-HV32: add {{.*}}, 4
+// SPEC-HV32: sub {{.*}}, r15
+// SPEC-HV32: or {{.*}}
+// SPEC-HV32: {{^}}[[SYM]]:
+// SPEC-HV32: cmp {{.*}}, 0xFFFFFFFFFFFFFFF7
+// SPEC-HV32: jne [[SLOW]]
+// SPEC-HV32: shl {{.*}}, 3
+// SPEC-HV32: or {{.*}}, 5
+//
+// The same dispatch in the boxed build without compressed pointers: a slot
+// is a full eight bytes there, so the payload is 61 bits, the compression
+// test is on the low three bits alone, the inline case needs no shift at
+// all, and a pointer needs no compression either.
+// SPEC-BOXED: {{^}}[[YOUNG]]:
+// SPEC-BOXED-NEXT: // Encode the value as a SmallHermesValue
+// SPEC-BOXED: sar {{.*}}, 0x2F
+// SPEC-BOXED: cmp {{.*}}, 0xFFFFFFFFFFFFFFF6
+// SPEC-BOXED: ja [[NOTNUM:L[0-9]+]]
+// SPEC-BOXED: shl {{.*}}, 0x3D
+// SPEC-BOXED-NEXT: jnz [[BOX:L[0-9]+]]{{$}}
+// SPEC-BOXED: {{^}}[[NOTNUM]]:
+// SPEC-BOXED: cmp {{.*}}, 0xFFFFFFFFFFFFFFFA
+// SPEC-BOXED: jb [[SYM:L[0-9]+]]
+// SPEC-BOXED: sar {{.*}}, 1
+// SPEC-BOXED: add {{.*}}, 4
+// SPEC-BOXED: or {{.*}}
+// SPEC-BOXED: {{^}}[[SYM]]:
+// SPEC-BOXED: cmp {{.*}}, 0xFFFFFFFFFFFFFFF7
+// SPEC-BOXED: jne [[SLOW]]
+// SPEC-BOXED: shl {{.*}}, 3
+// SPEC-BOXED: or {{.*}}, 5
+//
+// The store itself: one slot wide, which is four bytes only under
+// compressed pointers. Under boxed doubles a young target, which reached it
+// through the join, is then done: no barrier for any value.
 // SPEC-HV64: mov qword ptr {{.*}}
 // SPEC-HV32: mov dword ptr {{.*}}
+// SPEC-HV32-NEXT: cmp {{.*}}, qword ptr [r15+{{[0-9]+}}]
+// SPEC-HV32-NEXT: je [[DONE:L[0-9]+]]{{$}}
 // SPEC-BOXED: mov qword ptr {{.*}}
-// The card-dirty store, reached only for an old target holding a pointer to
-// a young cell: the byte at segment start + (slot - segment start) >> 9. The
-// pointer test is made on the original HermesValue in every mode, which is
-// why its tag compare is the same everywhere.
+// SPEC-BOXED-NEXT: cmp {{.*}}, qword ptr [r15+{{[0-9]+}}]
+// SPEC-BOXED-NEXT: je [[DONE:L[0-9]+]]{{$}}
+//
+// The card decision for an inline value, made on the original HermesValue
+// in every mode, which is why its tag compare is the same everywhere: only
+// an old target holding a pointer to a young cell needs a card.
 // SPEC: sar {{.*}}, 0x30
 // SPEC: cmp {{.*}}, 0xFFFFFFFFFFFFFFFD
+//
+// Under boxed doubles the inline path then jumps to the card block it
+// shares with the box arm, which follows at once (no counting block without
+// -Xjit-emit-counters). The box arm: bump-allocate (a full young generation
+// goes to the helper), write the double, tag the pointer, store it into the
+// same slot, and recompute the segment start (t1 was an allocation
+// temporary): a young target is done, an old one always gets its card.
+// SPEC-HV32: jmp [[DIRTY:L[0-9]+]]{{$}}
+// SPEC-HV32-NEXT: {{^}}[[BOX]]:
+// SPEC-HV32-NEXT: // Box the double in the young generation
+// SPEC-HV32-NEXT: mov [[CELL:r[0-9a-z]+]], qword ptr [r15+{{[0-9]+}}]
+// SPEC-HV32: ja [[SLOW]]{{$}}
+// SPEC-HV32: mov qword ptr {{\[}}[[CELL]]+{{[0-9]+}}], {{r[0-9a-z]+}}
+// SPEC-HV32-NEXT: sub [[CELL]], r15
+// SPEC-HV32-NEXT: or [[CELL]], 4
+// SPEC-HV32-NEXT: mov dword ptr {{.*}}, {{.*}}
+// SPEC-HV32: and {{.*}}, 0xFFFFFFFFFFC00000
+// SPEC-HV32-NEXT: cmp {{.*}}, qword ptr [r15+{{[0-9]+}}]
+// SPEC-HV32-NEXT: je [[DONE]]{{$}}
+// SPEC-HV32-NEXT: {{^}}[[DIRTY]]:
+// SPEC-BOXED: jmp [[DIRTY:L[0-9]+]]{{$}}
+// SPEC-BOXED-NEXT: {{^}}[[BOX]]:
+// SPEC-BOXED-NEXT: // Box the double in the young generation
+// SPEC-BOXED-NEXT: mov [[CELL:r[0-9a-z]+]], qword ptr [r15+{{[0-9]+}}]
+// SPEC-BOXED: ja [[SLOW]]{{$}}
+// SPEC-BOXED: mov qword ptr {{\[}}[[CELL]]+{{[0-9]+}}], {{r[0-9a-z]+}}
+// SPEC-BOXED-NEXT: or [[CELL]], 4
+// SPEC-BOXED-NEXT: mov qword ptr {{.*}}, [[CELL]]
+// SPEC-BOXED: and {{.*}}, 0xFFFFFFFFFFC00000
+// SPEC-BOXED-NEXT: cmp {{.*}}, qword ptr [r15+{{[0-9]+}}]
+// SPEC-BOXED-NEXT: je [[DONE]]{{$}}
+// SPEC-BOXED-NEXT: {{^}}[[DIRTY]]:
+//
+// The card-dirty store: the byte at segment start + (slot - segment start)
+// >> 9.
 // SPEC: shr {{.*}}, 9
 // SPEC: mov byte ptr {{.*}}, 1
-// SPEC: [[YOUNG]]:
+// In HV64 the young-target store follows the card block.
+// SPEC-HV64: [[YOUNG]]:
 // SPEC-HV64: mov qword ptr {{.*}}
-// SPEC-HV32: mov dword ptr {{.*}}
-// SPEC-BOXED: mov qword ptr {{.*}}
+// SPEC-HV32-NEXT: {{^}}[[DONE]]:
+// SPEC-BOXED-NEXT: {{^}}[[DONE]]:
 // And the unchanged helper call the guards fall back to.
 // SPEC: [[SLOW]]:
 // SPEC: call _jit_put_by_id

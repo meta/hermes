@@ -31,8 +31,10 @@
 // test compares a whole encoded SmallHermesValue there instead of reading a
 // HermesValue's ETag; and the cell header packs its size into 24 bits rather
 // than 32, so the kind has to be masked off the jumbo-cell gate's load. The
-// value encoding the two boxed modes add is pinned by
-// putbyid-inline-emitted.js, which shares this predicate.
+// two boxed modes also encode the value, inside the barrier predicate, and
+// box a double that needs it; the encode's dispatch is pinned in full by
+// putbyid-inline-emitted.js, which shares this predicate, and its position
+// and the box arm are pinned here too.
 //
 // -Xjit=force is enough here, unlike putbyid-inline-emitted.js: this tier
 // reads no property cache, so it does not need the function to have run
@@ -50,25 +52,17 @@ print(a[1]);
 
 // SPEC-LABEL:store:
 // SPEC: // Inline fast array store
-// Under boxed doubles the value is encoded into a SmallHermesValue before
-// any guard runs, so that a value with no inline encoding is rejected
-// without paying for the chain below; the dispatch itself is pinned by
-// putbyid-inline-emitted.js, which shares the encoder. Its decline is what
-// names the helper label in those two modes.
-// SPEC-HV32: // Encode the value as a SmallHermesValue
-// SPEC-HV32: shl {{.*}}, 0x1D
-// SPEC-HV32: jnz [[SLOW:L[0-9]+]]
-// SPEC-BOXED: // Encode the value as a SmallHermesValue
-// SPEC-BOXED: shl {{.*}}, 0x3D
-// SPEC-BOXED: jnz [[SLOW:L[0-9]+]]
 //
-// Then the shape guards, in the order putByValWithReceiver_RJS makes them.
+// The shape guards, in the order putByValWithReceiver_RJS makes them. In
+// every mode the object check is the tier's first exit, so it is where the
+// helper label gets its name: the value is no longer encoded ahead of the
+// guards, but inside the barrier predicate below.
 // The target must be an object ...
 // SPEC: sar {{.*}}, 0x30
 // SPEC: cmp {{.*}}, 0xFFFFFFFFFFFFFFFF
 // SPEC-HV64: jne [[SLOW:L[0-9]+]]
-// SPEC-HV32: jne [[SLOW]]
-// SPEC-BOXED: jne [[SLOW]]
+// SPEC-HV32: jne [[SLOW:L[0-9]+]]
+// SPEC-BOXED: jne [[SLOW:L[0-9]+]]
 // ... of cell kind JSArray exactly ...
 // SPEC: cmp byte ptr {{.*}}, {{0x[0-9A-F]+}}
 // SPEC: jne [[SLOW]]
@@ -119,10 +113,56 @@ print(a[1]);
 // putbyid-inline-emitted.js.
 // SPEC: // Inline store with barrier predicate
 // SPEC: and {{.*}}, 0xFFFFFFFFFFC00000
+// Under boxed doubles a young target jumps to the join, where the value is
+// encoded once every declining check has run; a double with no inline
+// encoding goes to the box arm rather than to the helper.
+// SPEC-HV32: je [[JOIN:L[0-9]+]]{{$}}
+// SPEC-HV32: {{^}}[[JOIN]]:
+// SPEC-HV32-NEXT: // Encode the value as a SmallHermesValue
+// SPEC-HV32: shl {{.*}}, 0x1D
+// SPEC-HV32-NEXT: jnz [[BOX:L[0-9]+]]{{$}}
+// SPEC-BOXED: je [[JOIN:L[0-9]+]]{{$}}
+// SPEC-BOXED: {{^}}[[JOIN]]:
+// SPEC-BOXED-NEXT: // Encode the value as a SmallHermesValue
+// SPEC-BOXED: shl {{.*}}, 0x3D
+// SPEC-BOXED-NEXT: jnz [[BOX:L[0-9]+]]{{$}}
 // SPEC-HV64: mov qword ptr {{.*}}
 // SPEC-HV32: mov dword ptr {{.*}}
 // SPEC-BOXED: mov qword ptr {{.*}}
+// The inline value's path ends in a jump to the card block it shares with
+// the box arm, which follows at once (there is no counting block without
+// -Xjit-emit-counters). The box arm bump-allocates the BoxedDouble -- a full
+// young generation goes to the helper -- writes the double into it, tags
+// the (under HV32, compressed) pointer, stores it, and dirties an old
+// target's card unconditionally: a box is always young.
+// SPEC-HV32: jmp [[DIRTY:L[0-9]+]]{{$}}
+// SPEC-HV32-NEXT: {{^}}[[BOX]]:
+// SPEC-HV32-NEXT: // Box the double in the young generation
+// SPEC-HV32-NEXT: mov [[CELL:r[0-9a-z]+]], qword ptr [r15+{{[0-9]+}}]
+// SPEC-HV32: ja [[SLOW]]{{$}}
+// SPEC-HV32: mov qword ptr {{\[}}[[CELL]]+{{[0-9]+}}], {{r[0-9a-z]+}}
+// SPEC-HV32-NEXT: sub [[CELL]], r15
+// SPEC-HV32-NEXT: or [[CELL]], 4
+// SPEC-HV32-NEXT: mov dword ptr {{.*}}, {{.*}}
+// SPEC-HV32: and {{.*}}, 0xFFFFFFFFFFC00000
+// SPEC-HV32-NEXT: cmp {{.*}}, qword ptr [r15+{{[0-9]+}}]
+// SPEC-HV32-NEXT: je [[DONE:L[0-9]+]]{{$}}
+// SPEC-HV32-NEXT: {{^}}[[DIRTY]]:
+// SPEC-BOXED: jmp [[DIRTY:L[0-9]+]]{{$}}
+// SPEC-BOXED-NEXT: {{^}}[[BOX]]:
+// SPEC-BOXED-NEXT: // Box the double in the young generation
+// SPEC-BOXED-NEXT: mov [[CELL:r[0-9a-z]+]], qword ptr [r15+{{[0-9]+}}]
+// SPEC-BOXED: ja [[SLOW]]{{$}}
+// SPEC-BOXED: mov qword ptr {{\[}}[[CELL]]+{{[0-9]+}}], {{r[0-9a-z]+}}
+// SPEC-BOXED-NEXT: or [[CELL]], 4
+// SPEC-BOXED-NEXT: mov qword ptr {{.*}}, [[CELL]]
+// SPEC-BOXED: and {{.*}}, 0xFFFFFFFFFFC00000
+// SPEC-BOXED-NEXT: cmp {{.*}}, qword ptr [r15+{{[0-9]+}}]
+// SPEC-BOXED-NEXT: je [[DONE:L[0-9]+]]{{$}}
+// SPEC-BOXED-NEXT: {{^}}[[DIRTY]]:
 // SPEC: mov byte ptr {{.*}}, 1
+// SPEC-HV32-NEXT: {{^}}[[DONE]]:
+// SPEC-BOXED-NEXT: {{^}}[[DONE]]:
 //
 // And the helper call the guards fall back to: an indirect call through
 // the site's mutable helper slot (spec: "Slow-path demotion: the pointer

@@ -471,8 +471,12 @@ debug alloc id in debug builds). Used by `newObject`,
 `_jit_new_empty_object_for_buffer` / interpreter buffer handlers for the
 non-fast cases), environment creation (`createEnvironment`,
 `createFunctionEnvironment` inline-initialize slots to undefined), and
-`alloc2InYoung` allocates object+propstorage pairs. Allocation slow paths
-call the corresponding `_sh_ljs_*`/`_interpreter_*` helpers.
+`alloc2InYoung` allocates object+propstorage pairs. Under boxed doubles the
+two inline store tiers allocate too: the box arm of `emitSafeStoreOrSlow`
+bump-allocates a `BoxedDouble` with `allocInYoung` (see "Inline write
+barrier"); in ASan builds that puts the unpoison call inside the predicate,
+with the GP temps saved. Allocation slow paths call the corresponding
+`_sh_ljs_*`/`_interpreter_*` helpers.
 
 Since the JIT stores into freshly allocated young-gen cells before any
 safepoint, those initializing stores need no write barriers (this is also why
@@ -527,34 +531,46 @@ goes through one shared predicate,
 itself only when Hades's write barrier for it is provably a no-op or a
 single card-dirty; every other case jumps to the caller's helper label
 without storing. The design -- the decision sequence, the first-unit
-precondition, the callers' bounds, the encode's per-tag rules and its
-decline case -- is architecture-independent; only instruction selection
-differs, and the two backends' files are comment-for-comment parallel where
-they agree. Full derivation, including the source citations for each fact
+precondition, the callers' bounds, the encode's per-tag rules and the box
+arm -- is architecture-independent; only instruction selection differs,
+and the two backends' files are comment-for-comment parallel where they
+agree. Full derivation, including the source citations for each fact
 below, is in
 `doc/superpowers/specs/2026-08-27-jit-inline-property-writes.md`.
 
 **The decision sequence**, given `loc` (slot address) and `value` (the
 64-bit HermesValue) in registers:
 
-    (in the caller, ahead of every guard:)
-    shv = encode(value)                                  (boxed doubles only)
-    if (encoding shv would need a BoxedDouble)          → HELPER
-    (in the predicate:)
     segLoc = loc & ~(kSegmentUnitSize - 1)
-    if (segLoc == runtime.heap_.youngGen_.lowLim_)      → STORE, done
+    if (segLoc == runtime.heap_.youngGen_.lowLim_)      → STORE
     if (runtime.heap_.ogMarkingBarriers_ != 0)          → HELPER
     if (compactee active)                               → HELPER
     if (word at segLoc+4 (shiftedSegmentSize) != 1)      → HELPER
-    STORE shv
+  STORE:
+    shv = encode(value)                                  (boxed doubles only;
+                                                          needs a box → BOX)
+    store shv
+    if (segLoc is young)                                 → done
     if (value is a young pointer)
+      card byte at segLoc + ((loc - segLoc) >> 9) = 1   (dirty)
+    done
+  BOX:                                                   (boxed doubles only)
+    cell = bump-allocate a BoxedDouble (young)           (full → HELPER)
+    cell->value_ = value
+    store compress(cell) | Tag::BoxedDouble
+    if (segLoc is old)
       card byte at segLoc + ((loc - segLoc) >> 9) = 1   (dirty)
 
 That is: a young-generation target needs no barrier at all; a marking
 collection in progress or a compaction in progress both need the full C++
 barrier; and a segment whose card array is not the inline one (see below)
 cannot be dirtied by this code. Otherwise the store happens, and the card
-is dirtied exactly when the stored value is itself a young pointer.
+is dirtied exactly when the stored value is a young pointer -- which a box
+always is. Only the structural guards and the barrier checks precede the
+encode; the RawHV32 rejection is inside the encode, and the
+young-generation-full fallback branches from the bump. Every decline
+precedes the slot store and the publication of a successful allocation,
+so nothing is stored, and no box is left allocated, before a decline.
 
 **The one non-obvious precondition:** `loc` must lie within the first
 `kSegmentUnitSize` bytes of its segment. The predicate derives the segment
@@ -631,42 +647,53 @@ in every mode that defines `HERMESVM_BOXED_DOUBLES` (both `HEAP_HV_PREFER32`
 and `HEAP_HV_BOXED`). `emit_shv_encode_or_slow` (`JitEmitter-internal.cpp`)
 mirrors `HermesValue32::encodeHermesValue()` case for case -- an ETag
 dispatch over the inline ("compressed HV64") values, the three pointer tags
-and Symbol -- with one difference, which is why it takes a label. A double
-whose low bits are not zero has no inline encoding: it has to be boxed in a
-heap-allocated `BoxedDouble`, and emitted code cannot allocate. That value
-is DECLINED to the helper, which boxes it there.
+and Symbol -- with one difference, which is why it takes two labels. A
+double whose low bits are not zero has no inline encoding: it has to be
+boxed in a heap-allocated `BoxedDouble`. The encoder jumps to `boxLab`, and
+the box arm of `emitSafeStoreOrSlow` allocates the box in the young
+generation (`allocInYoung`), writes the double, and stores the tagged
+compressed pointer. Only a full young generation declines it, to the
+helper; under `-Xjit-emit-counters` through an out-of-line block that
+counts `NumStoreBoxFallbacks`. A RawHV32 still declines to the helper, and
+so, under `HERMESVM_SANITIZE_HANDLES`, does every value except a pointer
+or a symbol: numbers, undefined, null and booleans.
 
-**The encode runs first, before the tier's guards**, through the
-mode-selecting wrapper `emit_shv_encode_for_slot_or_slow` (which emits
-nothing at all in `HEAP_HV_64` and returns the HermesValue itself, so the
-tiers need no `#ifdef`). This is a measured ordering, not a stylistic one. A
-value with no inline encoding is the cheapest thing a tier can reject, and
-rejecting it before the guards means such a store does not also pay for the
-class compare, the cell-kind and flags tests, the index conversion and the
-storage load. A scratch counter over the HV32 Release build put the decline
-rate at **63.6%** on Octane Box2D (11.1M declines out of 17.4M tier entries)
-against **0.01%** on pixel-grid, 0% on Richards and DeltaBlue, and 2.5% on
-relay -- Box2D writes mostly doubles, and most physics doubles do not
-compress. Moving the encode ahead of the guards recovered about half of the
-Box2D regression the tiers had introduced (-2.5% to -1.1% against the
-pre-Stage-4 build) and gained on pixel-grid as well (+2.4%).
+**The encode runs inside the predicate, after its declining checks**
+(doc/superpowers/specs/2026-10-29-jit-inline-boxed-double-store-design.md).
+It used to run first, ahead of the tiers' guards, when most declines were
+box declines: a scratch counter over the HV32 Release build put the decline
+rate at 63.6% on Octane Box2D, and rejecting those values before the guards
+halved Box2D's regression. Once a box no longer declines, the early encode
+has nothing cheap left to reject, and every decline must precede the slot
+store and the publication of a successful box allocation, so that a box is
+never allocated and abandoned and nothing is stored before a decline: the
+structural and barrier checks precede the encode for an old target, the
+encode's RawHV32 rejection precedes the box arm, and a full young
+generation branches from the bump before the new level is stored. The cost:
+a box store declined for marking or compaction now runs the tier's guards
+first, every store under boxed doubles repeats the young-target compare
+after storing, and an inline (non-box) store of a young pointer into an old
+target takes one more unconditional `jmp` (`b` on arm64) to reach the card
+block, which the box arm shares.
 
-The tiers hold the encoded value in `temp2` from there to the store; no
-guard touches that register, so it costs nothing to keep. Inside the
-predicate `temp2` doubles as scratch, which is sound because it is not
-reused until after the store, by which point the encoded value is dead.
-That invariant is free on x86-64, whose guards compare against memory and
-immediates directly; on arm64 it had to be arranged, because every mask,
-wide immediate and runtime word there needs a register first. Those all go
-to `xScratch` (x16), the backend's non-allocated scratch, which nothing
-holds a value in across an emitter call and which none of these sequences
-emits a call inside of.
+Under boxed doubles the predicate takes a third temporary, `t3`, which
+each tier picks in its prologue beside the others (no code is emitted for
+that; the x86-64 PutByVal tier then uses at most 7 of its 8 GP temps). At
+the join `loc`, `value` and `t1` (the segment start) are live; the encode
+writes the SmallHermesValue to `t2` with `t3` as scratch; the box arm uses
+`t2` for the cell and `t1` and `t3` as allocation temporaries, then
+recomputes `t1` from `loc`. Nothing is live in a vector register or in
+`xScratch` there, which is what `allocInYoung` requires in ASan builds,
+where it calls `__asan_unpoison_memory_region` with the GP temps saved. On
+arm64 every mask, wide immediate and runtime word the guards and the
+predicate test goes to `xScratch` (x16), the backend's non-allocated
+scratch, and is consumed by the next instruction.
 
-Everything in the predicate, the card decision included, is phrased in
-terms of the original 64-bit value. The two agree on which values are
-pointers -- the one pointer a SmallHermesValue has that a HermesValue does
-not, a `BoxedDouble`, was already declined -- and a HermesValue carries its
-pointer uncompressed, which is what the young-segment compare needs.
+The card decision for an inline value is phrased in terms of the original
+64-bit value: the two agree on which values are pointers, and a HermesValue
+carries its pointer uncompressed, which is what the young-segment compare
+needs. A box is young by construction, so its store into an old slot
+dirties the card unconditionally.
 
 **Build-state gate.** The predicate and its two consumers compile in when
 `HERMES_JIT_INLINE_SAFE_STORE` is set (`include/hermes/VM/JIT/Config.h`).
@@ -684,15 +711,25 @@ one FileCheck prefix and what differs under `<PREFIX>-HV64` / `-HV32` /
 real, collecting heap and would fail -- loudly, under ASan -- if the
 card-dirty store were removed; the last of those drives every
 SmallHermesValue shape through both tiers, including the non-compressible
-doubles that must take the helper. All three are architecture-independent
-and run on both backends. `test/jit/x86-64/putbyid-inline-emitted.js` and
+doubles the box arm stores. All three are architecture-independent and run
+on both backends. `test/jit/x86-64/putbyid-inline-emitted.js` and
 `putbyval-inline-emitted.js` check the emitted instructions directly, in
 all three heap-value modes; `test/jit/putbyid-inline-emitted-arm64.js` and
 `test/jit/putbyval-inline-emitted-arm64.js` are their arm64 counterparts,
-also per mode. A caveat on
-the behavioral tests: a missing card dirty only fails loudly under
-`HERMES_SLOW_DEBUG`, where `HadesGC::verifyCardTable()` catches it: in a
-Release build the same defect surfaces as a wrong printed value, or as
+also per mode. `test/jit/store-boxed-double-byval.js` and `-byid.js` count
+the inline boxes per tier (`NumPutByValBoxes`, `NumPutByIdBoxes`) into
+young and old targets; `-card.js` stores one box into an old array
+element, an old direct slot and an old out-of-line slot and forces a young
+collection, so a missing card fails in `verifyCardTable()`; `-ygfull.js`
+fills the young generation with boxes, with and without counters
+(`NumStoreBoxFallbacks`), and `-ygfull-byid.js` does the same through the
+PutById tier, into a direct and an out-of-line slot; `-duo.js` counts the
+boxes stored by the second version of a duo PutByVal site, which puts the
+typed-array tier first; and `-values.js` round-trips the encoding's edge
+values through both tiers and a duo PutByVal site against the interpreter.
+A caveat on the behavioral tests: a missing card dirty only fails loudly
+under `HERMES_SLOW_DEBUG`, where `HadesGC::verifyCardTable()` catches it:
+in a Release build the same defect surfaces as a wrong printed value, or as
 nothing at all if the reclaimed memory is not reused before the next read.
 A green run of these tests on a Release tree is not, by itself, evidence
 of barrier correctness -- the ASan+Debug (`HERMES_SLOW_DEBUG`) run is.
@@ -708,9 +745,9 @@ so inlining them was not pursued.
 
 **Measured effect on HV32** (`HEAP_HV_PREFER32`, Release, `-Xjit`,
 interleaved A/B against the same tree with the tiers compiled out, medians
-of 4-14 paired runs, encode-first ordering): pixel-grid **+6.5%**,
-pixel-grid-small +1.0%, Octane Richards **+9.6%**, DeltaBlue +1.5%, relay
--0.8%, **Box2D -1.1%**.
+of 4-14 paired runs, encode-first ordering, measured before the box arm):
+pixel-grid **+6.5%**, pixel-grid-small +1.0%, Octane Richards **+9.6%**,
+DeltaBlue +1.5%, relay -0.8%, **Box2D -1.1%**.
 
 **arm64 is unmeasured, deliberately.** The arm64 backend runs here only
 under `qemu-user`, where wall-clock numbers say nothing about the hardware,
@@ -722,16 +759,12 @@ are the expectation for arm64 too: the emitted sequences are the same
 decisions in the same order, and nothing in them is x86-specific beyond
 instruction selection.
 
-Box2D is the one benchmark the tiers lose on, and the reason is the decline
-rate quoted above: with two thirds of its stores unencodable, the tiers can
-only add work there. Moving the encode ahead of the guards halved that loss
-(it was -2.5% with the encode inside the predicate) but did not remove it;
-what remains is the encode's own handful of instructions on every store,
-plus the tier prologue on the stores that fail a guard rather than the
-encode. Closing the rest would need a per-site record of how often a site
-declined, so that a site which always declines can stop emitting -- or
-stop executing -- the tier at all. That is a follow-up, not part of this
-series.
+Box2D was the one benchmark the tiers lost on, because two thirds of its
+stores declined as box declines; with the box arm those stores complete
+inline. What remains on the helper path under boxed doubles is a store
+declined for marking or compaction, a full young generation, and a failed
+guard. The measurements before and after are in the "Delivered" section of
+doc/superpowers/specs/2026-10-29-jit-inline-boxed-double-store-design.md.
 
 ### Recompilation
 
@@ -1433,9 +1466,10 @@ function don't-JIT.
 - Counters (`JIT_COUNTERS` in include/hermes/VM/JIT/JitCounters.h:
   NumCall, NumCallSlow, NumRecompileChecks, NumRecompiles,
   NumByValDemotions, NumByIdDemotions, NumByIdChainRefreshes,
-  NumByIdChainHits, NumByIdStringHits), with `-Xjit-emit-counters`. Emitted
-  code increments NumCall, NumCallSlow, NumByIdChainHits and
-  NumByIdStringHits inline; the runtime increments the rest. Only the chain
+  NumByIdChainHits, NumByIdStringHits, NumPutByValBoxes, NumPutByIdBoxes,
+  NumStoreBoxFallbacks), with `-Xjit-emit-counters`. Emitted code increments
+  NumCall, NumCallSlow, NumByIdChainHits, NumByIdStringHits and the three
+  box counters inline; the runtime increments the rest. Only the chain
   refreshes (NumByIdChainRefreshes) go through `JITContext::incrementCounter`;
   the other runtime counters increment the counter array directly.
 - Linux `perf` jitdump + source-comment sidecar via `PerfJitDump`.
@@ -1613,8 +1647,8 @@ bring-up milestones are done:
   - `test/jit/inline-store-shv-shapes.js` -- drives every
     SmallHermesValue shape through both tiers into old objects across
     young-gen collections, including the doubles that have no inline
-    encoding and must take the helper and be boxed. Run on every backend
-    that has the tiers.
+    encoding and are boxed in the young generation by the box arm. Run on
+    every backend that has the tiers.
   - `test/jit/putbyid-inline-emitted-arm64.js` and
     `test/jit/putbyval-inline-emitted-arm64.js` -- the arm64 counterparts
     of the two `-emitted` tests, `REQUIRES: jit-arch-arm64` and so
@@ -1796,12 +1830,12 @@ The inline write barrier (see "Inline write barrier" above) is
 one more thing this matrix has to cover, and one of the few that is not
 just an encoding difference: the PutById and PutByVal inline tiers exist in
 all three trees, but under boxed doubles they encode the value into a
-SmallHermesValue first and decline the doubles that would have to be boxed,
-and under compressed pointers every slot address is scaled by four rather
-than eight. `test/lit.cfg`'s `%hv-mode` substitution is what lets one
-emitted-code test pin all of that per mode, under a `-HV64` / `-HV32` /
-`-BOXED` FileCheck prefix, instead of a mode-gating lit feature that would
-skip two of the three.
+SmallHermesValue and box the doubles that need it, and under compressed
+pointers every slot address is scaled by four rather than eight.
+`test/lit.cfg`'s `%hv-mode` substitution is what lets one emitted-code test
+pin all of that per mode, under a `-HV64` / `-HV32` / `-BOXED` FileCheck
+prefix, instead of a mode-gating lit feature that would skip two of the
+three.
 
 Build and run both:
 
