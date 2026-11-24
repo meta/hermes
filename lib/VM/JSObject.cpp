@@ -3213,9 +3213,28 @@ bool JSObject::parentsAllowEpochCaching(JSObject *self, PointerBase &base) {
   return true;
 }
 
+/// \return true if setCachedUsingEpoch would leave \p obj unchanged: it is
+/// marked already, or it is typed, which setCachedUsingEpoch skips.
+static bool isEpochMarkNoop(JSObject *obj, PointerBase &base) {
+  return obj->isCachedUsingEpoch(base) || obj->getClass(base)->isTyped();
+}
+
 void JSObject::markParentsCachedUsingEpoch(
     Handle<JSObject> self,
     Runtime &runtime) {
+  // An earlier fill has usually marked the whole chain already, so return
+  // without rooting anything if marking would change no object.
+  // A marked object is never lazy, since setCachedUsingEpoch materializes
+  // before marking, so skipping one never skips a materialization.
+  {
+    NoAllocScope noAlloc{runtime};
+    JSObject *cur = self->getParent(runtime);
+    while (cur && isEpochMarkNoop(cur, runtime))
+      cur = cur->getParent(runtime);
+    if (!cur)
+      return;
+  }
+
   struct : public Locals {
     PinnedValue<JSObject> cur;
   } lv;
@@ -3224,7 +3243,8 @@ void JSObject::markParentsCachedUsingEpoch(
   // Mark everything along the prototype chain as a cached parent.
   for (lv.cur = self->getParent(runtime); lv.cur.get() != nullptr;
        lv.cur = lv.cur->getParent(runtime)) {
-    JSObject::setCachedUsingEpoch(lv.cur, runtime);
+    if (!isEpochMarkNoop(lv.cur.get(), runtime))
+      JSObject::setCachedUsingEpoch(lv.cur, runtime);
   }
 }
 

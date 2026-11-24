@@ -1575,7 +1575,9 @@ class JSObject : public GCCell {
   static bool parentsAllowEpochCaching(JSObject *self, PointerBase &base);
 
   /// Mark every object on \p self's prototype chain with
-  /// setCachedUsingEpoch. May allocate.
+  /// setCachedUsingEpoch, skipping objects already marked and typed objects,
+  /// which setCachedUsingEpoch leaves unchanged. Allocates only if some
+  /// object on the chain is neither.
   static void markParentsCachedUsingEpoch(
       Handle<JSObject> self,
       Runtime &runtime);
