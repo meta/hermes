@@ -589,29 +589,6 @@
     "test262/test/annexB/built-ins/Object/prototype/__proto__/set-cycle-shadowed.js",
     {
       "paths": [
-        "test262/test/built-ins/Array/prototype/sort/precise-comparefn-throws.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-getter-appends-elements.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-getter-decreases-length.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-getter-deletes-predecessor.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-getter-deletes-successor.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-getter-increases-length.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-getter-pops-elements.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-getter-sets-predecessor.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-getter-sets-successor.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-prototype-accessors.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-setter-appends-elements.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-setter-decreases-length.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-setter-deletes-predecessor.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-setter-deletes-successor.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-setter-increases-length.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-setter-pops-elements.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-setter-sets-predecessor.js",
-        "test262/test/built-ins/Array/prototype/sort/precise-setter-sets-successor.js"
-      ],
-      "comment": "Array.prototype.sort is broken for exotic arrays with accessors/proxies. The internal swap uses deleteComputed which fails on non-configurable properties, throwing TypeError instead of handling them per spec."
-    },
-    {
-      "paths": [
         "test262/test/built-ins/Array/prototype/concat/create-ctor-non-object.js",
         "test262/test/built-ins/Array/prototype/concat/create-ctor-poisoned.js",
         "test262/test/built-ins/Array/prototype/concat/is-concat-spreadable-get-order.js",

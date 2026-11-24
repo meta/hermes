@@ -21,21 +21,18 @@ function makeCmp(a) {
   };
 }
 
-// A plain array is sorted as a copy, and writing the result back to a
-// getter-only element throws.
-var a = [0, 1];
-try {
-  a.sort(makeCmp(a));
-  print("no throw");
-} catch (e) {
-  print(e.name);
+// Both arrays are sorted as a copy, so writing the result back to a
+// getter-only element throws, whether the array takes the fast path or not.
+function check(arr) {
+  try {
+    arr.sort(makeCmp(arr));
+    print("no throw");
+  } catch (e) {
+    print(e.name);
+  }
 }
+check([0, 1]);
 // CHECK: TypeError
-
-// A subclass instance is sorted in place by StandardSortModel, whose swap
-// must not use a descriptor the getter invalidated.
 class Sub extends Array {}
-var b = Sub.of(0, 1);
-b.sort(makeCmp(b));
-print("done");
-// CHECK-NEXT: done
+check(Sub.of(0, 1));
+// CHECK-NEXT: TypeError

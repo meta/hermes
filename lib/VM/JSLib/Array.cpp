@@ -24,6 +24,9 @@
 
 #include "llvh/ADT/ScopeExit.h"
 
+#include <algorithm>
+#include <vector>
+
 namespace hermes {
 namespace vm {
 
@@ -1514,283 +1517,11 @@ CallResult<HermesValue> arrayPrototypePush(void *, Runtime &runtime) {
 }
 
 namespace {
-/// General object sorting model used by custom sorting routines.
-/// Provides a model by which to less and swap elements, using the [[Get]],
-/// [[Put]], and [[Delete]] internal methods of a supplied Object. Should be
-/// allocated on the stack, because it creates its own internal GCScope, with
-/// reusable MutableHandle<>-s that are used in the less and swap methods.
-/// These allow for quick accesses without allocating a great number of new
-/// handles every time we want to compare different elements.
-/// Usage example:
-///   StandardSortModel sm{runtime, obj, compareFn};
-///   quickSort(sm, 0, length);
-/// Note that this is generic and does nothing different if passed a JSArray.
-class StandardSortModel : public SortModel {
- private:
-  /// Runtime to sort in.
-  Runtime &runtime_;
-
-  /// Scope to allocate handles in, gets destroyed with this.
-  GCScope gcScope_;
-
-  /// JS comparison function, return -1 for less, 0 for equal, 1 for greater.
-  /// If null, then use the built in < operator.
-  Handle<Callable> compareFn_;
-
-  /// Object to sort elements [0, length).
-  Handle<JSObject> obj_;
-
-  /// Preallocate these PVs so that we don't need to create them locally in
-  /// every method call.
-  struct : Locals {
-    /// Temporary handles for property name.
-    PinnedValue<SymbolID> aTmpNameStorage;
-    PinnedValue<SymbolID> bTmpNameStorage;
-    /// Handles for two indices.
-    PinnedValue<> a;
-    PinnedValue<> b;
-    /// Handles for the values at two indices.
-    PinnedValue<> aValue;
-    PinnedValue<> bValue;
-    /// Handles for the objects the values are retrieved from.
-    PinnedValue<JSObject> aDescObj;
-    PinnedValue<JSObject> bDescObj;
-    PinnedValue<> tmpValue;
-
-  } lv_;
-  LocalsRAII lraii_;
-
-  /// Marker created after initializing all fields so handles allocated later
-  /// can be flushed.
-  GCScope::Marker gcMarker_;
-
- public:
-  StandardSortModel(
-      Runtime &runtime,
-      Handle<JSObject> obj,
-      Handle<Callable> compareFn)
-      : runtime_(runtime),
-        gcScope_(runtime),
-        compareFn_(compareFn),
-        obj_(obj),
-        lraii_(runtime_, &lv_),
-        gcMarker_(gcScope_.createMarker()) {}
-
-  /// Use getComputed and putComputed to swap the values at obj[a] and obj[b].
-  ExecutionStatus swap(uint32_t a, uint32_t b) override {
-    // Ensure that we don't leave here with any new handles.
-    GCScopeMarkerRAII gcMarker{gcScope_, gcMarker_};
-
-    lv_.a = HermesValue::encodeTrustedNumberValue(a);
-    lv_.b = HermesValue::encodeTrustedNumberValue(b);
-
-    ComputedPropertyDescWithSymStorage aDesc{lv_.aTmpNameStorage};
-    JSObject::getComputedPrimitiveDescriptor(
-        obj_, runtime_, lv_.a, lv_.aDescObj, aDesc);
-
-    if (lv_.aDescObj.get()) {
-      if (LLVM_LIKELY(!aDesc.flags.proxyObject)) {
-        auto res = JSObject::getComputedPropertyValue_RJS(
-            obj_, runtime_, lv_.aDescObj, aDesc.get(), lv_.aDescObj);
-        if (res == ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        if (LLVM_LIKELY(!(*res)->isEmpty())) {
-          lv_.aValue = std::move(*res);
-        }
-      } else {
-        auto keyRes = toPropertyKey(runtime_, lv_.a);
-        if (keyRes == ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        lv_.a = keyRes->get();
-        CallResult<bool> hasPropRes = JSProxy::getOwnProperty(
-            lv_.aDescObj, runtime_, lv_.a, aDesc, nullptr);
-        if (hasPropRes == ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        if (*hasPropRes) {
-          auto res = JSProxy::getComputed(lv_.aDescObj, runtime_, lv_.a, obj_);
-          if (res == ExecutionStatus::EXCEPTION) {
-            return ExecutionStatus::EXCEPTION;
-          }
-          lv_.aValue = std::move(*res);
-        } else {
-          lv_.aDescObj = nullptr;
-        }
-      }
-    }
-
-    ComputedPropertyDescWithSymStorage bDesc{lv_.bTmpNameStorage};
-    JSObject::getComputedPrimitiveDescriptor(
-        obj_, runtime_, lv_.b, lv_.bDescObj, bDesc);
-
-    if (lv_.bDescObj.get()) {
-      if (LLVM_LIKELY(!bDesc.flags.proxyObject)) {
-        auto res = JSObject::getComputedPropertyValue_RJS(
-            obj_, runtime_, lv_.bDescObj, bDesc.get(), lv_.bDescObj);
-        if (res == ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        if (LLVM_LIKELY(!(*res)->isEmpty())) {
-          lv_.bValue = std::move(*res);
-        }
-      } else {
-        auto keyRes = toPropertyKey(runtime_, lv_.b);
-        if (keyRes == ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        lv_.b = keyRes->get();
-        CallResult<bool> hasPropRes = JSProxy::getOwnProperty(
-            lv_.bDescObj, runtime_, lv_.b, bDesc, nullptr);
-        if (hasPropRes == ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        if (*hasPropRes) {
-          auto res = JSProxy::getComputed(lv_.bDescObj, runtime_, lv_.b, obj_);
-          if (res == ExecutionStatus::EXCEPTION) {
-            return ExecutionStatus::EXCEPTION;
-          }
-          lv_.bValue = std::move(*res);
-        } else {
-          lv_.bDescObj = nullptr;
-        }
-      }
-    }
-
-    if (lv_.bDescObj.get()) {
-      if (LLVM_UNLIKELY(
-              JSObject::putComputed_RJS(
-                  obj_,
-                  runtime_,
-                  lv_.a,
-                  lv_.bValue,
-                  PropOpFlags().plusThrowOnError()) ==
-              ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
-      }
-    } else {
-      if (LLVM_UNLIKELY(
-              JSObject::deleteComputed(
-                  obj_, runtime_, lv_.a, PropOpFlags().plusThrowOnError()) ==
-              ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
-      }
-    }
-
-    if (lv_.aDescObj.get()) {
-      if (LLVM_UNLIKELY(
-              JSObject::putComputed_RJS(
-                  obj_,
-                  runtime_,
-                  lv_.b,
-                  lv_.aValue,
-                  PropOpFlags().plusThrowOnError()) ==
-              ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
-      }
-    } else {
-      if (LLVM_UNLIKELY(
-              JSObject::deleteComputed(
-                  obj_, runtime_, lv_.b, PropOpFlags().plusThrowOnError()) ==
-              ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
-      }
-    }
-
-    return ExecutionStatus::RETURNED;
-  }
-
-  /// If compareFn isn't null, return compareFn(obj[a], obj[b])
-  /// If compareFn is null, return -1 if obj[a] < obj[b], 1 if obj[a] > obj[b],
-  /// 0 otherwise
-  CallResult<int> compare(uint32_t a, uint32_t b) override {
-    // Ensure that we don't leave here with any new handles.
-    GCScopeMarkerRAII gcMarker{gcScope_, gcMarker_};
-
-    lv_.a = HermesValue::encodeTrustedNumberValue(a);
-    lv_.b = HermesValue::encodeTrustedNumberValue(b);
-
-    ComputedPropertyDescWithSymStorage aDesc{lv_.aTmpNameStorage};
-    JSObject::getComputedPrimitiveDescriptor(
-        obj_, runtime_, lv_.a, lv_.aDescObj, aDesc);
-    CallResult<PseudoHandle<>> propRes = JSObject::getComputedPropertyValue_RJS(
-        obj_, runtime_, lv_.aDescObj, aDesc.get(), lv_.a);
-    if (propRes == ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    if ((*propRes)->isEmpty()) {
-      // Spec defines empty as greater than everything.
-      return 1;
-    }
-    lv_.aValue = std::move(*propRes);
-    assert(!lv_.aValue->isEmpty());
-
-    ComputedPropertyDescWithSymStorage bDesc{lv_.bTmpNameStorage};
-    JSObject::getComputedPrimitiveDescriptor(
-        obj_, runtime_, lv_.b, lv_.bDescObj, bDesc);
-    if ((propRes = JSObject::getComputedPropertyValue_RJS(
-             obj_, runtime_, lv_.bDescObj, bDesc.get(), lv_.b)) ==
-        ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    if ((*propRes)->isEmpty()) {
-      // Spec defines empty as greater than everything.
-      return -1;
-    }
-    lv_.bValue = std::move(*propRes);
-    assert(!lv_.bValue->isEmpty());
-
-    if (lv_.aValue->isUndefined()) {
-      return lv_.bValue->isUndefined() ? 0 : 1;
-    }
-    if (lv_.bValue->isUndefined()) {
-      return -1;
-    }
-
-    if (compareFn_) {
-      // If we have a compareFn, just use that.
-      auto callRes = Callable::executeCall2(
-          compareFn_,
-          runtime_,
-          Runtime::getUndefinedValue(),
-          lv_.aValue.get(),
-          lv_.bValue.get());
-      if (LLVM_UNLIKELY(callRes == ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
-      }
-      lv_.tmpValue = std::move(*callRes);
-      auto intRes = toNumber_RJS(runtime_, lv_.tmpValue);
-      if (LLVM_UNLIKELY(intRes == ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
-      }
-      // Cannot return intRes's value directly because it can be NaN
-      auto res = intRes->getNumber();
-      return (res < 0) ? -1 : (res > 0 ? 1 : 0);
-    } else {
-      // Convert both arguments to strings and compare
-      auto aValueRes = toString_RJS(runtime_, lv_.aValue);
-      if (LLVM_UNLIKELY(aValueRes == ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
-      }
-      lv_.aValue = aValueRes->getHermesValue();
-
-      auto bValueRes = toString_RJS(runtime_, lv_.bValue);
-      if (LLVM_UNLIKELY(bValueRes == ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
-      }
-      lv_.bValue = bValueRes->getHermesValue();
-
-      return lv_.aValue->getString()->compare(lv_.bValue->getString());
-    }
-  }
-};
-
 /// A sort model that operates directly on a JSArray's indexed storage.
 /// This is only safe when the caller owns the array and user code has no
-/// reference to it (e.g. the fresh array created by toSorted). Unlike
-/// StandardSortModel, this bypasses the full property descriptor machinery
-/// and reads/writes via storage->at()/storage->set() directly.
+/// reference to it (e.g. the fresh array created by toSorted). It bypasses
+/// the property descriptor machinery and reads/writes via
+/// storage->at()/storage->set() directly.
 /// The array must not contain any holes (empty values). Its beginIndex must be
 /// 0 and elements count must be equal to length.
 /// Without a comparator, it caches ToString of the elements that are
@@ -1957,128 +1688,6 @@ class DirectSortModel : public SortModel {
   }
 };
 
-/// Perform a sort of a sparse object by querying its properties first.
-/// It cannot be a proxy or a host object because they are not guaranteed to
-/// be able to list their properties.
-CallResult<HermesValue> sortSparse(
-    Runtime &runtime,
-    Handle<JSObject> O,
-    Handle<Callable> compareFn,
-    uint64_t len) {
-  GCScope gcScope{runtime};
-
-  assert(
-      !O->isHostObject(runtime) && !O->isProxyObject(runtime) &&
-      "only non-exotic objects can be sparsely sorted");
-
-  struct : Locals {
-    PinnedValue<JSArray::StorageType> names;
-    PinnedValue<JSArray> array;
-    PinnedValue<> propName;
-    PinnedValue<> propVal;
-  } lv;
-  LocalsRAII lraii{runtime, &lv};
-
-  // This is a "non-fast" object, meaning we need to create a symbol for every
-  // property name. On the assumption that it is sparse, get all properties
-  // first, so that we only have to read the existing properties.
-
-  auto crNames = JSObject::getOwnPropertyNames(O, runtime, false);
-  if (crNames == ExecutionStatus::EXCEPTION)
-    return ExecutionStatus::EXCEPTION;
-  // Get the underlying storage containing the names.
-  lv.names = (*crNames)->getIndexedStorageNullable(runtime);
-  if (!lv.names.get()) {
-    // Indexed storage can be null if there's nothing to store.
-    return O.getHermesValue();
-  }
-
-  // Find out how many sortable numeric properties we have.
-  JSArray::StorageType::size_type numProps = 0;
-  for (JSArray::StorageType::size_type e = lv.names->size(); numProps != e;
-       ++numProps) {
-    SmallHermesValue hv = lv.names->at(numProps);
-    // Stop at the first non-number.
-    if (!hv.isNumber())
-      break;
-    // Stop if the property name is beyond "len".
-    if (hv.getNumber(runtime) >= len)
-      break;
-  }
-
-  // If we didn't find any numeric properties, there is nothing to do.
-  if (numProps == 0)
-    return O.getHermesValue();
-
-  // Create a new array which we will actually sort.
-  auto crArray = JSArray::create(runtime, numProps, numProps);
-  if (crArray == ExecutionStatus::EXCEPTION)
-    return ExecutionStatus::EXCEPTION;
-  lv.array = std::move(*crArray);
-  if (JSArray::setStorageEndIndex(lv.array, runtime, numProps) ==
-      ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
-  }
-
-  GCScopeMarkerRAII gcMarker{gcScope};
-
-  // Copy all sortable properties into the array and delete them from the
-  // source. Deleting all sortable properties makes it easy to just copy the
-  // sorted result back in the end.
-  for (decltype(numProps) i = 0; i != numProps; ++i) {
-    gcMarker.flush();
-
-    lv.propName = lv.names->at(i).unboxToHV(runtime);
-    auto res = JSObject::getComputed_RJS(O, runtime, lv.propName);
-    if (res == ExecutionStatus::EXCEPTION)
-      return ExecutionStatus::EXCEPTION;
-    // Skip empty values.
-    if (res->getHermesValue().isEmpty())
-      continue;
-
-    const auto shv = SmallHermesValue::encodeHermesValue(res->get(), runtime);
-    JSArray::unsafeSetExistingElementAt(*lv.array, runtime, i, shv);
-
-    if (JSObject::deleteComputed(
-            O, runtime, lv.propName, PropOpFlags().plusThrowOnError()) ==
-        ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
-    }
-  }
-  gcMarker.flush();
-
-  {
-    StandardSortModel sm(runtime, lv.array, compareFn);
-    if (LLVM_UNLIKELY(
-            quickSort(&sm, 0u, numProps) == ExecutionStatus::EXCEPTION))
-      return ExecutionStatus::EXCEPTION;
-  }
-
-  // Time to copy back the values.
-  for (decltype(numProps) i = 0; i != numProps; ++i) {
-    gcMarker.flush();
-
-    auto hv = lv.array->at(runtime, i).unboxToHV(runtime);
-    assert(
-        !hv.isEmpty() &&
-        "empty values cannot appear in the array out of nowhere");
-    lv.propVal = hv;
-
-    lv.propName = HermesValue::encodeTrustedNumberValue(i);
-
-    if (JSObject::putComputed_RJS(
-            O,
-            runtime,
-            lv.propName,
-            lv.propVal,
-            PropOpFlags().plusThrowOnError()) == ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
-    }
-  }
-
-  return O.getHermesValue();
-}
-
 /// \return the number of elements of \p arr, an array of length \p len, that
 /// are not holes.
 /// \pre \p arr passes arrayFastPathCheck with length \p len.
@@ -2199,9 +1808,328 @@ ExecutionStatus arrayFastPathSort(
   }
   return ExecutionStatus::RETURNED;
 }
+
+/// \return whether \p obj or an object on its prototype chain is a proxy or a
+/// host object. Only such objects can run code in [[HasProperty]] and
+/// [[Delete]], or list their own properties incompletely.
+bool hasProxyOrHostOnChain(Runtime &runtime, JSObject *obj) {
+  NoAllocScope noAlloc{runtime};
+  for (; obj; obj = obj->getParent(runtime)) {
+    if (obj->isProxyObject(runtime) || obj->isHostObject(runtime))
+      return true;
+  }
+  return false;
+}
+
+/// Append to \p keys, in ascending order, the indices in [\p from, \p len) of
+/// the own properties of \p obj, listing all of its property names.
+ExecutionStatus appendOwnIndexKeysFromNames(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    uint32_t from,
+    uint32_t len,
+    std::vector<uint32_t> &keys) {
+  GCScopeMarkerRAII marker{runtime};
+  auto namesRes = JSObject::getOwnPropertyNames(obj, runtime, false);
+  if (LLVM_UNLIKELY(namesRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  NoAllocScope noAlloc{runtime};
+  auto *names = (*namesRes)->getIndexedStorageNullable(runtime);
+  if (!names)
+    return ExecutionStatus::RETURNED;
+  // Index names come first, as numbers in ascending order.
+  for (uint32_t i = 0, e = names->size(); i < e; ++i) {
+    SmallHermesValue name = names->at(i);
+    if (!name.isNumber())
+      break;
+    double index = name.getNumber(runtime);
+    if (index >= len)
+      break;
+    if (index >= from)
+      keys.push_back(static_cast<uint32_t>(index));
+  }
+  return ExecutionStatus::RETURNED;
+}
+
+/// Append to \p keys, in ascending order, the indices in [\p from, \p len) of
+/// the own properties of \p obj.
+/// \pre \p obj is not a proxy or a host object.
+ExecutionStatus appendOwnIndexKeys(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    uint32_t from,
+    uint32_t len,
+    std::vector<uint32_t> &keys) {
+  // Only the indexed storage can hold indices, unless the class has a named
+  // property with an index-like name.
+  if (LLVM_UNLIKELY(obj->getClass(runtime)->getHasIndexLikeProperties()))
+    return appendOwnIndexKeysFromNames(runtime, obj, from, len, keys);
+  GCScopeMarkerRAII marker{runtime};
+  JSObject::forEachOwnPropertyWhile(
+      obj,
+      runtime,
+      [from, len, &keys](
+          Runtime &, uint32_t index, ComputedPropertyDescriptor) {
+        if (index >= len)
+          return false;
+        if (index >= from)
+          keys.push_back(index);
+        return true;
+      },
+      [](Runtime &, SymbolID, NamedPropertyDescriptor) { return false; });
+  return ExecutionStatus::RETURNED;
+}
+
+/// Set \p keys to the indices below \p len, in ascending order, of the own
+/// properties of \p obj and of the objects on its prototype chain.
+/// \pre No object on the chain is a proxy or a host object.
+ExecutionStatus collectIndexKeys(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    uint32_t len,
+    std::vector<uint32_t> &keys) {
+  struct : Locals {
+    PinnedValue<JSObject> cur;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  keys.clear();
+  for (lv.cur = obj.get(); lv.cur.get(); lv.cur = lv.cur->getParent(runtime)) {
+    if (LLVM_UNLIKELY(
+            appendOwnIndexKeys(runtime, lv.cur, 0, len, keys) ==
+            ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  }
+  // Keys from different objects may interleave or repeat.
+  std::sort(keys.begin(), keys.end());
+  keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+  return ExecutionStatus::RETURNED;
+}
+
+/// If HasProperty(\p obj, \p index) is true, append Get(\p obj, \p index) to
+/// \p items, whose length is \p count, and increment \p count.
+/// \return whether a getter ran, which can change the elements.
+CallResult<bool> readElementAt(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    uint32_t index,
+    Handle<JSArray> items,
+    uint32_t &count) {
+  struct : Locals {
+    PinnedValue<> index;
+    PinnedValue<> value;
+    PinnedValue<JSObject> propObj;
+    PinnedValue<SymbolID> tmpName;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
+  lv.index = HermesValue::encodeTrustedNumberValue(index);
+  ComputedPropertyDescWithSymStorage desc{lv.tmpName};
+  if (LLVM_UNLIKELY(
+          JSObject::getComputedPrimitiveDescriptor(
+              obj, runtime, lv.index, lv.propObj, desc) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  if (!lv.propObj.get())
+    return false;
+  auto valueRes = JSObject::getComputedPropertyValue_RJS(
+      obj, runtime, lv.propObj, desc.get(), lv.index);
+  if (LLVM_UNLIKELY(valueRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  // A proxy whose has trap returns false gives an empty value.
+  if ((*valueRes)->isEmpty())
+    return false;
+  lv.value = std::move(*valueRes);
+  if (LLVM_UNLIKELY(
+          JSArray::setElementAt(items, runtime, count, lv.value) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  ++count;
+  return desc.flags.accessor;
+}
+
+/// Read the elements of \p obj at every index in [\p from, \p len) into
+/// \p items, whose length is \p count, as SortIndexedProperties does with
+/// skip-holes.
+ExecutionStatus readEveryIndex(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    uint32_t from,
+    uint32_t len,
+    Handle<JSArray> items,
+    uint32_t &count) {
+  for (uint32_t k = from; k < len; ++k) {
+    if (LLVM_UNLIKELY(
+            readElementAt(runtime, obj, k, items, count) ==
+            ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  }
+  return ExecutionStatus::RETURNED;
+}
+
+/// Read the elements of \p obj below \p len into \p items, whose length is
+/// \p count, visiting only the indices that have a property, own or
+/// inherited. HasProperty runs no code on the other indices, since no object
+/// on the prototype chain is a proxy or a host object. A getter can add or
+/// delete elements, so the indices are collected again after one runs. Once
+/// the collections have cost as much as visiting every index left, stop, so
+/// the work stays linear in \p len when most elements are getters.
+/// \return the index from which readEveryIndex must read the rest, or \p len
+///   if all were read.
+/// \pre No object on the prototype chain is a proxy or a host object.
+CallResult<uint32_t> readExistingIndices(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    uint32_t len,
+    Handle<JSArray> items,
+    uint32_t &count) {
+  std::vector<uint32_t> keys;
+  if (LLVM_UNLIKELY(
+          collectIndexKeys(runtime, obj, len, keys) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  uint64_t collectionCost = 0;
+  size_t i = 0;
+  while (i < keys.size()) {
+    uint32_t k = keys[i++];
+    auto getterRanRes = readElementAt(runtime, obj, k, items, count);
+    if (LLVM_UNLIKELY(getterRanRes == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    if (!*getterRanRes)
+      continue;
+    collectionCost += keys.size();
+    if (collectionCost >= len - (k + 1) ||
+        hasProxyOrHostOnChain(runtime, obj.get()))
+      return k + 1;
+    if (LLVM_UNLIKELY(
+            collectIndexKeys(runtime, obj, len, keys) ==
+            ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    i = std::upper_bound(keys.begin(), keys.end(), k) - keys.begin();
+  }
+  return len;
+}
+
+/// Read the elements of \p obj below \p len into \p items, as
+/// SortIndexedProperties does with skip-holes.
+/// \return the number of elements read.
+CallResult<uint32_t> readElements(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    uint32_t len,
+    Handle<JSArray> items) {
+  uint32_t count = 0;
+  uint32_t from = 0;
+  if (!hasProxyOrHostOnChain(runtime, obj.get())) {
+    auto fromRes = readExistingIndices(runtime, obj, len, items, count);
+    if (LLVM_UNLIKELY(fromRes == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    from = *fromRes;
+  }
+  if (LLVM_UNLIKELY(
+          readEveryIndex(runtime, obj, from, len, items, count) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  return count;
+}
+
+/// DeletePropertyOrThrow(\p obj, \p index).
+ExecutionStatus
+deleteIndex(Runtime &runtime, Handle<JSObject> obj, uint32_t index) {
+  struct : Locals {
+    PinnedValue<> index;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
+  lv.index = HermesValue::encodeTrustedNumberValue(index);
+  return JSObject::deleteComputed(
+             obj, runtime, lv.index, PropOpFlags().plusThrowOnError())
+      .getStatus();
+}
+
+/// Write the \p count sorted \p items back to \p obj, then delete its other
+/// indices below \p len, as Array.prototype.sort does.
+ExecutionStatus writeBackElements(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    Handle<JSArray> items,
+    uint32_t count,
+    uint32_t len) {
+  struct : Locals {
+    PinnedValue<> index;
+    PinnedValue<> value;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  for (uint32_t j = 0; j < count; ++j) {
+    GCScopeMarkerRAII marker{runtime};
+    lv.index = HermesValue::encodeTrustedNumberValue(j);
+    lv.value = items->at(runtime, j).unboxToHV(runtime);
+    if (LLVM_UNLIKELY(
+            JSObject::putComputed_RJS(
+                obj,
+                runtime,
+                lv.index,
+                lv.value,
+                PropOpFlags().plusThrowOnError()) ==
+            ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  }
+
+  // A proxy or a host object sees every deletion.
+  if (obj->isProxyObject(runtime) || obj->isHostObject(runtime)) {
+    for (uint32_t k = count; k < len; ++k) {
+      if (LLVM_UNLIKELY(
+              deleteIndex(runtime, obj, k) == ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+    }
+    return ExecutionStatus::RETURNED;
+  }
+  // Deleting a missing property of any other object runs no code, so only
+  // its existing indices need deleting.
+  std::vector<uint32_t> keys;
+  if (LLVM_UNLIKELY(
+          appendOwnIndexKeys(runtime, obj, count, len, keys) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  for (uint32_t k : keys) {
+    if (LLVM_UNLIKELY(
+            deleteIndex(runtime, obj, k) == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  }
+  return ExecutionStatus::RETURNED;
+}
+
+/// Sort \p obj, an object of length \p len, as ES2025 23.1.3.30 does: read the
+/// elements into a list, sort the list, write it back, and delete the
+/// remaining indices.
+ExecutionStatus sortGeneric(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    Handle<Callable> compareFn,
+    uint32_t len) {
+  struct : Locals {
+    PinnedValue<JSArray> items;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  auto itemsRes = JSArray::create(runtime, 0, 0);
+  if (LLVM_UNLIKELY(itemsRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  lv.items = std::move(*itemsRes);
+  auto countRes = readElements(runtime, obj, len, lv.items);
+  if (LLVM_UNLIKELY(countRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  uint32_t count = *countRes;
+  auto newLen = SmallHermesValue::encodeNumberValue(count, runtime);
+  JSArray::putLengthUnsafe(lv.items.get(), runtime, newLen);
+  if (count > 1) {
+    DirectSortModel sm(runtime, lv.items, compareFn);
+    if (LLVM_UNLIKELY(quickSort(&sm, 0u, count) == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  }
+  return writeBackElements(runtime, obj, lv.items, count, len);
+}
 } // anonymous namespace
 
-/// ES5.1 15.4.4.11.
+/// ES2025 23.1.3.30.
 CallResult<HermesValue> arrayPrototypeSort(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   // Null if not a callable compareFn.
@@ -2238,20 +2166,16 @@ CallResult<HermesValue> arrayPrototypeSort(void *, Runtime &runtime) {
   // takes uint32_t, and even iterating over that many indices is impractical.
   if (LLVM_UNLIKELY(len > UINT32_MAX))
     return runtime.raiseRangeError("Array sort length exceeds uint32_t");
+  auto len32 = static_cast<uint32_t>(len);
 
-  // If we are not sorting a regular dense array, use a special routine which
-  // first copies all existing properties into an array and sorts that.
-  // Proxies and host objects however are excluded because they are weird.
-  if (!lv.O->isProxyObject(runtime) && !lv.O->isHostObject(runtime) &&
-      !lv.O->hasFastIndexProperties(runtime))
-    return sortSparse(runtime, lv.O, compareFn, len);
-
-  if (len > 1 && vmisa<JSArray>(*lv.O)) {
+  if (vmisa<JSArray>(*lv.O)) {
     auto arr = Handle<JSArray>::vmcast(&lv.O);
-    auto len32 = static_cast<uint32_t>(len);
     if (arrayFastPathCheck(
             runtime, arr, Runtime::makeNullHandle<HiddenClass>(), len32)) {
-      if (LLVM_UNLIKELY(
+      // Writing back fewer than two elements of such an array is
+      // unobservable.
+      if (len32 > 1 &&
+          LLVM_UNLIKELY(
               arrayFastPathSort(runtime, arr, compareFn, len32) ==
               ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
@@ -2259,18 +2183,10 @@ CallResult<HermesValue> arrayPrototypeSort(void *, Runtime &runtime) {
     }
   }
 
-  // Sort any other object with indexed storage in place.
-  StandardSortModel sm(runtime, lv.O, compareFn);
-
-  // Use our custom sort routine. We can't use std::sort because it performs
-  // optimizations that allow it to bypass calls to std::swap, but our swap
-  // function is special, since it needs to use the internal Object functions.
-  assert(len <= UINT32_MAX && "sort length exceeds uint32_t");
   if (LLVM_UNLIKELY(
-          quickSort(&sm, 0u, static_cast<uint32_t>(len)) ==
+          sortGeneric(runtime, lv.O, compareFn, len32) ==
           ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
-
   return lv.O.getHermesValue();
 }
 
