@@ -156,11 +156,20 @@ TEST_F(StringPrimTest, ConcatTest) {
 // an interior pointer, or if someone else maintained a pointer to the string.
 template <typename StringType>
 void test1StringMemcpySafety(const StringType &s) {
+  // Construct a copy of the string in a buffer that is initially zeroed out.
+  // A string may have an internal buffer whose last bytes are unused when the
+  // string is externally allocated, and the constructor leaves them as they
+  // were. In \p s they are whatever was in that memory before, which can look
+  // like anything, including a pointer to the string. This isn't guaranteed to
+  // always work because the constructors and the new operator may still modify
+  // those bytes, however, it seems to work in practice.
+  auto s1 = new (calloc(1, sizeof(StringType))) StringType(s);
+
   // Grub through the string's bits, looking for pointers to the interior of the
   // string.
-  intptr_t start = reinterpret_cast<intptr_t>(&s);
-  intptr_t end = reinterpret_cast<intptr_t>(&s + 1);
-  const intptr_t *stringGuts = reinterpret_cast<const intptr_t *>(&s);
+  intptr_t start = reinterpret_cast<intptr_t>(s1);
+  intptr_t end = reinterpret_cast<intptr_t>(s1 + 1);
+  const intptr_t *stringGuts = reinterpret_cast<const intptr_t *>(s1);
   for (size_t i = 0; i < sizeof(StringType) / sizeof(void *); i++) {
     intptr_t p = stringGuts[i];
     EXPECT_FALSE(start <= p && p <= end) << "string size: " << s.size();
@@ -185,14 +194,10 @@ void test1StringMemcpySafety(const StringType &s) {
   // std::move a string. If any bits changed, it means the string is not memcpy
   // safe, because the move constructor does something nontrivial. Note it is
   // not the case in general that a moved-to string will be bitwise identical to
-  // its source; the string may have an internal buffer whose last bytes are
-  // unused when the string is externally allocated, and these last bytes may
-  // not be copied by the move ctor. That is, the move ctor may be conceptually
-  // a memcpy of only a prefix of the string. To avoid this, construct the
-  // strings in buffers that are initially zeroed out. This isn't guaranteed to
-  // always work because the constructors and the new operator may still modify
-  // those bytes, however, it seems to work in practice.
-  auto s1 = new (calloc(1, sizeof(StringType))) StringType(s);
+  // its source; the unused last bytes of the internal buffer may not be copied
+  // by the move ctor. That is, the move ctor may be conceptually a memcpy of
+  // only a prefix of the string. To avoid this, both strings are constructed
+  // in buffers that are initially zeroed out.
   llvh::AlignedCharArrayUnion<StringType> savedBits;
   memcpy(savedBits.buffer, s1, sizeof(StringType));
 
