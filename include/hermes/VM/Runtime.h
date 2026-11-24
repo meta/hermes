@@ -21,6 +21,7 @@
 #include "hermes/VM/BasicBlockExecutionInfo.h"
 #include "hermes/VM/CallResult.h"
 #include "hermes/VM/Casting.h"
+#include "hermes/VM/ComputedPropertyCache.h"
 #include "hermes/VM/Debugger/Debugger.h"
 #include "hermes/VM/GC.h"
 #include "hermes/VM/GCBase-inline.h"
@@ -691,6 +692,11 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   }
   /// Returns trailing data for all runtime modules.
   std::vector<llvh::ArrayRef<uint8_t>> getEpilogues();
+
+  /// \return the cache for computed puts with a uniqued string key.
+  ComputedPropertyCache &getComputedPropertyCache() {
+    return computedPropertyCache_;
+  }
 
   /// \return the low 24 bits of the parent cache epoch: the part an
   /// AddPropertyCacheEntry stores. Never 0.
@@ -1432,6 +1438,9 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   /// Caches for property lookups in non-JS code.
   WritePropertyCacheEntry fixedWritePropCache_[(size_t)PropCacheID::_COUNT];
   ReadPropertyCacheEntry fixedReadPropCache_[(size_t)PropCacheID::_COUNT];
+
+  /// The cache for computed puts with a uniqued string key.
+  ComputedPropertyCache computedPropertyCache_;
 
   /// StringPrimitive representation of the first 256 characters.
   /// These are allocated as "long-lived" objects, so they don't need

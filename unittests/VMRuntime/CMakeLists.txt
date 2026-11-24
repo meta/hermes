@@ -20,6 +20,7 @@ set(RTSources
   CardTableNCTest.cpp
   CastingTest.cpp
   CodeCoverageProfilerTest.cpp
+  ComputedPropertyCacheTest.cpp
   CopyableVectorTest.cpp
   CrashManagerTest.cpp
   DateUtilTest.cpp

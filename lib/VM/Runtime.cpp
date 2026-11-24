@@ -787,6 +787,7 @@ void Runtime::markWeakRoots(WeakRootAcceptor &acceptor, bool markLongLived) {
           "negMatchClazz is always zero for non-JS code property cache");
       acceptor.acceptWeak(entry.clazz);
     }
+    computedPropertyCache_.markWeakRoots(acceptor);
   }
   for (auto &registry : finalizationRegistries_) {
     acceptor.acceptWeak(registry);
