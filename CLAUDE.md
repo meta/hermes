@@ -11,6 +11,10 @@ In the rare cases where changing directory is absolutely unavoidable, use a subs
 (cd other-dir; command;)
 ```
 
+This rule applies within a worktree. Switching from one git worktree's root
+to another's (e.g. `cd ../hermes-x86-jit`) is allowed when the user asks to
+work in a different worktree.
+
 ## Overview
 
 Hermes is a JavaScript engine optimized for fast start-up of React Native apps. It features ahead-of-time static optimization and compact bytecode.
