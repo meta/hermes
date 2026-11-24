@@ -1143,4 +1143,74 @@ TEST_F(ObjectModelLargeHeapTest, CreateWithMaxYoungGenAllocationPropCount) {
 }
 #endif
 
+// tryGetOwnNamedDescriptorOfKeyFast answers only for a key that is a uniqued
+// string, and then gives what the named lookup gives. Fails if the uniqued
+// test is dropped (getUniqueID asserts), or if a key of another kind is
+// answered.
+TEST_F(ObjectModelTest, TryGetOwnNamedDescriptorOfKeyFast) {
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+    PinnedValue<StringPrimitive> uniquedA;
+    PinnedValue<StringPrimitive> uniquedZz;
+    PinnedValue<StringPrimitive> builtA;
+    PinnedValue<> value;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  GCScope scope{runtime, "TryGetOwnNamedDescriptorOfKeyFast", 32};
+
+  SymbolID a = **runtime.getIdentifierTable().getSymbolHandle(
+      runtime, createASCIIRef("a"));
+  SymbolID b = **runtime.getIdentifierTable().getSymbolHandle(
+      runtime, createASCIIRef("b"));
+  SymbolID zz = **runtime.getIdentifierTable().getSymbolHandle(
+      runtime, createASCIIRef("zz"));
+  lv.uniquedA = runtime.getStringPrimFromSymbolID(a);
+  lv.uniquedZz = runtime.getStringPrimFromSymbolID(zz);
+  lv.builtA.castAndSetHermesValue<StringPrimitive>(
+      runtime.ignoreAllocationFailure(
+          StringPrimitive::create(runtime, createASCIIRef("a"))));
+  ASSERT_TRUE(lv.uniquedA->isUniqued());
+  ASSERT_TRUE(lv.uniquedZz->isUniqued());
+  ASSERT_FALSE(lv.builtA->isUniqued());
+
+  lv.obj = JSObject::create(runtime);
+  lv.value = HermesValue::encodeTrustedNumberValue(1);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(lv.obj, runtime, b, lv.value));
+  ASSERT_TRUE(*JSObject::putNamed_RJS(lv.obj, runtime, a, lv.value));
+
+  // The named lookup of the slow path, which also gives the class its
+  // property map; the fast lookups below need one.
+  NamedPropertyDescriptor expected;
+  ASSERT_TRUE(JSObject::getOwnNamedDescriptor(lv.obj, runtime, a, expected));
+  ASSERT_EQ(1u, expected.slot);
+
+  // Nothing below allocates.
+  NamedPropertyDescriptor desc;
+  hermes::OptValue<bool> res = JSObject::tryGetOwnNamedDescriptorOfKeyFast(
+      *lv.obj, runtime, lv.uniquedA.getHermesValue(), desc);
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_TRUE(*res);
+  EXPECT_EQ(expected.slot, desc.slot);
+  EXPECT_EQ(expected.flags, desc.flags);
+
+  // A name the object lacks.
+  res = JSObject::tryGetOwnNamedDescriptorOfKeyFast(
+      *lv.obj, runtime, lv.uniquedZz.getHermesValue(), desc);
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_FALSE(*res);
+
+  // The same characters in a string that is not uniqued: no answer.
+  res = JSObject::tryGetOwnNamedDescriptorOfKeyFast(
+      *lv.obj, runtime, lv.builtA.getHermesValue(), desc);
+  EXPECT_FALSE(res.hasValue());
+
+  // Keys that are not strings: no answer.
+  res = JSObject::tryGetOwnNamedDescriptorOfKeyFast(
+      *lv.obj, runtime, HermesValue::encodeTrustedNumberValue(1), desc);
+  EXPECT_FALSE(res.hasValue());
+  res = JSObject::tryGetOwnNamedDescriptorOfKeyFast(
+      *lv.obj, runtime, HermesValue::encodeSymbolValue(a), desc);
+  EXPECT_FALSE(res.hasValue());
+}
+
 } // namespace

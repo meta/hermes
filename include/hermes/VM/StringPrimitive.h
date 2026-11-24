@@ -261,6 +261,10 @@ class StringPrimitive : public VariableSizeRuntimeCell {
     return (lengthAndFlags_ & LENGTH_FLAG_UNIQUED) != 0;
   }
 
+  /// \return the unique id.
+  /// This requires and asserts that the string is uniqued.
+  SymbolID getUniqueID(Runtime &runtime) const;
+
   /// Compare a part of this string to \p other for equality.
   /// \return true if the section of this string from \p start of length \p
   /// length is equal to the string \p other.
@@ -420,10 +424,6 @@ class StringPrimitive : public VariableSizeRuntimeCell {
   /// Convert a non-uniqued StringPrimitive to a unique one.
   /// \pre \c canBeUniqued() returns \c true.
   inline void convertToUniqued(SymbolID uniqueID);
-
-  /// \return the unique id.
-  /// This requires and asserts that the string is uniqued.
-  SymbolID getUniqueID(Runtime &runtime) const;
 
   /// Mark this string as not uniqued. This is used by IdentifierTable when
   /// the associated SymbolID is garbage collected.

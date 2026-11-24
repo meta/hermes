@@ -1281,8 +1281,24 @@ CallResult<PseudoHandle<>> JSObject::getComputedWithReceiver_RJS(
     Runtime &runtime,
     Handle<> nameValHandle,
     Handle<> receiver) {
-  // Try the fast-path first: no "index-like" properties and the "name" already
-  // is a valid integer index.
+  // Try an own data property named by a uniqued string first. For a string
+  // key the slow path starts with this same lookup of a named property on
+  // the object itself, after converting the key, and returns the slot of a
+  // data property it finds; the receiver does not matter to one. Nothing
+  // here allocates.
+  {
+    NamedPropertyDescriptor desc;
+    OptValue<bool> found = tryGetOwnNamedDescriptorOfKeyFast(
+        *selfHandle, runtime, *nameValHandle, desc);
+    if (found && *found && LLVM_LIKELY(!desc.flags.accessor)) {
+      return createPseudoHandle(
+          getNamedSlotValueUnsafe(*selfHandle, runtime, desc)
+              .unboxToHV(runtime));
+    }
+  }
+
+  // Then try the numeric fast path: no "index-like" properties and the
+  // "name" already is a valid integer index.
   if (selfHandle->hasFastIndexProperties(runtime)) {
     if (auto arrayIndex = toArrayIndexFastPath(*nameValHandle)) {
       // Do we have this value present in our array storage? If so, return it.

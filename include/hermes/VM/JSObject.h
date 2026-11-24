@@ -817,6 +817,21 @@ class JSObject : public GCCell {
       SymbolID name,
       NamedPropertyDescriptor &desc);
 
+  /// \c tryGetOwnNamedDescriptorFast() for a computed key that is a uniqued
+  /// string. A uniqued string holds its SymbolID, so this is the lookup of a
+  /// named own property with which the computed slow paths begin for a
+  /// string key, without the conversion of the key. Does not allocate.
+  /// \return true or false if \p nameVal is a uniqued string and the lookup
+  /// could be done, llvh::None otherwise. True stores the descriptor in
+  /// \p desc. False only says that \p self has no named own property of that
+  /// name: an object with indexed storage, a lazy object, a proxy or a host
+  /// object can still have the property.
+  static OptValue<bool> tryGetOwnNamedDescriptorOfKeyFast(
+      JSObject *self,
+      Runtime &runtime,
+      HermesValue nameVal,
+      NamedPropertyDescriptor &desc);
+
   /// Tries to get a property without doing any allocation, while searching the
   /// prototype chain.
   /// If the property cannot be found on this object or any of its prototypes,
@@ -2117,6 +2132,20 @@ inline OptValue<bool> JSObject::tryGetOwnNamedDescriptorFast(
     NamedPropertyDescriptor &desc) {
   return HiddenClass::tryFindPropertyFast(
       self->getClass(runtime), runtime, name, desc);
+}
+
+inline OptValue<bool> JSObject::tryGetOwnNamedDescriptorOfKeyFast(
+    JSObject *self,
+    Runtime &runtime,
+    HermesValue nameVal,
+    NamedPropertyDescriptor &desc) {
+  if (!nameVal.isString())
+    return llvh::None;
+  const StringPrimitive *str = nameVal.getString();
+  if (!str->isUniqued())
+    return llvh::None;
+  return tryGetOwnNamedDescriptorFast(
+      self, runtime, str->getUniqueID(runtime), desc);
 }
 
 inline OptValue<SmallHermesValue>

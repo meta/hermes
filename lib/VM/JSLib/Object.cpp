@@ -1737,6 +1737,33 @@ CallResult<HermesValue> objectPrototypeValueOf(void *, Runtime &runtime) {
   return res;
 }
 
+/// HasOwnProperty(\p obj, \p key) when it can be answered from the class of
+/// \p obj alone: \p obj is an object and \p key a uniqued string, for
+/// which neither ToObject nor ToPropertyKey has an effect.
+/// A named own property is a yes. Its absence is a no only where the slow
+/// path stops at it: not for an object with indexed storage, a lazy object,
+/// a proxy, or a host object, which claims every property.
+/// Does not allocate.
+/// \return the answer, or llvh::None if the slow path must give it.
+static inline OptValue<bool>
+objectHasOwnFast(Runtime &runtime, HermesValue obj, HermesValue key) {
+  if (!obj.isObject())
+    return llvh::None;
+  JSObject *self = vmcast<JSObject>(obj);
+  NamedPropertyDescriptor desc;
+  OptValue<bool> found =
+      JSObject::tryGetOwnNamedDescriptorOfKeyFast(self, runtime, key, desc);
+  if (!found)
+    return llvh::None;
+  if (*found)
+    return true;
+  const HiddenClass *clazz = self->getClass(runtime);
+  if (clazz->hasIndexedStorage() || clazz->isLazyObject() ||
+      clazz->isProxyObject() || clazz->isHostObject())
+    return llvh::None;
+  return false;
+}
+
 static CallResult<HermesValue>
 objectHasOwnHelper(Runtime &runtime, Handle<JSObject> O, Handle<> P) {
   ComputedPropertyDescriptor desc;
@@ -1769,6 +1796,9 @@ CallResult<HermesValue> objectPrototypeHasOwnProperty(
     void *,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  if (OptValue<bool> fast =
+          objectHasOwnFast(runtime, args.getThisArg(), args.getArg(0)))
+    return HermesValue::encodeBoolValue(*fast);
   /// 1. Let P be ? ToPropertyKey(V).
   auto PRes = toPropertyKey(runtime, args.getArgHandle(0));
   if (LLVM_UNLIKELY(PRes == ExecutionStatus::EXCEPTION)) {
@@ -1791,6 +1821,9 @@ CallResult<HermesValue> objectPrototypeHasOwnProperty(
 
 CallResult<HermesValue> objectHasOwn(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  if (OptValue<bool> fast =
+          objectHasOwnFast(runtime, args.getArg(0), args.getArg(1)))
+    return HermesValue::encodeBoolValue(*fast);
   /// 1. Let O be ? ToObject(O).
   auto ORes = toObject(runtime, args.getArgHandle(0));
   if (LLVM_UNLIKELY(ORes == ExecutionStatus::EXCEPTION)) {
