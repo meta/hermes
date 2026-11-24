@@ -1036,6 +1036,78 @@ TEST_F(ObjectModelTest, ClassFlagsTransitionShared) {
   }
 }
 
+// An object created with property storage longer than its class needs, as
+// JSON.parse creates one from text with a duplicate key, gets properties
+// through addNewOwnPropertyInSlot, as a PutById add cache hit adds them: the
+// adds whose slot already exists store in place, and the next one grows the
+// storage. Every value reads back. Fails if the helper appends instead of
+// storing in place, on its assertion that the slot is the storage's size.
+TEST_F(ObjectModelTest, AddNewOwnPropertyInSlotLongStorage) {
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+    PinnedValue<JSObject> ref;
+    PinnedValue<HiddenClass> clazz;
+    PinnedValue<> value;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  // Room for the name handles and the handles the calls below leave.
+  GCScope scope{runtime, "AddNewOwnPropertyInSlotLongStorage", 128};
+
+  // The class gets kNumBefore properties by the generic path; then kNumAdded
+  // more by the helper. The storage has kNumExtra slots more than the first
+  // kNumBefore properties need, so the first kNumExtra adds land in existing
+  // slots and the last one grows it.
+  constexpr unsigned kNumBefore = JSObject::DIRECT_PROPERTY_SLOTS + 1;
+  constexpr unsigned kNumExtra = 3;
+  constexpr unsigned kNumAdded = kNumExtra + 1;
+  constexpr unsigned kNumNames = kNumBefore + kNumAdded;
+  std::vector<SymbolID> names;
+  for (unsigned i = 0; i < kNumNames; ++i) {
+    std::string s = "p" + std::to_string(i);
+    names.push_back(**runtime.getIdentifierTable().getSymbolHandle(
+        runtime, createASCIIRef(s.c_str())));
+  }
+  auto valueOf = [](unsigned i) {
+    return HermesValue::encodeTrustedNumberValue(100 + i);
+  };
+
+  lv.obj = JSObject::create(
+      runtime,
+      runtime.objectPrototype,
+      runtime.classJSObject,
+      kNumBefore + kNumExtra);
+  // ref is an ordinary object that takes every property by the generic path:
+  // its classes and slots are those a real add gives.
+  lv.ref = JSObject::create(runtime);
+  for (unsigned i = 0; i < kNumBefore; ++i) {
+    lv.value = valueOf(i);
+    ASSERT_TRUE(*JSObject::putNamed_RJS(lv.obj, runtime, names[i], lv.value));
+    ASSERT_TRUE(*JSObject::putNamed_RJS(lv.ref, runtime, names[i], lv.value));
+  }
+  ASSERT_EQ(lv.obj->getClass(runtime), lv.ref->getClass(runtime));
+
+  for (unsigned i = kNumBefore; i < kNumNames; ++i) {
+    SCOPED_TRACE(i);
+    lv.value = valueOf(i);
+    ASSERT_TRUE(*JSObject::putNamed_RJS(lv.ref, runtime, names[i], lv.value));
+    lv.clazz = lv.ref->getClass(runtime);
+    NamedPropertyDescriptor desc;
+    ASSERT_TRUE(
+        JSObject::getOwnNamedDescriptor(lv.ref, runtime, names[i], desc));
+    ASSERT_EQ(desc.slot, i);
+    SmallHermesValue shv =
+        SmallHermesValue::encodeHermesValue(*lv.value, runtime);
+    JSObject::addNewOwnPropertyInSlot(*lv.obj, runtime, *lv.clazz, i, shv);
+    EXPECT_EQ(lv.obj->getClass(runtime), *lv.clazz);
+    // Every property so far, the neighbours of the new one included.
+    for (unsigned j = 0; j <= i; ++j) {
+      SCOPED_TRACE(j);
+      EXPECT_CALLRESULT_DOUBLE(
+          100.0 + j, JSObject::getNamed_RJS(lv.obj, runtime, names[j]));
+    }
+  }
+}
+
 #if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
 using ObjectModelLargeHeapTest = LargeHeapRuntimeTestFixture;
 

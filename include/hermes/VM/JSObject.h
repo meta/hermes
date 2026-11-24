@@ -515,12 +515,14 @@ class JSObject : public GCCell {
 
   /// Set the HiddenClass of \p self to \p clazz and write \p value to index \p
   /// slot.
-  /// Used by PutById caching path.
-  /// May reallocate the property storage if it needs to expand.
+  /// Used by the PutById and computed property add caches.
+  /// May reallocate the property storage if it needs to expand. The storage
+  /// may already be longer than \p slot needs (JSON.parse sizes it for
+  /// duplicate keys too); the value is then stored in place.
   /// \param clazz the HiddenClass to transition to, non-null.
-  /// \return true if the HiddenClass was able to be transitioned and the new
-  /// property was added, false if reallocation is required, in which case the
-  /// caller must call the potentially allocating transitionHiddenClassSlowPath.
+  /// \pre \p slot is the slot that adding the property to the current class
+  ///   of \p self gives, so it is at most the size of the indirect storage
+  ///   plus DIRECT_PROPERTY_SLOTS.
   static void addNewOwnPropertyInSlot(
       JSObject *self,
       Runtime &runtime,

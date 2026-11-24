@@ -3187,6 +3187,14 @@ void JSObject::addNewOwnPropertyInSlot(
   if (LLVM_LIKELY(self->propStorage_)) {
     NoAllocScope noAlloc{runtime};
     PropStorage *storage = self->propStorage_.getNonNull(runtime);
+    // The storage can be longer than the class needs: JSObject::create with
+    // a propertyCount sizes it for that count (JSON.parse counts duplicate
+    // keys). The slot then already exists; store in place, as
+    // allocateNewSlotStorage does.
+    if (LLVM_UNLIKELY(indirectSlot < storage->size())) {
+      storage->set(indirectSlot, value, runtime.getHeap());
+      return;
+    }
     assert(
         indirectSlot == storage->size() && "must be adding the next property");
     if (LLVM_LIKELY(indirectSlot < storage->capacity())) {
