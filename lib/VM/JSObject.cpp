@@ -1134,17 +1134,20 @@ ExecutionStatus JSObject::getComputedPrimitiveDescriptor(
       return ExecutionStatus::RETURNED;
     }
 
+    // If the key was converted, the only root of \c id is a handle in the
+    // GCScope that is flushed below. Keep it alive for the rest of the walk
+    // and for the caller.
+    desc._tmpSymbolStorage.set(id);
+
     if (LLVM_UNLIKELY(propObj->isHostObject(runtime))) {
       desc.flags.hostObject = true;
       desc.flags.writable = true;
       desc.slot = id.unsafeGetRaw();
-      desc._tmpSymbolStorage.set(id);
       return ExecutionStatus::RETURNED;
     }
     if (LLVM_UNLIKELY(propObj->isProxyObject(runtime))) {
       desc.flags.proxyObject = true;
       desc.slot = id.unsafeGetRaw();
-      desc._tmpSymbolStorage.set(id);
       return ExecutionStatus::RETURNED;
     }
     // This isn't a proxy, so use the faster getParent() instead of
