@@ -24,16 +24,20 @@ using namespace ::hermes::parser;
 
 namespace {
 
-static const std::unordered_map<std::string, SynthTrace::JSErrorType>
-    kStringToJSErrorType = {
-        {"Error", SynthTrace::JSErrorType::Error},
-        {"EvalError", SynthTrace::JSErrorType::EvalError},
-        {"RangeError", SynthTrace::JSErrorType::RangeError},
-        {"ReferenceError", SynthTrace::JSErrorType::ReferenceError},
-        {"SyntaxError", SynthTrace::JSErrorType::SyntaxError},
-        {"TypeError", SynthTrace::JSErrorType::TypeError},
-        {"URIError", SynthTrace::JSErrorType::URIError},
-};
+static const std::unordered_map<std::string, SynthTrace::JSErrorType> &
+stringToJSErrorType() {
+  static const std::unordered_map<std::string, SynthTrace::JSErrorType> value =
+      {
+          {"Error", SynthTrace::JSErrorType::Error},
+          {"EvalError", SynthTrace::JSErrorType::EvalError},
+          {"RangeError", SynthTrace::JSErrorType::RangeError},
+          {"ReferenceError", SynthTrace::JSErrorType::ReferenceError},
+          {"SyntaxError", SynthTrace::JSErrorType::SyntaxError},
+          {"TypeError", SynthTrace::JSErrorType::TypeError},
+          {"URIError", SynthTrace::JSErrorType::URIError},
+      };
+  return value;
+}
 
 SynthTrace::StringEncodingType getStringEncodingType(
     const std::string &encodingStr) {
@@ -563,9 +567,9 @@ SynthTrace getTrace(
       case RecordType::CreateJSError: {
         auto *errorTypeStr = llvh::cast<JSONString>(obj->get("errorType"));
         auto *messageID = llvh::cast<JSONNumber>(obj->get("messageID"));
-        auto it = kStringToJSErrorType.find(errorTypeStr->str());
+        auto it = stringToJSErrorType().find(errorTypeStr->str());
         assert(
-            it != kStringToJSErrorType.end() && "Unknown error type in trace");
+            it != stringToJSErrorType().end() && "Unknown error type in trace");
         trace.emplace_back<SynthTrace::CreateJSErrorRecord>(
             timeFromStart,
             objID->getValue(),

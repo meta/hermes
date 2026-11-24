@@ -531,22 +531,26 @@ void SynthTrace::GetBufferFromTypedArrayRecord::toJSONInternal(
 }
 
 namespace {
-static const std::unordered_map<SynthTrace::JSErrorType, const char *>
-    kJSErrorTypeToString = {
-        {SynthTrace::JSErrorType::Error, "Error"},
-        {SynthTrace::JSErrorType::EvalError, "EvalError"},
-        {SynthTrace::JSErrorType::RangeError, "RangeError"},
-        {SynthTrace::JSErrorType::ReferenceError, "ReferenceError"},
-        {SynthTrace::JSErrorType::SyntaxError, "SyntaxError"},
-        {SynthTrace::JSErrorType::TypeError, "TypeError"},
-        {SynthTrace::JSErrorType::URIError, "URIError"},
-};
+static const std::unordered_map<SynthTrace::JSErrorType, const char *> &
+jsErrorTypeToString() {
+  static const std::unordered_map<SynthTrace::JSErrorType, const char *> value =
+      {
+          {SynthTrace::JSErrorType::Error, "Error"},
+          {SynthTrace::JSErrorType::EvalError, "EvalError"},
+          {SynthTrace::JSErrorType::RangeError, "RangeError"},
+          {SynthTrace::JSErrorType::ReferenceError, "ReferenceError"},
+          {SynthTrace::JSErrorType::SyntaxError, "SyntaxError"},
+          {SynthTrace::JSErrorType::TypeError, "TypeError"},
+          {SynthTrace::JSErrorType::URIError, "URIError"},
+      };
+  return value;
+}
 } // namespace
 
 void SynthTrace::CreateJSErrorRecord::toJSONInternal(JSONEmitter &json) const {
   Record::toJSONInternal(json);
   json.emitKeyValue("objID", objID_);
-  json.emitKeyValue("errorType", kJSErrorTypeToString.at(errorType_));
+  json.emitKeyValue("errorType", jsErrorTypeToString().at(errorType_));
   json.emitKeyValue("messageID", messageID_);
 }
 
