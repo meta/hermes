@@ -297,6 +297,59 @@ TEST_F(SmallHermesValueRuntimeTest, ObjectTest) {
   EXPECT_EQ(HV.getObject(), obj.get());
 }
 
+TEST_F(SmallHermesValueRuntimeTest, TryEncodeNoAllocMatchesEncode) {
+  struct : Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  auto strRes = StringPrimitive::create(runtime, createUTF16Ref(u"hello"));
+  ASSERT_NE(ExecutionStatus::EXCEPTION, strRes);
+  lv.str.castAndSetHermesValue<StringPrimitive>(*strRes);
+
+  // Compare the raw bits of the two encodings of \p hv. Neither allocates
+  // for a pointer, so a pointer in hv stays valid across both.
+  auto expectSame = [&](HermesValue hv, const char *what) {
+    hermes::OptValue<SmallHermesValue> tried =
+        SmallHermesValue::tryEncodeHermesValueNoAlloc(hv, runtime);
+    ASSERT_TRUE(tried.hasValue()) << what;
+    EXPECT_EQ(
+        tried->getRaw(),
+        SmallHermesValue::encodeHermesValue(hv, runtime).getRaw())
+        << what;
+  };
+
+#if HERMESVM_SANITIZE_HANDLES != 0 && defined(HERMESVM_BOXED_DOUBLES)
+  // Under Handle-SAN, HV32 and BOXED box every number, so the encode
+  // without allocation must decline even a small integer.
+  EXPECT_FALSE(
+      SmallHermesValue::tryEncodeHermesValueNoAlloc(
+          HermesValue::encodeTrustedNumberValue(42), runtime)
+          .hasValue());
+#else
+  expectSame(HermesValue::encodeTrustedNumberValue(42), "small integer");
+#endif
+  expectSame(HermesValue::encodeBoolValue(true), "true");
+  expectSame(HermesValue::encodeUndefinedValue(), "undefined");
+  expectSame(
+      HermesValue::encodeSymbolValue(SymbolID::unsafeCreate(42)), "symbol");
+  expectSame(HermesValue::encodeStringValue(*lv.str), "string");
+}
+
+TEST_F(SmallHermesValueRuntimeTest, TryEncodeNoAllocNoneForBoxed) {
+  HermesValue hv = HermesValue::encodeTrustedNumberValue(0.1);
+  hermes::OptValue<SmallHermesValue> tried =
+      SmallHermesValue::tryEncodeHermesValueNoAlloc(hv, runtime);
+#ifdef HERMESVM_BOXED_DOUBLES
+  // 0.1 does not fit inline, so encodeHermesValue would box it.
+  EXPECT_FALSE(tried.hasValue());
+#else
+  ASSERT_TRUE(tried.hasValue());
+  EXPECT_EQ(
+      tried->getRaw(),
+      SmallHermesValue::encodeHermesValue(hv, runtime).getRaw());
+#endif
+}
+
 #ifdef HERMESVM_BOXED_DOUBLES
 #ifdef HERMESVM_COMPRESSED_POINTERS
 TEST_F(SmallHermesValueRuntimeTest, EncodeDecodeAsHV64) {

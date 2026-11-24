@@ -10,6 +10,7 @@
 #include "SHUnitExt.h"
 #include "hermes/VM/BuildMetadata.h"
 #include "hermes/VM/Callable.h"
+#include "hermes/VM/ComputedPropertyCache-inline.h"
 #include "hermes/VM/DecoratedObject.h"
 #include "hermes/VM/Domain.h"
 #include "hermes/VM/FastArray.h"
@@ -1718,7 +1719,64 @@ CallResult<bool> JSObject::putComputedWithReceiver_RJS(
       !opFlags.getMustExist() &&
       "mustExist flag cannot be used with computed properties");
 
-  // Try the fast-path first: has "index-like" properties, the "name"
+  // Try the computed property cache first: a string key and the object as
+  // its own receiver. The probe comes before the value is encoded, so that
+  // a put the cache does not serve pays no encode. A value that encodes
+  // without allocating is stored through the entry found. A value
+  // encodeHermesValue would box (a double that does not fit in HV32, or any
+  // number under Handle-SAN) is encoded with an allocation, and a
+  // collection there can empty the entry (its class moved or died, or an
+  // Add entry's result class died). If that result class was the last
+  // holder of the key's name, the collection also frees the key's SymbolID
+  // and clears its uniqued bit. So the probe, which tests the bit, takes the
+  // name and reads the object's class, is repeated after the encode, and
+  // its entry tested again. Nothing allocates between the last probe and
+  // the store.
+  if (nameValHandle->isString() &&
+      selfHandle.getHermesValue().getRaw() == receiver->getRaw()) {
+    using CPCEntry = ComputedPropertyCache::Entry;
+    ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
+    // \return true if the entry \p e can serve the put.
+    auto usable = [&runtime](const CPCEntry *e) {
+      if (!e)
+        return false;
+      if (e->getKind() == ComputedPropertyCache::Kind::Slot)
+        return (bool)e->writable;
+      // No object on the prototype chain has changed since the add was
+      // recorded.
+      return e->parentEpoch == runtime.getFullParentCacheEpoch();
+    };
+    const CPCEntry *entry = cache.probe(runtime, *selfHandle, *nameValHandle);
+    if (usable(entry)) {
+      OptValue<SmallHermesValue> tried =
+          SmallHermesValue::tryEncodeHermesValueNoAlloc(*valueHandle, runtime);
+      // A single store for both encodes: with two, clang outlines the store
+      // and the served put pays a call. The encode that may allocate and
+      // the second probe run only when tryEncodeHermesValueNoAlloc failed.
+      SmallHermesValue shv = LLVM_LIKELY(tried)
+          ? *tried
+          : SmallHermesValue::encodeHermesValue(*valueHandle, runtime);
+      if (LLVM_UNLIKELY(!tried))
+        entry = cache.probe(runtime, *selfHandle, *nameValHandle);
+      if (LLVM_LIKELY(tried) || usable(entry)) {
+        if (entry->getKind() == ComputedPropertyCache::Kind::Slot) {
+          setNamedSlotValueUnsafe(*selfHandle, runtime, entry->slot, shv);
+        } else {
+          // addNewOwnPropertyInSlot installs the class before it
+          // allocates, and roots the value itself.
+          addNewOwnPropertyInSlot(
+              *selfHandle,
+              runtime,
+              entry->resultClazz.getNonNull(runtime, runtime.getHeap()),
+              entry->slot,
+              shv);
+        }
+        return true;
+      }
+    }
+  }
+
+  // Then try the numeric fast path: has "index-like" properties, the "name"
   // already is a valid integer index, selfHandle and receiver are the
   // same, and it is present in storage.
   if (selfHandle->hasFastIndexProperties(runtime)) {
@@ -1783,6 +1841,14 @@ CallResult<bool> JSObject::putComputedWithReceiver_RJS(
               ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
+      // Record the property. The original key, not the converted one: an
+      // object key is not a string and records nothing.
+      runtime.getComputedPropertyCache().fillSlot(
+          runtime,
+          selfHandle->getClass(runtime),
+          *nameValHandle,
+          desc.flags,
+          desc.slot);
       return true;
     }
 
@@ -1994,14 +2060,33 @@ CallResult<bool> JSObject::putComputedWithReceiver_RJS(
   SymbolID id{};
   LAZY_TO_IDENTIFIER(runtime, nameValPrimitiveHandle, id);
 
-  // Add a new named property.
-  return addOwnProperty(
-      receiverHandle,
-      runtime,
-      id,
-      DefinePropertyFlags::getDefaultNewPropertyFlags(),
-      valueHandle,
-      opFlags);
+  // Add a new named property. With a uniqued string key and the object as
+  // its own receiver, record the add in the computed property cache. A
+  // uniqued key's SymbolID is the identifier for its content, which is id.
+  bool cacheComputedAdd =
+      selfHandle.getHermesValue().getRaw() == receiver->getRaw() &&
+      nameValHandle->isString() && nameValHandle->getString()->isUniqued();
+  assert(
+      (!cacheComputedAdd ||
+       nameValHandle->getString()->getUniqueID(runtime) == id) &&
+      "a uniqued key must name id");
+  // This is addOwnProperty with the default new-property flags, called
+  // directly: the receiver was found extensible above, and nothing since
+  // can change that, so addOwnProperty's extensibility check would pass.
+  if (LLVM_UNLIKELY(
+          addOwnPropertyImpl(
+              receiverHandle,
+              runtime,
+              id,
+              PropertyFlags::defaultNewNamedPropertyFlags(),
+              valueHandle,
+              nullptr,
+              nullptr,
+              nullptr,
+              cacheComputedAdd) == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  return true;
 }
 
 CallResult<bool> JSObject::deleteNamed(
@@ -3080,14 +3165,8 @@ void JSObject::tryCacheAddProperty(
     // prototype is given by its target and traps.
     // Perform these checks up here to avoid allocating an unused add cache
     // entry if they fail.
-    for (JSObject *cur = self->getParent(runtime); cur != nullptr;
-         cur = cur->getParent(runtime)) {
-      if (LLVM_UNLIKELY(
-              cur->isProxyObject(runtime) || cur->isHostObject(runtime)))
-        return;
-      if (cur->getClass(runtime)->isDictionary())
-        return;
-    }
+    if (!parentsAllowEpochCaching(*self, runtime))
+      return;
 
     uint32_t parentCacheEpoch = runtime.getParentCacheEpoch();
     uint32_t addCacheIndex = writeCacheEntry->getAddCacheIndex();
@@ -3120,6 +3199,23 @@ void JSObject::tryCacheAddProperty(
     addCacheEntry.parent = self->getParentGCPtr(runtime);
   }
 
+  markParentsCachedUsingEpoch(self, runtime);
+}
+
+bool JSObject::parentsAllowEpochCaching(JSObject *self, PointerBase &base) {
+  for (JSObject *cur = self->getParent(base); cur != nullptr;
+       cur = cur->getParent(base)) {
+    if (LLVM_UNLIKELY(cur->isProxyObject(base) || cur->isHostObject(base)))
+      return false;
+    if (cur->getClass(base)->isDictionary())
+      return false;
+  }
+  return true;
+}
+
+void JSObject::markParentsCachedUsingEpoch(
+    Handle<JSObject> self,
+    Runtime &runtime) {
   struct : public Locals {
     PinnedValue<JSObject> cur;
   } lv;
@@ -3132,6 +3228,50 @@ void JSObject::tryCacheAddProperty(
   }
 }
 
+void JSObject::tryCacheComputedAdd(
+    Handle<JSObject> self,
+    Runtime &runtime,
+    SymbolID name,
+    Handle<HiddenClass> startClazz,
+    SlotIndex slot,
+    Handle<HiddenClass> resultClazz) {
+  // The slot of a class that is not a dictionary fits in an entry.
+  static_assert(
+      HiddenClass::kDictionaryThreshold <= ComputedPropertyCache::kMaxSlot,
+      "a slot of a cacheable class must fit in an entry");
+  {
+    NoAllocScope noAlloc{runtime};
+    HiddenClass *start = *startClazz;
+    HiddenClass *result = *resultClazz;
+    assert(start != result && "must be a transition");
+    // A start class that is not extensible cannot have reached the add
+    // without InternalForce, which no computed put passes; the entry must
+    // not depend on that.
+    if (!start->isExtensible() || !ComputedPropertyCache::isCacheable(start) ||
+        !ComputedPropertyCache::isCacheable(result) ||
+        !parentsAllowEpochCaching(*self, runtime))
+      return;
+    assert(
+        slot == start->getNumProperties() &&
+        "the added property must take the next slot");
+    assert(
+        result->getNumProperties() == slot + 1 &&
+        "an add must give the result one more property");
+    assert(
+        HiddenClass::debugIsPropertyDefined(result, runtime, name) &&
+        "the result class must have the added name");
+    assert(
+        !HiddenClass::debugIsPropertyDefined(start, runtime, name) &&
+        "the start class must not have the added name");
+    runtime.getComputedPropertyCache().insertAdd(
+        runtime, start, name, result, slot, runtime.getFullParentCacheEpoch());
+  }
+
+  // Like tryCacheAddProperty: any change to an object on the chain must now
+  // bump the epoch. This allocates only after the entry is written.
+  markParentsCachedUsingEpoch(self, runtime);
+}
+
 ExecutionStatus JSObject::addOwnPropertyImpl(
     Handle<JSObject> selfHandle,
     Runtime &runtime,
@@ -3140,10 +3280,14 @@ ExecutionStatus JSObject::addOwnPropertyImpl(
     Handle<> valueOrAccessor,
     RuntimeModule *runtimeModule,
     SHUnit *unit,
-    WritePropertyCacheEntry *cacheEntry) {
+    WritePropertyCacheEntry *cacheEntry,
+    bool cacheComputedAdd) {
   assert(
       (propertyFlags.privateName || !selfHandle->isProxyObject(runtime)) &&
       "Internal non-private properties cannot be added to Proxy objects");
+  assert(
+      !(cacheEntry && cacheComputedAdd) &&
+      "an add is cached by at most one cache");
 
   struct : public Locals {
     PinnedValue<HiddenClass> startClazz;
@@ -3181,6 +3325,9 @@ ExecutionStatus JSObject::addOwnPropertyImpl(
         lv.startClazz,
         slot,
         lv.resultClazz);
+  } else if (cacheComputedAdd && !lv.resultClazz->isDictionary()) {
+    tryCacheComputedAdd(
+        selfHandle, runtime, name, lv.startClazz, slot, lv.resultClazz);
   }
 
   return ExecutionStatus::RETURNED;

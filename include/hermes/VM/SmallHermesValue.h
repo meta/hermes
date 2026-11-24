@@ -9,6 +9,7 @@
 #define HERMES_VM_SMALLHERMESVALUE_H
 
 #include "hermes/Support/Algorithms.h"
+#include "hermes/Support/OptValue.h"
 #include "hermes/VM/CompressedPointer.h"
 #include "hermes/VM/GCDecl.h"
 #include "hermes/VM/HeapAlign.h"
@@ -168,6 +169,13 @@ class SmallHermesValueAdaptor : protected HermesValue {
       Runtime &) {
     return SmallHermesValueAdaptor{hv};
   }
+  /// Encode \p hv without allocating. \return the encoding, always: this
+  /// representation never boxes.
+  static OptValue<SmallHermesValueAdaptor> tryEncodeHermesValueNoAlloc(
+      HermesValue hv,
+      PointerBase &) {
+    return SmallHermesValueAdaptor{hv};
+  }
   static SmallHermesValueAdaptor encodeBigIntValue(
       BigIntPrimitive *ptr,
       PointerBase *) {
@@ -314,6 +322,13 @@ class HermesValue32 {
     validatePointer(p);
     return fromRaw(p | static_cast<RawType>(tag));
   }
+
+  /// Encode the pointer \p hv, with the HV32 tag of its HV64 tag. Does not
+  /// allocate.
+  /// \pre \p hv is a pointer.
+  inline static HermesValue32 encodePointerHV64(
+      HermesValue hv,
+      PointerBase &pb);
 
   /// Whether the given HV (represented as bits) will be encoded as a
   /// compressed HV64 directly. If it can't be encoded, it will require a heap
@@ -544,6 +559,13 @@ class HermesValue32 {
   inline static HermesValue32 encodeHermesValue(
       HermesValue hv,
       Runtime &runtime);
+
+  /// Convert \p hv to a HermesValue32 without allocating. \return the
+  /// encoding, the same as encodeHermesValue's, or none exactly when
+  /// encodeHermesValue would box a double.
+  inline static OptValue<HermesValue32> tryEncodeHermesValueNoAlloc(
+      HermesValue hv,
+      PointerBase &pb);
 
   /// Encode a double as a HermesValue32. Small integer values will be stored
   /// inline and doubles will be allocated on the heap. Always treat this

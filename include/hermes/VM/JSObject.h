@@ -1530,6 +1530,9 @@ class JSObject : public GCCell {
       SHUnit *unit = nullptr,
       WritePropertyCacheEntry *cacheEntry = nullptr);
   /// Performs the actual adding of the property for \c addOwnProperty()
+  /// \param cacheComputedAdd record the add in the computed property cache,
+  ///   as tryCacheComputedAdd describes.
+  /// \pre cacheEntry is null if cacheComputedAdd is set.
   static ExecutionStatus addOwnPropertyImpl(
       Handle<JSObject> selfHandle,
       Runtime &runtime,
@@ -1538,7 +1541,8 @@ class JSObject : public GCCell {
       Handle<> valueOrAccessor,
       RuntimeModule *runtimeModule,
       SHUnit *unit,
-      WritePropertyCacheEntry *cacheEntry);
+      WritePropertyCacheEntry *cacheEntry,
+      bool cacheComputedAdd = false);
 
   /// Try to cache property addition.
   /// May fail if unable to allocate an AddPropertyCacheEntry, e.g.
@@ -1562,6 +1566,32 @@ class JSObject : public GCCell {
       RuntimeModule *runtimeModule,
       SHUnit *unit,
       WritePropertyCacheEntry *writeCacheEntry,
+      Handle<HiddenClass> startClazz,
+      SlotIndex slot,
+      Handle<HiddenClass> resultClazz);
+
+  /// \return false if an object on \p self's prototype chain is a proxy,
+  /// a host object or a dictionary: the parent epoch cannot track those.
+  static bool parentsAllowEpochCaching(JSObject *self, PointerBase &base);
+
+  /// Mark every object on \p self's prototype chain with
+  /// setCachedUsingEpoch. May allocate.
+  static void markParentsCachedUsingEpoch(
+      Handle<JSObject> self,
+      Runtime &runtime);
+
+  /// Record in the computed property cache that adding \p name to
+  /// \p startClazz in \p slot gave \p resultClazz. Does nothing if the add
+  /// is not cacheable. On success, marks the prototype chain of \p self as
+  /// tryCacheAddProperty does, which may allocate.
+  /// \pre called only from addOwnPropertyImpl, for an add that
+  ///   putComputedWithReceiver_RJS reached with a uniqued string key whose
+  ///   SymbolID is \p name and with \p self as the receiver.
+  /// \pre \p resultClazz is not a dictionary.
+  static void tryCacheComputedAdd(
+      Handle<JSObject> self,
+      Runtime &runtime,
+      SymbolID name,
       Handle<HiddenClass> startClazz,
       SlotIndex slot,
       Handle<HiddenClass> resultClazz);
