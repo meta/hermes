@@ -84,11 +84,15 @@ later task, not part of this one.
 9. Locals must be initialised/clean at `LocalsRAII` construction
    (`HERMES_SLOW_DEBUG` asserts it); `PinnedValue` default-constructs
    to null, so just don't pre-assign.
-10. **Native backend (`StaticH.cpp`, `StaticHUnit.cpp`): never call
-    `_sh_throw_current` while a `LocalsRAII` is in scope.** It
-    `longjmp`s, skipping destructors, and `_sh_catch_no_pop` restores
-    only `shLocals`, not `vmLocals`, which would be left dangling. Record
-    the failure in a `bool`, end the block, then throw.
+10. **Native backend (`StaticH.cpp`, `StaticHUnit.cpp`): no `LocalsRAII`
+    may be live across ANY call that can reach `_sh_throw_current`,
+    including transitively through helpers (e.g. `getById_RJS`,
+    `putById_RJS`, the getByVal helpers).** It `longjmp`s, skipping
+    destructors, and `_sh_catch_no_pop` restores only `shLocals`, not
+    `vmLocals`, which would be left dangling. Split such a helper into a
+    non-throwing core that returns a status (e.g. `CallResult`) plus a
+    throwing wrapper, call the core inside the Locals scope, record the
+    failure in a `bool`, end the block, then throw.
 11. Keep each commit mechanical and reviewable: no unrelated refactors.
 
 ## Changing handle-returning APIs

@@ -1118,8 +1118,13 @@ extern "C" void _sh_ljs_put_by_val_with_receiver_rjs(
   putByValWithReceiver_RJS(shr, target, key, value, receiver, isStrict);
 }
 
+/// The implementation of getByIdWithReceiver_RJS(). On failure it leaves the
+/// exception pending and returns EXCEPTION instead of calling
+/// _sh_throw_current(), so that callers holding a LocalsRAII can destroy it
+/// before throwing: the longjmp would skip its destructor and leave
+/// runtime.vmLocals dangling.
 template <bool tryProp>
-static inline HermesValue getByIdWithReceiver_RJS(
+static inline CallResult<HermesValue> getByIdWithReceiverCore_RJS(
     Runtime &runtime,
     Handle<> source,
     SymbolID symID,
@@ -1236,7 +1241,7 @@ static inline HermesValue getByIdWithReceiver_RJS(
           cacheEntry);
     }
     if (LLVM_UNLIKELY(resPH == ExecutionStatus::EXCEPTION))
-      _sh_throw_current(getSHRuntime(runtime));
+      return ExecutionStatus::EXCEPTION;
 #ifdef HERMES_SLOW_DEBUG
     // if (cacheEntry && savedClass &&
     //     cacheEntry->clazz.get(runtime, runtime.getHeap()) != savedClass) {
@@ -1254,9 +1259,26 @@ static inline HermesValue getByIdWithReceiver_RJS(
           runtime, source, symID, receiver);
     }
     if (LLVM_UNLIKELY(resPH == ExecutionStatus::EXCEPTION))
-      _sh_throw_current(getSHRuntime(runtime));
+      return ExecutionStatus::EXCEPTION;
     return resPH->get();
   }
+}
+
+/// Get the property \p symID of \p source with the given \p receiver. Throws
+/// the pending exception (longjmp) on failure, so it must not be called while a
+/// LocalsRAII is live; use getByIdWithReceiverCore_RJS() in that case.
+template <bool tryProp>
+static inline HermesValue getByIdWithReceiver_RJS(
+    Runtime &runtime,
+    Handle<> source,
+    SymbolID symID,
+    Handle<> receiver,
+    ReadPropertyCacheEntry *cacheEntry) {
+  CallResult<HermesValue> res = getByIdWithReceiverCore_RJS<tryProp>(
+      runtime, source, symID, receiver, cacheEntry);
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
+    _sh_throw_current(getSHRuntime(runtime));
+  return *res;
 }
 
 /// Assume the receiver is the same as the source object.
@@ -1349,40 +1371,51 @@ extern "C" SHLegacyValue _sh_ljs_create_this(
     // here. For example, using `new` on an arrow function, newTarget is not a
     // constructor, but we don't find that out until after this instruction.
 
-    struct : public Locals {
-      PinnedValue<Callable> newTarget;
-      // This is the .prototype of new.target
-      PinnedValue<> newTargetPrototype;
-      PinnedValue<HiddenClass> clazz;
-    } lv;
-    LocalsRAII lraii(runtime, &lv);
-    lv.newTarget = correctNewTarget;
-    lv.newTargetPrototype = getById_RJS<false>(
-        getRuntime(shr),
-        lv.newTarget,
-        Predefined::getSymbolID(Predefined::prototype),
-        reinterpret_cast<ReadPropertyCacheEntry *>(propCacheEntry));
-    Handle<JSObject> parentHandle = lv.newTargetPrototype->isObject()
-        ? Handle<JSObject>::vmcast(&lv.newTargetPrototype)
-        : runtime.objectPrototype;
+    // The Locals must be destroyed before throwing, so it gets its own block
+    // and the lookup uses the non-throwing core.
+    {
+      struct : public Locals {
+        PinnedValue<Callable> newTarget;
+        // This is the .prototype of new.target
+        PinnedValue<> newTargetPrototype;
+        PinnedValue<HiddenClass> clazz;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
+      lv.newTarget = correctNewTarget;
+      CallResult<HermesValue> protoRes = getByIdWithReceiverCore_RJS<false>(
+          runtime,
+          lv.newTarget,
+          Predefined::getSymbolID(Predefined::prototype),
+          lv.newTarget,
+          reinterpret_cast<ReadPropertyCacheEntry *>(propCacheEntry));
+      if (LLVM_LIKELY(protoRes != ExecutionStatus::EXCEPTION)) {
+        lv.newTargetPrototype = *protoRes;
+        Handle<JSObject> parentHandle = lv.newTargetPrototype->isObject()
+            ? Handle<JSObject>::vmcast(&lv.newTargetPrototype)
+            : runtime.objectPrototype;
 
-    // Cache the class per call site, so the common case of a stable prototype
-    // skips the parent transition lookup.
-    auto *cacheEntry =
-        reinterpret_cast<WeakRoot<HiddenClass> *>(classCacheEntry);
-    HiddenClass *cached =
-        cacheEntry ? cacheEntry->get(runtime, runtime.getHeap()) : nullptr;
-    if (cached && cached->getObjectParent(runtime) == *parentHandle) {
-      lv.clazz = cached;
-    } else {
-      lv.clazz = *runtime.getHiddenClassForPrototype(
-          *parentHandle, runtime.classJSObject);
-      assert(!lv.clazz->isDictionary() && "Prototype must be a normal object");
-      if (cacheEntry)
-        cacheEntry->set(runtime, *lv.clazz);
+        // Cache the class per call site, so the common case of a stable
+        // prototype skips the parent transition lookup.
+        auto *cacheEntry =
+            reinterpret_cast<WeakRoot<HiddenClass> *>(classCacheEntry);
+        HiddenClass *cached =
+            cacheEntry ? cacheEntry->get(runtime, runtime.getHeap()) : nullptr;
+        if (cached && cached->getObjectParent(runtime) == *parentHandle) {
+          lv.clazz = cached;
+        } else {
+          lv.clazz = *runtime.getHiddenClassForPrototype(
+              *parentHandle, runtime.classJSObject);
+          assert(
+              !lv.clazz->isDictionary() && "Prototype must be a normal object");
+          if (cacheEntry)
+            cacheEntry->set(runtime, *lv.clazz);
+        }
+
+        return JSObject::create(runtime, parentHandle, lv.clazz)
+            .getHermesValue();
+      }
     }
-
-    return JSObject::create(runtime, parentHandle, lv.clazz).getHermesValue();
+    // The lookup failed and the Locals is gone: throw the pending exception.
   }
 throwCurrent:
   _sh_throw_current(shr);

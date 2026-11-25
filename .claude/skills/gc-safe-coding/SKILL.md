@@ -122,11 +122,15 @@ A `Handle` must never outlive the slot it views.
    before calling `castAndSetHermesValue`.
 6. **Loops are safe with Locals.** `PinnedValue` fields are reused each
    iteration — no unbounded growth.
-7. **Native backend (`StaticH.cpp`, `StaticHUnit.cpp`): never call
-   `_sh_throw_current` while a `LocalsRAII` is in scope.** It `longjmp`s,
-   skipping destructors, and the catch side restores only `shLocals`, so
-   `runtime.vmLocals` would be left dangling. Record the failure in a `bool`,
-   end the block, then throw.
+7. **Native backend (`StaticH.cpp`, `StaticHUnit.cpp`): no `LocalsRAII` may
+   be live across ANY call that can reach `_sh_throw_current`, including
+   transitively through helpers (e.g. `getById_RJS`, `putById_RJS`, the
+   getByVal helpers).** It `longjmp`s, skipping destructors, and the catch
+   side restores only `shLocals`, so `runtime.vmLocals` would be left
+   dangling. Split such a helper into a non-throwing core returning a status
+   plus a throwing wrapper; call the core inside the Locals scope, record the
+   failure in a `bool`, end the block, then throw (or return from inside the
+   block on success and fall through to the throw after it).
 8. **A `PseudoHandle` or raw pointer extracted from a pinned slot is stale
    after the next safepoint.** Re-read the slot, or pin the new value.
 
