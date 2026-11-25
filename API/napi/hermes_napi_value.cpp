@@ -251,7 +251,6 @@ napi_status NAPI_CDECL napi_create_object(napi_env env, napi_value *result) {
   CHECK_ARG(env, result);
 
   // Create a plain empty object with the standard Object.prototype.
-  // JSObject::create returns a PseudoHandle, so no GCScope is needed.
   auto obj = hermes::vm::JSObject::create(env->runtime);
   *result = env->addToCurrentScope(obj.getHermesValue());
   return napi_clear_last_error(env);
@@ -342,7 +341,6 @@ napi_coerce_to_number(napi_env env, napi_value value, napi_value *result) {
   auto valHandle = hermes::vm::Handle<>(
       reinterpret_cast<hermes::vm::PinnedHermesValue *>(value));
 
-  hermes::vm::GCScope gcScope(env->runtime);
   auto numRes = hermes::vm::toNumber_RJS(env->runtime, valHandle);
   if (LLVM_UNLIKELY(numRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_pending_exception);
@@ -361,7 +359,6 @@ napi_coerce_to_object(napi_env env, napi_value value, napi_value *result) {
   auto valHandle = hermes::vm::Handle<>(
       reinterpret_cast<hermes::vm::PinnedHermesValue *>(value));
 
-  hermes::vm::GCScope gcScope(env->runtime);
   auto objRes = hermes::vm::toObject(env->runtime, valHandle);
   if (LLVM_UNLIKELY(objRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_pending_exception);
@@ -380,7 +377,6 @@ napi_coerce_to_string(napi_env env, napi_value value, napi_value *result) {
   auto valHandle = hermes::vm::Handle<>(
       reinterpret_cast<hermes::vm::PinnedHermesValue *>(value));
 
-  hermes::vm::GCScope gcScope(env->runtime);
   auto strRes = hermes::vm::toString_RJS(env->runtime, valHandle);
   if (LLVM_UNLIKELY(strRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_pending_exception);
@@ -436,7 +432,6 @@ napi_status NAPI_CDECL napi_instanceof(
       reinterpret_cast<hermes::vm::PinnedHermesValue *>(object));
   auto ctorHandle = hermes::vm::Handle<>(ctorPhv);
 
-  hermes::vm::GCScope gcScope(env->runtime);
   auto instRes =
       hermes::vm::instanceOfOperator_RJS(env->runtime, objHandle, ctorHandle);
   if (LLVM_UNLIKELY(instRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -465,10 +460,6 @@ napi_create_symbol(napi_env env, napi_value description, napi_value *result) {
     PinnedValue<StringPrimitive> descStr;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-
-  // A GCScope is needed because createNotUniquedSymbol and
-  // createEfficient may internally allocate temporary Handle objects.
-  GCScope gcScope(runtime);
 
   if (description == nullptr) {
     // No description provided — use empty string, matching
@@ -512,10 +503,6 @@ napi_status NAPI_CDECL node_api_symbol_for(
     PinnedValue<StringPrimitive> key;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-
-  // A GCScope is needed because createEfficient and
-  // getSymbolForKey may internally allocate temporary handles.
-  GCScope gcScope(runtime);
 
   auto strRes = StringPrimitive::createEfficient(
       runtime,

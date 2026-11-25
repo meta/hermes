@@ -91,10 +91,6 @@ napi_status NAPI_CDECL napi_create_promise(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  // GCScope is needed for internal Handle allocations by
-  // getNamed_RJS, NativeFunction::create, and construct calls.
-  GCScope gcScope(runtime);
-
   // Look up the global Promise constructor.
   auto promiseSymRes =
       runtime.getIdentifierTable().getSymbolID(runtime, ASCIIRef("Promise", 7));
@@ -163,7 +159,6 @@ static napi_status concludeDeferred(
   using namespace hermes::vm;
 
   Runtime &runtime = env->runtime;
-  GCScope gcScope(runtime);
 
   auto *resPhv = reinterpret_cast<const PinnedHermesValue *>(resolution);
 
@@ -246,7 +241,6 @@ napi_is_promise(napi_env env, napi_value value, bool *is_promise) {
     PinnedValue<SymbolID> promiseSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-  GCScope gcScope(runtime);
 
   // Look up the global Promise constructor.
   auto promiseSymRes =

@@ -600,7 +600,6 @@ CallResult<PseudoHandle<JSArray>> JSObject::getOwnPropertyKeys(
   // Iterate the named properties excluding those which use Symbols.
   if (okFlags.getIncludeNonSymbols()) {
     // Iterate the indexed properties.
-    GCScopeMarkerRAII marker{runtime};
     for (auto i = range.first; i != range.second; ++i) {
       auto res = getOwnIndexedPropertyFlags(selfHandle.get(), runtime, i);
       if (!res)
@@ -615,7 +614,6 @@ CallResult<PseudoHandle<JSArray>> JSObject::getOwnPropertyKeys(
               JSArray::setElementAt(lv.array, runtime, index++, lv.tmp) ==
               ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
-      marker.flush();
     }
 
     numIndexed = index;
@@ -704,12 +702,10 @@ CallResult<PseudoHandle<JSArray>> JSObject::getOwnPropertyKeys(
   // Iterate over HostObject properties and append them to the array. Do not
   // append duplicates.
   if (LLVM_UNLIKELY(hostObjectSymbolCount != 0)) {
-    GCScopeMarkerRAII marker{runtime};
     for (size_t i = 0; i < hostObjectSymbolCount; ++i) {
       assert(
           lv.hostObjectSymbols->at(runtime, i).isSymbol() &&
           "Host object needs to return array of SymbolIDs");
-      marker.flush();
       SymbolID id = lv.hostObjectSymbols->at(runtime, i).getSymbol();
       assert(
           !InternalProperty::isInternal(id) &&
@@ -1172,7 +1168,6 @@ JSObject *JSObject::getNamedDescriptorUnsafe(
     MutableHandle<JSObject> mutableSelfHandle{lv.head};
 
     do {
-      GCScopeMarkerRAII marker{runtime};
       // Check the most common case first, at the cost of some code duplication.
       if (LLVM_LIKELY(
               !mutableSelfHandle->isLazy(runtime) &&
@@ -1226,7 +1221,6 @@ ExecutionStatus JSObject::getComputedPrimitiveDescriptor(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  GCScopeMarkerRAII marker{runtime};
   do {
     // A proxy is ignored here so we can check the bit later and
     // return it back to the caller for additional processing.
@@ -1258,9 +1252,6 @@ ExecutionStatus JSObject::getComputedPrimitiveDescriptor(
     // This isn't a proxy, so use the faster getParent() instead of
     // getPrototypeOf.
     propObj.set(propObj->getParent(runtime));
-    // Flush at the end of the loop to allow first iteration to be as fast as
-    // possible.
-    marker.flush();
   } while (propObj);
   return ExecutionStatus::RETURNED;
 }
@@ -3550,7 +3541,6 @@ void JSObject::addNewOwnPropertyInSlot(
     PinnedValue<PropStorage> storage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScopeMarkerRAII marker{runtime};
 
   lv.self = self;
   lv.value = value.unboxToHV(runtime);
@@ -3909,8 +3899,6 @@ CallResult<uint32_t> appendAllPropertyKeys(
     }
   }; // end of lambda expression
   for (bool first = true; lv.head.get(); first = false) {
-    GCScope gcScope(runtime);
-
     // enumerableProps will contain all enumerable own properties from obj.
     // Impl note: this is the only place where getOwnPropertyKeys will be
     // called without IncludeNonEnumerable on a Proxy.  Everywhere else,
@@ -3922,14 +3910,12 @@ CallResult<uint32_t> appendAllPropertyKeys(
       return ExecutionStatus::EXCEPTION;
     }
     lv.enumerableProps = std::move(*cr);
-    auto marker = gcScope.createMarker();
     if (first && beginIndex > 0) {
       auto endIndex = SmallHermesValue::encodeNumberValue(
           lv.enumerableProps->getEndIndex(), runtime);
       arr->set(1, endIndex, runtime.getHeap());
     }
     for (unsigned i = 0, e = lv.enumerableProps->getEndIndex(); i < e; ++i) {
-      gcScope.flushToMarker(marker);
       lv.prop = lv.enumerableProps->at(runtime, i).unboxToHV(runtime);
       assert(
           (lv.prop->isNumber() || lv.prop->isString() || lv.prop->isSymbol()) &&
@@ -4033,7 +4019,6 @@ ExecutionStatus setProtoClasses(
   LocalsRAII lraii(runtime, &lv);
   lv.head = *obj;
   MutableHandle<JSObject> head{lv.head};
-  GCScopeMarkerRAII marker{runtime};
   // Push entries 0 and 1 (we'll fill them in later).
   lv.clazz = HermesValue::encodeTrustedNumberValue(0);
   if (LLVM_UNLIKELY(
@@ -4064,7 +4049,6 @@ ExecutionStatus setProtoClasses(
       return ExecutionStatus::EXCEPTION;
     }
     head = head->getParent(runtime);
-    marker.flush();
   }
   lv.clazz = HermesValue::encodeNullValue();
   if (LLVM_UNLIKELY(

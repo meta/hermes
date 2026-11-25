@@ -408,8 +408,6 @@ Runtime::Runtime(
   strForSymbolNoDescription = vmcast<StringPrimitive>(ignoreAllocationFailure(
       StringPrimitive::createLongLived(*this, ASCIIRef("", (size_t)0))));
 
-  GCScope scope(*this);
-
   struct : public Locals {
     PinnedValue<JSObject> jsBuiltinsObj;
   } lv;
@@ -1199,8 +1197,6 @@ CallResult<HermesValue> Runtime::runBytecode(
     }
   }
 
-  GCScope scope(*this);
-
   struct : public Locals {
     PinnedValue<Domain> domain;
     PinnedValue<StringPrimitive> str;
@@ -1270,7 +1266,6 @@ ExecutionStatus Runtime::loadSegment(
     std::shared_ptr<hbc::BCProvider> &&bytecode,
     Handle<RequireContext> requireContext,
     RuntimeModuleFlags flags) {
-  GCScopeMarkerRAII marker{*this};
   struct : public Locals {
     PinnedValue<Domain> domain;
   } lv;
@@ -1496,7 +1491,6 @@ static ExecutionStatus raisePlaceholder(
     Runtime &runtime,
     Handle<JSObject> prototype,
     Handle<> message) {
-  GCScopeMarkerRAII gcScope{runtime};
   struct : public Locals {
     PinnedValue<JSError> errorObj;
   } lv;
@@ -1514,9 +1508,6 @@ static ExecutionStatus raisePlaceholder(
     Runtime &runtime,
     Handle<JSObject> prototype,
     const TwineChar16 &msg) {
-  // Since this happens unexpectedly and rarely, don't rely on the parent
-  // GCScope.
-  GCScope gcScope{runtime};
   struct : public Locals {
     PinnedValue<StringPrimitive> str;
   } lv;
@@ -1540,9 +1531,6 @@ ExecutionStatus Runtime::raiseError(const TwineChar16 &msg) {
 }
 
 ExecutionStatus Runtime::raiseTypeError(Handle<> message) {
-  // Since this happens unexpectedly and rarely, don't rely on the parent
-  // GCScope.
-  GCScope gcScope{*this};
   return raisePlaceholder(
       *this, Handle<JSObject>::vmcast(&TypeErrorPrototype), message);
 }
@@ -1762,11 +1750,8 @@ void Runtime::initPredefinedStrings() {
 }
 
 void Runtime::initCharacterStrings() {
-  GCScope gc(*this);
-  auto marker = gc.createMarker();
   charStrings_.reserve(256);
   for (char16_t ch = 0; ch < 256; ++ch) {
-    gc.flushToMarker(marker);
     charStrings_.push_back(allocateCharacterString(ch).getHermesValue());
   }
 }
@@ -1869,7 +1854,6 @@ ExecutionStatus Runtime::forEachPublicNativeBuiltin(
 
   for (unsigned methodIndex = 0; methodIndex < BuiltinMethod::_firstPrivate;
        ++methodIndex) {
-    GCScopeMarkerRAII marker{*this};
     LLVM_DEBUG(llvh::dbgs() << publicNativeBuiltins[methodIndex].name << "\n");
     // Find the object first, if it changed.
     bool frozen = (publicNativeBuiltins[methodIndex].object & FROZEN_FLAG) != 0;
@@ -1921,8 +1905,6 @@ ExecutionStatus Runtime::forEachPublicNativeBuiltin(
 }
 
 void Runtime::initNativeBuiltins() {
-  GCScopeMarkerRAII gcScope{*this};
-
   (void)forEachPublicNativeBuiltin([this](
                                        unsigned methodIndex,
                                        bool /*frozen*/,
@@ -1983,7 +1965,6 @@ void Runtime::initJSBuiltins(Handle<JSObject> jsBuiltinsObj) {
 
 ExecutionStatus Runtime::assertBuiltinsUnmodified() {
   assert(!builtinsFrozen_ && "Builtins are already frozen.");
-  GCScope gcScope(*this);
   NoRJSScope noRJS{*this};
 
   return forEachPublicNativeBuiltin([this](
@@ -2028,8 +2009,6 @@ ExecutionStatus Runtime::assertBuiltinsUnmodified() {
 
 void Runtime::freezeBuiltins() {
   assert(!builtinsFrozen_ && "Builtins are already frozen.");
-  GCScope gcScope{*this};
-
   // A list storing all the object ids that we will freeze on the global object
   // in the end.
   std::vector<SymbolID> objectList;
@@ -2093,15 +2072,12 @@ ExecutionStatus Runtime::drainJobs() {
   for (auto &cb : drainJobsCallbacks_)
     cb();
 
-  GCScope gcScope{*this};
   struct : public Locals {
     PinnedValue<Callable> job;
   } lv;
   LocalsRAII lraii(*this, &lv);
   // Note that new jobs can be enqueued during the draining.
   while (!jobQueue_.empty()) {
-    GCScopeMarkerRAII marker{gcScope};
-
     lv.job = jobQueue_.front();
     jobQueue_.pop_front();
 

@@ -1209,7 +1209,6 @@ TEST_F(NapiTestFixture, Typeof_String) {
   // is not yet implemented.
   napi_value val;
   {
-    GCScope gcScope(*rt_);
     auto strRes = StringPrimitive::createEfficient(
         *rt_, llvh::ArrayRef<char>("hello", 5));
     ASSERT_NE(ExecutionStatus::EXCEPTION, strRes.getStatus());
@@ -1244,7 +1243,6 @@ TEST_F(NapiTestFixture, Typeof_Object) {
   // Create a plain JSObject via VM internals.
   napi_value val;
   {
-    GCScope gcScope(*rt_);
     auto obj = JSObject::create(*rt_);
     val = env_->addToCurrentScope(obj.getHermesValue());
   }
@@ -1262,7 +1260,6 @@ TEST_F(NapiTestFixture, Typeof_Function) {
   // Create a NativeFunction via VM internals.
   napi_value val;
   {
-    GCScope gcScope(*rt_);
     auto fn = NativeFunction::create(
         *rt_,
         nullptr, // context
@@ -1285,7 +1282,6 @@ TEST_F(NapiTestFixture, Typeof_BigInt) {
   // Create a BigInt via VM internals.
   napi_value val;
   {
-    GCScope gcScope(*rt_);
     auto biRes = BigIntPrimitive::fromSigned(*rt_, 42);
     ASSERT_NE(ExecutionStatus::EXCEPTION, biRes.getStatus());
     val = env_->addToCurrentScope(*biRes);

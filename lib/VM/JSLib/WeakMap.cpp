@@ -102,7 +102,6 @@ HermesValue createWeakMapConstructor(Runtime &runtime) {
 
 CallResult<HermesValue> weakMapConstructor(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   if (LLVM_UNLIKELY(!args.isConstructorCall())) {
     return runtime.raiseTypeError("WeakMap must be called as a constructor");
@@ -163,10 +162,7 @@ CallResult<HermesValue> weakMapConstructor(void *, Runtime &runtime) {
   }
   auto iteratorRecord = *iterRes;
 
-  auto marker = gcScope.createMarker();
-
   for (;;) {
-    gcScope.flushToMarker(marker);
     auto nextRes = iteratorStep(runtime, iteratorRecord);
     if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;

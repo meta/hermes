@@ -137,9 +137,7 @@ class JSONStringifyer {
   /// and toJSON. The holder must be set in lv_.operationStrHolder by the
   /// caller.
   /// \return whether the result is not undefined.
-  CallResult<bool> operationStrValue(
-      GCScopeMarkerRAII &marker,
-      HermesValue key);
+  CallResult<bool> operationStrValue(HermesValue key);
 
   /// Implement the abstract operation Quote(value).
   /// It wraps a String value in double quotes and escapes characters within it.
@@ -240,11 +238,7 @@ ExecutionStatus JSONStringifyer::initializeReplacer(Handle<> replacer) {
   lv_.propertyList = std::move(*arrRes);
 
   // Iterate through all indexes, in ascending order.
-  GCScope gcScope{runtime_};
-  auto marker = gcScope.createMarker();
   for (uint64_t i = 0, e = *lenRes; i < e; ++i) {
-    gcScope.flushToMarker(marker);
-
     // Get the property value.
     auto propRes = getIndexed_RJS(runtime_, replacerArray, i);
     if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
@@ -343,7 +337,6 @@ ExecutionStatus JSONStringifyer::initializeSpace(Handle<> space) {
 }
 
 CallResult<bool> JSONStringifyer::operationStr(HermesValue key) {
-  GCScopeMarkerRAII marker{runtime_};
   // Str.1: access holder[key].
   lv_.tmpHandle = key;
   auto propRes = JSObject::getComputed_RJS(
@@ -352,12 +345,10 @@ CallResult<bool> JSONStringifyer::operationStr(HermesValue key) {
     return ExecutionStatus::EXCEPTION;
   }
   lv_.operationStrValue = propRes->get();
-  return operationStrValue(marker, *lv_.tmpHandle);
+  return operationStrValue(*lv_.tmpHandle);
 }
 
-CallResult<bool> JSONStringifyer::operationStrValue(
-    GCScopeMarkerRAII &marker,
-    HermesValue key) {
+CallResult<bool> JSONStringifyer::operationStrValue(HermesValue key) {
   struct : public Locals {
     PinnedValue<> hValueHV;
     PinnedValue<Callable> toJSON;
@@ -523,9 +514,6 @@ CallResult<bool> JSONStringifyer::operationStrValue(
     if (LLVM_UNLIKELY(!*cr)) {
       return runtime_.raiseTypeError("cyclical structure in JSON object");
     }
-    // Flush just before the recursive call (pushValueToStack can create
-    // handles).
-    marker.flush();
     CallResult<bool> isArrayRes =
         isArray(runtime_, vmcast<JSObject>(*lv_.operationStrValue));
     if (LLVM_UNLIKELY(isArrayRes == ExecutionStatus::EXCEPTION)) {
@@ -713,8 +701,6 @@ ExecutionStatus JSONStringifyer::operationJA() {
   } lv;
   LocalsRAII lraii(runtime_, &lv);
 
-  GCScopeMarkerRAII marker{runtime_};
-
   // JA.3.
   auto stepBack = depthCount_;
   // JA.4.
@@ -776,10 +762,8 @@ ExecutionStatus JSONStringifyer::operationJA() {
         continue;
       }
       lv_.operationStrValue = elem.unboxToHV(runtime_);
-      // Flush just before the recursion in case any handles were created.
-      marker.flush();
-      auto status = operationStrValue(
-          marker, HermesValue::encodeTrustedNumberValue(index));
+      auto status =
+          operationStrValue(HermesValue::encodeTrustedNumberValue(index));
       if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
@@ -801,8 +785,6 @@ ExecutionStatus JSONStringifyer::operationJA() {
     // JA.8.a.
     lv_.operationStrHolder = vmcast<JSObject>(
         lv_.stackValue->at(lv_.stackValue->size() - 1).getObject(runtime_));
-    // Flush just before the recursion in case any handles were created.
-    marker.flush();
     auto status = operationStr(HermesValue::encodeTrustedNumberValue(index));
     if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -822,8 +804,6 @@ ExecutionStatus JSONStringifyer::operationJA() {
 }
 
 ExecutionStatus JSONStringifyer::operationJO() {
-  GCScopeMarkerRAII marker{runtime_};
-
   struct : public Locals {
     /// Property keys (slow path).
     PinnedValue<JSArray> operationJOK;
@@ -932,8 +912,6 @@ ExecutionStatus JSONStringifyer::operationJO() {
     }
   }
 
-  marker.flush();
-
   if (useFastPath) {
     return operationJOProcessProperties<true>(
         lv.objHandle,
@@ -964,8 +942,6 @@ ExecutionStatus JSONStringifyer::operationJOProcessProperties(
     Handle<HiddenClass> originalClazz,
     uint32_t stepBack,
     size_t beginningLoc) {
-  GCScopeMarkerRAII marker{runtime_};
-
   // JO.8.
   bool hasElement = false;
   uint32_t len;
@@ -1029,14 +1005,10 @@ ExecutionStatus JSONStringifyer::operationJOProcessProperties(
       lv_.operationStrValue = shv.unboxToHV(runtime_);
       // Set up operationStrHolder for replacer function and toJSON calls.
       lv_.operationStrHolder = objHandle.get();
-      // Flush just before recursion.
-      marker.flush();
-      result = operationStrValue(marker, *lv_.tmpHandle);
+      result = operationStrValue(*lv_.tmpHandle);
     } else {
       // Slow path: use getComputed_RJS via operationStr.
       lv_.operationStrHolder = objHandle.get();
-      // Flush just before recursion.
-      marker.flush();
       result = operationStr(*lv_.tmpHandle);
     }
 
@@ -1149,8 +1121,6 @@ CallResult<HermesValue> runtimeJSONStringify(
     Handle<> value,
     Handle<> replacer,
     Handle<> space) {
-  GCScope gcScope{runtime, "runtimeJSONStringify"};
-
   JSONStringifyer stringifyer{runtime};
   if (stringifyer.init(replacer, space) == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;

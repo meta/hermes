@@ -424,7 +424,6 @@ CallResult<HermesValue> objectGetOwnPropertyDescriptors(
     void *,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   // 1. Let obj be ? ToObject(O).
   auto objRes = toObject(runtime, args.getArgHandle(0));
@@ -460,10 +459,8 @@ CallResult<HermesValue> objectGetOwnPropertyDescriptors(
 
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
 
-  auto marker = gcScope.createMarker();
   // 4. For each element key of ownKeys in List order, do
   for (uint32_t i = 0; i < len; ++i) {
-    gcScope.flushToMarker(marker);
     lv.key = lv.ownKeys->at(runtime, i).unboxToHV(runtime);
     // a. Let desc be ? obj.[[GetOwnProperty]](key).
     // b. Let descriptor be ! FromPropertyDescriptor(desc).
@@ -506,10 +503,7 @@ CallResult<HermesValue> getOwnPropertyKeysAsStrings(
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.array = std::move(*cr);
-  GCScope gcScope(runtime);
-  auto marker = gcScope.createMarker();
   for (unsigned i = 0, e = lv.array->getEndIndex(); i < e; ++i) {
-    gcScope.flushToMarker(marker);
     lv.prop = lv.array->at(runtime, i).unboxToHV(runtime);
     if (lv.prop->isString() || lv.prop->isSymbol()) {
       // Nothing to do if it's already a string or symbol.
@@ -668,7 +662,6 @@ objectDefinePropertiesInternal(Runtime &runtime, Handle<> obj, Handle<> props) {
   lv.propNames = std::move(*cr);
 
   // This function may create an unbounded number of GC handles.
-  GCScope scope{runtime, "objectDefinePropertiesInternal", UINT_MAX};
 
   // Iterate through every identifier, get the property descriptor
   // object, and store it in a list, according to Step 5.  What the
@@ -890,8 +883,6 @@ CallResult<HermesValue> enumerableOwnProperties_RJS(
     Runtime &runtime,
     Handle<JSObject> objHandle,
     EnumerableOwnPropertiesKind kind) {
-  GCScope gcScope{runtime};
-
   auto namesRes = getOwnPropertyKeysAsStrings(
       objHandle,
       runtime,
@@ -928,11 +919,8 @@ CallResult<HermesValue> enumerableOwnProperties_RJS(
   // We must keep track of the targetIdx because elements' enumerability may be
   // modified by a getter at any point in the loop, so `i` will not necessarily
   // correspond to `targetIdx`.
-  auto marker = gcScope.createMarker();
   for (uint32_t i = 0, len = JSArray::getLength(*lv.names, runtime); i < len;
        ++i) {
-    gcScope.flushToMarker(marker);
-
     lv.name = lv.names->at(runtime, i).getString(runtime);
     // By calling getString, name is guaranteed to be primitive.
     ComputedPropertyDescriptor desc;
@@ -1100,7 +1088,6 @@ CallResult<HermesValue> fastArrayPropsFastArray(
     PinnedValue<> value;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-  GCScopeMarkerRAII marker{runtime};
 
   if (kind == EnumerableOwnPropertiesKind::KeyValue)
     ensureTupleEntryClass(runtime, lv.tupleClass);
@@ -1159,7 +1146,6 @@ CallResult<HermesValue> genericPropsFastArray(
     PinnedValue<> value;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-  GCScopeMarkerRAII marker{runtime};
 
   if (kind == EnumerableOwnPropertiesKind::KeyValue)
     ensureTupleEntryClass(runtime, lv.tupleClass);
@@ -1225,10 +1211,6 @@ CallResult<HermesValue> objectPropsFastArray(
     PinnedValue<> value;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-  // The property scan and the FastArray internals allocate handles; without a
-  // marker they accumulate in the caller's GCScope, which on the SH path lives
-  // for the whole enclosing function.
-  GCScopeMarkerRAII marker{runtime};
 
   class PropEntry {
    public:
@@ -1386,8 +1368,6 @@ CallResult<HermesValue> objectFromEntries(void *, Runtime &runtime) {
         "fromEntries argument is not coercible to Object");
   }
 
-  GCScopeMarkerRAII marker{runtime};
-
   // 2. Let obj be ObjectCreate(%ObjectPrototype%).
   struct : public Locals {
     PinnedValue<JSObject> obj;
@@ -1417,7 +1397,6 @@ CallResult<HermesValue> objectFromEntries(void *, Runtime &runtime) {
 
 CallResult<HermesValue> objectAssign(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  vm::GCScope gcScope(runtime);
 
   // 1. Let to be ToObject(target).
   auto objRes = toObject(runtime, args.getArgHandle(0));
@@ -1452,7 +1431,6 @@ CallResult<HermesValue> objectAssign(void *, Runtime &runtime) {
   MutableHandle<> propValueHandle{lv.propValueHandle};
 
   for (uint32_t argIdx = 1; argIdx < args.getArgCount(); argIdx++) {
-    GCScopeMarkerRAII markerOuter(gcScope);
     auto nextSource = args.getArgHandle(argIdx);
     // 5.a. If nextSource is undefined or null, let keys be an empty List.
     if (nextSource->isNull() || nextSource->isUndefined()) {
@@ -1486,8 +1464,6 @@ CallResult<HermesValue> objectAssign(void *, Runtime &runtime) {
     for (uint32_t nextKeyIdx = 0, endIdx = lv.keys->getEndIndex();
          nextKeyIdx < endIdx;
          ++nextKeyIdx) {
-      GCScopeMarkerRAII markerInner(gcScope);
-
       nextKeyHandle = lv.keys->at(runtime, nextKeyIdx).unboxToHV(runtime);
 
       // 5.c.i. Let desc be from.[[GetOwnProperty]](nextKey).
@@ -1709,7 +1685,6 @@ CallResult<HermesValue> objectPrototypeToLocaleString(
     void *,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;

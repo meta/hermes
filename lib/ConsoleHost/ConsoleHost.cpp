@@ -422,7 +422,6 @@ static vm::CallResult<vm::HermesValue> hermescliGetScriptArgs(
   }
 
   for (JSArray::size_type i = 0; i < len; ++i) {
-    GCScopeMarkerRAII marker{runtime};
     auto strRes = StringPrimitive::createEfficient(
         runtime, llvh::createASCIIRef(scriptArgs[i].c_str()));
     if (strRes == ExecutionStatus::EXCEPTION) {
@@ -549,7 +548,6 @@ void installConsoleBindings(
     ConsoleHostContext &ctx,
     vm::StatSamplingThread *statSampler,
     const std::string *filename) {
-  vm::GCScopeMarkerRAII marker{runtime};
   vm::DefinePropertyFlags normalDPF =
       vm::DefinePropertyFlags::getNewNonEnumerableFlags();
 
@@ -575,7 +573,6 @@ void installConsoleBindings(
                               vm::NativeFunctionPtr functionPtr,
                               void *context,
                               unsigned paramCount) -> void {
-    vm::GCScopeMarkerRAII marker{runtime};
     lv.func = vm::NativeFunction::create(
         runtime, context, functionPtr, name, paramCount);
     auto res = vm::JSObject::defineOwnProperty(
@@ -656,7 +653,6 @@ void installConsoleBindings(
                             vm::NativeFunctionPtr functionPtr,
                             void *context,
                             unsigned paramCount) {
-      vm::GCScopeMarkerRAII marker{runtime};
       auto sym = internSym(name);
       lv.func = vm::NativeFunction::create(
           runtime, context, functionPtr, sym, paramCount);
@@ -963,7 +959,6 @@ bool executeHBCBytecodeImpl(
           hermesRuntime.get());
   setEventLoopInterface->setEventLoopControl(&eventLoopControl);
 
-  vm::GCScope scope(*runtime);
   struct : public vm::Locals {
     vm::PinnedValue<vm::Domain> domain;
     vm::PinnedValue<vm::Callable> task;
@@ -1032,7 +1027,6 @@ bool executeHBCBytecodeImpl(
   microtask::performCheckpoint(*runtime);
 
   if (!ctx.tasksEmpty()) {
-    vm::GCScopeMarkerRAII marker{scope};
     // Run the tasks until there are no more.
     while (auto optTask = ctx.dequeueTask()) {
       lv.task = std::move(*optTask);

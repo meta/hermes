@@ -156,7 +156,6 @@ CallResult<HermesValue> directEval(
 
 CallResult<HermesValue> eval(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope(runtime);
 
   if (!args.getArg(0).isString()) {
     return args.getArg(0);

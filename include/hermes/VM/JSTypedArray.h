@@ -286,8 +286,6 @@ inline HermesValue JSTypedArrayBase::polyReadMayAlloc(
       return HermesValue::encodeUntrustedNumberValue(
           reinterpret_cast<double *>(dataPtr)[index]);
     case CellKind::BigInt64ArrayKind: {
-      // Bigint allocation doesn't allocate handles.
-      NoHandleScope noHandleScope(runtime);
       auto cr = BigIntPrimitive::fromSigned(
           runtime, reinterpret_cast<int64_t *>(dataPtr)[index]);
       if (LLVM_UNLIKELY(cr.getStatus() == ExecutionStatus::EXCEPTION))
@@ -295,8 +293,6 @@ inline HermesValue JSTypedArrayBase::polyReadMayAlloc(
       return *cr;
     }
     case CellKind::BigUint64ArrayKind: {
-      // Bigint allocation doesn't consume handles.
-      NoHandleScope noHandleScope(runtime);
       auto cr = BigIntPrimitive::fromUnsigned(
           runtime, reinterpret_cast<uint64_t *>(dataPtr)[index]);
       if (LLVM_UNLIKELY(cr.getStatus() == ExecutionStatus::EXCEPTION))

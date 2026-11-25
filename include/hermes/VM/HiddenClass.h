@@ -598,8 +598,6 @@ class HiddenClass final : public GCCell {
   /// NamedPropertyDescriptor as parameters.
   /// Obviously the callback shouldn't be doing naughty things like modifying
   /// the property map or creating new hidden classes (even implicitly).
-  /// A marker for the current gcScope is obtained in the beginning and the
-  /// scope is flushed after every callback.
   /// NOTE: Does NOT include typed private properties, which have no names.
   template <typename CallbackFunction>
   static void forEachProperty(
@@ -618,8 +616,6 @@ class HiddenClass final : public GCCell {
 
   /// Same as forEachProperty() but the callback returns true to continue or
   /// false to stop immediately.
-  /// A marker for the current gcScope is obtained in the beginning and the
-  /// scope is flushed after every callback.
   /// \return false if the callback returned false, true otherwise.
   template <typename CallbackFunction>
   static bool forEachPropertyWhile(

@@ -201,8 +201,6 @@ class DictPropertyMap final
   /// NamedPropertyDescriptor as parameters.
   /// Obviously the callback shouldn't be doing naughty things like modifying
   /// the property map or creating new hidden classes (even implicitly).
-  /// A marker for the current gcScope is obtained in the beginning and the
-  /// scope is flushed after every callback.
   template <typename CallbackFunction>
   static void forEachProperty(
       Handle<DictPropertyMap> selfHandle,
@@ -220,8 +218,6 @@ class DictPropertyMap final
 
   /// Same as forEachProperty() but the callback returns true to continue or
   /// false to stop immediately.
-  /// A marker for the current gcScope is obtained in the beginning and the
-  /// scope is flushed after every callback.
   /// \return false if the callback returned false, true otherwise.
   template <typename CallbackFunction>
   static bool forEachPropertyWhile(
@@ -477,7 +473,6 @@ void DictPropertyMap::forEachProperty(
   // Re-entering JS execution in this context can cause the property
   // descriptors to change (e.g. T138148986)
   NoRJSScope scope{runtime};
-  GCScopeMarkerRAII gcMarker{runtime};
   for (size_type
            i = 0,
            e = selfHandle->numDescriptors_.load(std::memory_order_relaxed);
@@ -486,7 +481,6 @@ void DictPropertyMap::forEachProperty(
     auto const *descPair = selfHandle->getDescriptorPairs() + i;
     if (descPair->first.isValid()) {
       callback(descPair->first, descPair->second);
-      gcMarker.flush();
     }
   }
 }
@@ -514,7 +508,6 @@ bool DictPropertyMap::forEachPropertyWhile(
   // Re-entering JS execution in this context can cause the property
   // descriptors to change (e.g. T138148986)
   NoRJSScope scope{runtime};
-  GCScopeMarkerRAII gcMarker{runtime};
   for (size_type
            i = 0,
            e = selfHandle->numDescriptors_.load(std::memory_order_relaxed);
@@ -524,7 +517,6 @@ bool DictPropertyMap::forEachPropertyWhile(
     if (descPair->first.isValid()) {
       if (!callback(runtime, descPair->first, descPair->second))
         return false;
-      gcMarker.flush();
     }
   }
   return true;

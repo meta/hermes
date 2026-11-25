@@ -56,7 +56,6 @@ TEST_F(SymbolIDRuntimeTest, WriteBarrier) {
   MutableHandle<SymbolID> symbol{lv.symbolSlot};
   MutableHandle<StringPrimitive> str{lv.strSlot};
   for (JSArray::size_type i = 0; i < 100; i++) {
-    GCScopeMarkerRAII marker{runtime};
     std::string iAsStr = std::to_string(i);
     auto strRes = StringPrimitive::create(
         runtime, ASCIIRef{iAsStr.c_str(), iAsStr.length()});
@@ -234,7 +233,6 @@ TEST_F(SymbolIDRuntimeTest, SymbolAllocDuringGC) {
       *ArrayStorage::create(runtime, 4));
   MutableHandle<ArrayStorage> strongSymbols(lv.strongSymbols);
 
-  GCScopeMarkerRAII marker{runtime};
   for (size_t i = 0; i < 1000; i++) {
     // Allocate a new SymbolID which is strongly held.
     {
@@ -244,8 +242,6 @@ TEST_F(SymbolIDRuntimeTest, SymbolAllocDuringGC) {
       lv.curSym = *symRes;
       (void)ArrayStorage::push_back(strongSymbols, runtime, lv.curSym);
       weakSym = *symRes;
-      // The weak symbol should never be invalid.
-      marker.flush();
     }
     for (size_t i = 0; i < 1000; i++) {
       JSObject::create(runtime);

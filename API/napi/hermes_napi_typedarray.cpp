@@ -83,7 +83,7 @@ static bool cellKindToTypedArrayType(
 
 /// Create a TypedArray of the given \p type, then call setBuffer to attach
 /// it to \p buf at \p byteOffset for \p length elements. The TypedArray
-/// object is stored in \p taOut. Requires an active GCScope. \p buf must
+/// object is stored in \p taOut. \p buf must
 /// be pinned, since the TypedArray allocation below is a GC point.
 /// Returns ExecutionStatus.
 static hermes::vm::ExecutionStatus createTypedArrayForType(
@@ -173,8 +173,6 @@ napi_status NAPI_CDECL napi_create_typedarray(
       env,
       byte_offset + byteLength <= vmcast<JSArrayBuffer>(*abPhv)->size(),
       napi_invalid_arg);
-
-  GCScope gcScope(runtime);
 
   struct : public Locals {
     PinnedValue<JSArrayBuffer> ab;

@@ -71,7 +71,6 @@ napi_status getNapiObjectData(
   RETURN_STATUS_IF_FALSE(env, hv.isObject(), napi_invalid_arg);
 
   Runtime &runtime = env->runtime;
-  GCScope gcScope(runtime);
 
   auto objHandle = Handle<JSObject>::vmcast(phv);
 
@@ -193,7 +192,6 @@ napi_status NAPI_CDECL napi_wrap(
   }
 
   Runtime &runtime = env->runtime;
-  GCScope gcScope(runtime);
 
   auto objHandle = Handle<JSObject>::vmcast(phv);
 
@@ -310,7 +308,6 @@ napi_status NAPI_CDECL napi_add_finalizer(
   RETURN_STATUS_IF_FALSE(env, hv.isObject(), napi_invalid_arg);
 
   Runtime &runtime = env->runtime;
-  GCScope gcScope(runtime);
 
   auto objHandle = Handle<JSObject>::vmcast(phv);
 

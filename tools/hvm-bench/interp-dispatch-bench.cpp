@@ -202,7 +202,6 @@ int main(int argc, char **argv) {
                   .build())
           .build());
 
-  GCScope scope(*runtime);
   struct : public Locals {
     PinnedValue<StringPrimitive> res;
   } lv;

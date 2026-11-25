@@ -797,15 +797,12 @@ CallResult<bool> JSArray::setLength(
     using IndexProp = std::pair<uint32_t, SymbolID>;
     llvh::SmallVector<IndexProp, 8> toBeDeleted;
 
-    GCScope scope{runtime};
-
     lv.clazz = selfHandle->getClass(runtime);
     HiddenClass::forEachProperty(
         lv.clazz,
         runtime,
-        [&runtime, &adjustedLength, &toBeDeleted, &scope](
+        [&runtime, &adjustedLength, &toBeDeleted](
             SymbolID id, NamedPropertyDescriptor desc) {
-          GCScopeMarkerRAII marker{scope};
           // If this property is not an integer index, or it doesn't need to be
           // deleted (it is less than 'adjustedLength'), ignore it.
           auto propNameAsIndex =
@@ -825,7 +822,6 @@ CallResult<bool> JSArray::setLength(
     for (auto it = toBeDeleted.rbegin(), e = toBeDeleted.rend(); it != e;
          ++it) {
       if (it->first >= adjustedLength) {
-        GCScopeMarkerRAII marker{scope};
         auto cr = JSObject::deleteNamed(selfHandle, runtime, it->second);
         assert(
             cr != ExecutionStatus::EXCEPTION && *cr &&

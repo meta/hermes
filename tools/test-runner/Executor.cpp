@@ -277,14 +277,11 @@ bool drainTaskQueue(
     vm::Runtime &runtime,
     ConsoleHostContext &ctx,
     std::string &exceptionMsg) {
-  vm::GCScope scope{runtime};
-  vm::GCScopeMarkerRAII marker{scope};
   struct : public vm::Locals {
     vm::PinnedValue<vm::Callable> task;
   } lv;
   vm::LocalsRAII lraii(runtime, &lv);
   while (auto optTask = ctx.dequeueTask()) {
-    marker.flush();
     lv.task = std::move(*optTask);
     auto callRes = vm::Callable::executeCall0(
         lv.task, runtime, vm::Runtime::getUndefinedValue(), false);
@@ -334,7 +331,6 @@ TestResult executeCompiledTest(
   auto env = createTestRuntime(config, disableHandleSan);
 
   // Install console bindings (including $262, alert, setTimeout, etc.).
-  vm::GCScope scope(*env.runtime);
   ConsoleHostContext ctx{*env.runtime};
   ctx.enableTestMethods_ = true;
   installConsoleBindings(*env.runtime, ctx);

@@ -18,8 +18,6 @@ namespace vm {
 /// Convert all arguments to string and print them followed by new line.
 CallResult<HermesValue> print(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope scope(runtime);
-  auto marker = scope.createMarker();
   bool first = true;
 
   struct : public Locals {
@@ -28,7 +26,6 @@ CallResult<HermesValue> print(void *, Runtime &runtime) {
   LocalsRAII lraii(runtime, &lv);
 
   for (Handle<> arg : args.handles()) {
-    scope.flushToMarker(marker);
     auto res = toString_RJS(runtime, arg);
     if (res == ExecutionStatus::EXCEPTION)
       return ExecutionStatus::EXCEPTION;

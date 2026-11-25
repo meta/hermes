@@ -122,9 +122,6 @@ TEST_F(IdentifierTableLargeHeapTest, HashTableBoundedWithDeletedEntries) {
   size_t counter = 0;
   auto internAndDropBatch = [&]() {
     for (size_t i = 0; i < kBatch; ++i) {
-      // Flush handles each iteration so the interned symbols are not kept
-      // alive by the handle scope and can be freed by the collection below.
-      GCScopeMarkerRAII marker{runtime};
       std::string s = "unique_ident_" + std::to_string(counter++);
       auto symRes = table.getSymbolID(runtime, ASCIIRef{s.data(), s.size()});
       ASSERT_FALSE(isException(symRes));
@@ -216,7 +213,6 @@ TEST(IdentifierTableDeathTest, LazyExternalSymbolTooBig) {
     auto rt = Runtime::create(
         RuntimeConfig::Builder().withGCConfig(kTestGCConfig).build());
     auto &runtime = *rt;
-    GCScope gcScope{runtime};
     auto &idTable = runtime.getIdentifierTable();
 
     const size_t extSize =

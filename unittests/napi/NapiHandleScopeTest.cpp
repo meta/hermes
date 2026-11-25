@@ -313,12 +313,9 @@ TEST_F(NapiTestFixture, HandleScope_GCSurvival) {
 
   napi_value handle;
   {
-    // We need a GCScope for createNoThrow, which returns a Handle.
-    GCScope gcScope(*rt_);
     auto strHandle =
         StringPrimitive::createNoThrow(*rt_, llvh::StringRef("hello"));
-    // Store the HermesValue in our handle scope while the GCScope still
-    // protects it. addToCurrentScope copies into a PinnedHermesValue.
+    // addToCurrentScope copies into a PinnedHermesValue.
     handle = env_->addToCurrentScope(strHandle.getHermesValue());
   }
 
@@ -342,7 +339,6 @@ TEST_F(NapiTestFixture, HandleScope_MultipleGCCycles) {
 
   napi_value handle;
   {
-    GCScope gcScope(*rt_);
     auto strHandle =
         StringPrimitive::createNoThrow(*rt_, llvh::StringRef("world"));
     handle = env_->addToCurrentScope(strHandle.getHermesValue());
@@ -365,7 +361,6 @@ TEST_F(NapiTestFixture, HandleScope_ClosedScopeReleasesGCRoots) {
 
   napi_handle_scope s2 = openScope(env_);
   {
-    GCScope gcScope(*rt_);
     auto strHandle =
         StringPrimitive::createNoThrow(*rt_, llvh::StringRef("temp"));
     env_->addToCurrentScope(strHandle.getHermesValue());
@@ -651,7 +646,6 @@ TEST_F(NapiTestFixture, EscapeHandle_GCSurvival) {
 
     napi_value handle;
     {
-      GCScope gcScope(*rt_);
       auto strHandle =
           StringPrimitive::createNoThrow(*rt_, llvh::StringRef("escaped"));
       handle = env_->addToCurrentScope(strHandle.getHermesValue());

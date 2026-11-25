@@ -145,10 +145,6 @@ ExecutionStatus JSFinalizationRegistry::cleanup(
 
   lv.cleanupCallback = self->cleanupCallback_.getNonNull(runtime);
   lv.cells = self->cells_.getNonNull(runtime);
-  // We have to create a GCScope here since the caller may not be in a GCScope.
-  // The below loop may create too many Handles, it's better to have its own
-  // GCScope and flush in every iteration.
-  GCScope gcScope(runtime);
   // The size of lv.cells may change during the loop, since the cleanup callback
   // may register/unregister cells.
   for (size_t i = 0; i < lv.cells->size(); ++i) {
@@ -167,7 +163,6 @@ ExecutionStatus JSFinalizationRegistry::cleanup(
     self->free(runtime, i);
     self->numUsedCells_ -= 1;
 
-    GCScopeMarkerRAII gcScopeMarker{gcScope};
     // ES16 9.12.c Run the callback with the held value.
     auto result = Callable::executeCall1(
         lv.cleanupCallback,

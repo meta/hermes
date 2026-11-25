@@ -1300,9 +1300,6 @@ class JSObject : public GCCell {
   ///
   /// Obviously the callbacks shouldn't be doing naughty things like modifying
   /// the property map or creating new hidden classes (even implicitly).
-  ///
-  /// A marker for the current gcScope is obtained in the beginning and the
-  /// scope is flushed after every callback.
   /// \return false if the callback returned false, true otherwise.
   template <typename IndexedCB, typename NamedCB>
   static bool forEachOwnPropertyWhile(
@@ -1827,7 +1824,6 @@ bool JSObject::forEachOwnPropertyWhile(
     const IndexedCB &indexedCB,
     const NamedCB &namedCB) {
   auto range = getOwnIndexedRange(*selfHandle, runtime);
-  GCScopeMarkerRAII gcMarker{runtime};
   for (auto i = range.first; i != range.second; ++i) {
     auto optPF = getOwnIndexedPropertyFlags(*selfHandle, runtime, i);
     if (!optPF)
@@ -1836,7 +1832,6 @@ bool JSObject::forEachOwnPropertyWhile(
     desc.flags.indexed = true;
     if (!indexedCB(runtime, i, desc))
       return false;
-    gcMarker.flush();
   }
 
   struct : public Locals {

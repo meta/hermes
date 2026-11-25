@@ -25,8 +25,6 @@ napi_create_bigint_int64(napi_env env, int64_t value, napi_value *result) {
 
   using namespace hermes::vm;
 
-  GCScope gcScope(env->runtime);
-
   auto bigintRes = BigIntPrimitive::fromSigned(env->runtime, value);
   if (LLVM_UNLIKELY(bigintRes == ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_generic_failure);
@@ -42,8 +40,6 @@ napi_create_bigint_uint64(napi_env env, uint64_t value, napi_value *result) {
   CHECK_ARG(env, result);
 
   using namespace hermes::vm;
-
-  GCScope gcScope(env->runtime);
 
   auto bigintRes = BigIntPrimitive::fromUnsigned(env->runtime, value);
   if (LLVM_UNLIKELY(bigintRes == ExecutionStatus::EXCEPTION)) {
@@ -74,12 +70,9 @@ napi_status NAPI_CDECL napi_create_bigint_words(
   // Hermes limit, throw a RangeError (matching V8 behavior).
   if (word_count > 0 &&
       word_count + 1 > hermes::bigint::BigIntMaxSizeInDigits) {
-    GCScope gcScope(env->runtime);
     (void)env->runtime.raiseRangeError("Maximum BigInt size exceeded");
     return captureRuntimeException(env, napi_pending_exception);
   }
-
-  GCScope gcScope(env->runtime);
 
   if (word_count == 0) {
     // Zero value: create a BigInt from a zero byte.

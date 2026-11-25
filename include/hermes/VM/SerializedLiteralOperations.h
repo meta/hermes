@@ -41,7 +41,6 @@ HiddenClass *addBufferPropertiesToHiddenClass(
 
   lv.clazz = rootClazz;
 
-  GCScopeMarkerRAII marker{runtime};
   // Set up the visitor to populate keys in the hidden class.
   struct {
     void visitStringID(StringID id) {
@@ -53,7 +52,6 @@ HiddenClass *addBufferPropertiesToHiddenClass(
           PropertyFlags::defaultNewNamedPropertyFlags(),
           MutableHandle<HiddenClass>(clazz));
       runtime.ignoreAllocationFailure(addResult);
-      marker.flush();
     }
     void visitPrivateName() {
       hermes_fatal("private string IDs unimplemented");
@@ -70,16 +68,14 @@ HiddenClass *addBufferPropertiesToHiddenClass(
           PropertyFlags::defaultNewNamedPropertyFlags(),
           MutableHandle<HiddenClass>(clazz));
       runtime.ignoreAllocationFailure(addResult);
-      marker.flush();
     }
 
     PinnedValue<HiddenClass> &clazz;
     PinnedValue<> &tmpHandleKey;
     PinnedValue<SymbolID> &tmpSym;
-    GCScopeMarkerRAII &marker;
     Runtime &runtime;
     F getSym;
-  } v{lv.clazz, lv.tmpKey, lv.tmpSym, marker, runtime, std::move(getSym)};
+  } v{lv.clazz, lv.tmpKey, lv.tmpSym, runtime, std::move(getSym)};
 
   // Visit each literal in the buffer and add it as a property.
   SerializedLiteralParser::parseKeyBuffer(buffer, numProps, v);
@@ -108,18 +104,15 @@ void addTypedBufferPropertiesToHiddenClass(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  GCScopeMarkerRAII marker{runtime};
   // Set up the visitor to populate keys in the hidden class.
   struct {
     void visitStringID(StringID id) {
       auto sym = getSym(id);
       HiddenClass::addNewTypedPublicProperty(
           clazz, runtime, sym, propertiesEnumerable);
-      marker.flush();
     }
     void visitPrivateName() {
       HiddenClass::addNewTypedPrivateProperty(clazz, runtime);
-      marker.flush();
     }
     void visitNumber(double d) {
       tmpHandleKey = HermesValue::encodeTrustedNumberValue(d);
@@ -128,20 +121,17 @@ void addTypedBufferPropertiesToHiddenClass(
           valueToSymbolID(runtime, tmpHandleKey, tmpSym));
       HiddenClass::addNewTypedPublicProperty(
           clazz, runtime, *tmpSym, propertiesEnumerable);
-      marker.flush();
     }
 
     Handle<HiddenClass> clazz;
     PinnedValue<> &tmpHandleKey;
     PinnedValue<SymbolID> &tmpSym;
-    GCScopeMarkerRAII &marker;
     Runtime &runtime;
     bool propertiesEnumerable;
     F getSym;
   } v{clazz,
       lv.tmpKey,
       lv.tmpSym,
-      marker,
       runtime,
       propertiesEnumerable,
       std::move(getSym)};

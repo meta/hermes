@@ -98,9 +98,7 @@ TEST_F(StringViewTest, HandleHandling) {
   LocalsRAII lraii_lv(runtime, &lv);
   // StringView conditionally holds onto a handle.
   // This verifies that we correctly perform handle book-keeping in ctors and
-  // operator=. It has no assertions; it relies on GCScope to check its handle
-  // count in its dtor.
-  GCScope scope1{runtime, "StringViewTest.HandleHandling1"};
+  // operator=. It has no assertions; it only exercises those paths.
 
   auto strPrim1 = createNoThrowForTest(
       runtime, createUTF16Ref(u"I have a handle"), lv.strPrim1);
@@ -109,18 +107,15 @@ TEST_F(StringViewTest, HandleHandling) {
   StringView scope1View3 = StringPrimitive::createStringView(runtime, strPrim1);
   (void)scope1View3;
 
-  GCScope scope2{runtime, "StringViewTest.HandleHandling2"};
   auto strPrim2 = createNoThrowForTest(
       runtime, createUTF16Ref(u"I also have a handle"), lv.strPrim2);
   StringView scope2View1 = StringPrimitive::createStringView(runtime, strPrim2);
 
-  // This assignment requires us to change the GCScope associated with the
-  // handle in scope1.
+  // Assign a view holding one handle over another.
   StringView tmp1 = scope2View1;
   tmp1 = scope1View1;
 
-  // This ctor ensures we bump the handle count in scope1 and decrement it
-  // scope2.
+  // Copy-construct from a view holding a handle.
   StringView tmp2 = scope1View1;
   (void)tmp2;
 

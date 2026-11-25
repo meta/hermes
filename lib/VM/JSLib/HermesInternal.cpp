@@ -106,7 +106,6 @@ CallResult<HermesValue> hermesInternalGetWeakSize(void *, Runtime &runtime) {
 CallResult<HermesValue> hermesInternalGetInstrumentedStats(
     void *,
     Runtime &runtime) {
-  GCScope gcScope(runtime);
   struct : public Locals {
     PinnedValue<JSObject> resultHandle;
     PinnedValue<JSObject> specificStatsHandle;
@@ -118,9 +117,7 @@ CallResult<HermesValue> hermesInternalGetInstrumentedStats(
 
   /// Adds \p key with \p val to the resultHandle object.
   auto addToResultHandle =
-      [&gcScope, &runtime, &lv](
-          Handle<JSObject> obj, llvh::StringRef key, Handle<> val) {
-        GCScopeMarkerRAII marker{gcScope};
+      [&runtime, &lv](Handle<JSObject> obj, llvh::StringRef key, Handle<> val) {
         auto keySym = symbolForCStr(runtime, key.data());
         if (LLVM_UNLIKELY(keySym == ExecutionStatus::EXCEPTION)) {
           return ExecutionStatus::EXCEPTION;
@@ -236,7 +233,6 @@ static const char *getCJSModuleModeDescription(Runtime &runtime) {
 CallResult<HermesValue> hermesInternalGetRuntimeProperties(
     void *,
     Runtime &runtime) {
-  GCScope gcScope(runtime);
   struct : public Locals {
     PinnedValue<JSObject> resultHandle;
     PinnedValue<> tmpHandle;
@@ -540,7 +536,6 @@ CallResult<HermesValue> hermesInternalGetFunctionLocation(
     void *,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope(runtime);
 
   auto callable = args.dyncastArg<Callable>(0);
   if (!callable) {
@@ -781,7 +776,6 @@ HermesValue createHermesInternalObject(
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.intern = JSObject::create(runtime);
-  GCScope gcScope{runtime};
 
   DefinePropertyFlags constantDPF =
       DefinePropertyFlags::getDefaultNewPropertyFlags();

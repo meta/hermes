@@ -84,10 +84,6 @@ napi_status NAPI_CDECL napi_make_callback(
 
   auto *callable = vmcast<Callable>(*phvFunc);
 
-  // A GCScope is needed because ScopedNativeCallFrame and
-  // Callable::call may allocate internal handles.
-  GCScope gcScope(runtime);
-
   auto *phvRecv = reinterpret_cast<const PinnedHermesValue *>(recv);
 
   // Build the call frame.

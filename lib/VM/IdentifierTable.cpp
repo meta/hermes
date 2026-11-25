@@ -268,8 +268,6 @@ IdentifierTable::allocateDynamicString(
   assert(
       (!primHandle || primHandle->isFlat()) && "StringPrimitive must be flat");
 
-  GCScope gcScope(runtime);
-
   PseudoHandle<StringPrimitive> result;
   if (StringPrimitive::isExternalLength(length)) {
     if (LLVM_UNLIKELY(length > StringPrimitive::MAX_STRING_LENGTH)) {

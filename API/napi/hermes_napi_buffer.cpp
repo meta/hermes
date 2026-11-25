@@ -18,7 +18,7 @@
 
 /// Helper: create a Uint8Array backed by a new ArrayBuffer of \p length
 /// bytes. On success, the Uint8Array is stored in \p result and the data
-/// pointer is optionally stored in \p data. Requires an active GCScope.
+/// pointer is optionally stored in \p data.
 static napi_status createBufferUint8Array(
     napi_env env,
     size_t length,
@@ -73,7 +73,6 @@ napi_status NAPI_CDECL napi_create_buffer(
   CHECK_ARG(env, result);
 
   using namespace hermes::vm;
-  GCScope gcScope(env->runtime);
 
   auto status = createBufferUint8Array(env, length, data, result);
   if (status != napi_ok) {
@@ -93,7 +92,6 @@ napi_status NAPI_CDECL napi_create_buffer_copy(
   CHECK_ARG(env, data);
 
   using namespace hermes::vm;
-  GCScope gcScope(env->runtime);
 
   void *bufData = nullptr;
   auto status = createBufferUint8Array(env, length, &bufData, result);
@@ -167,7 +165,6 @@ napi_status NAPI_CDECL napi_create_external_buffer(
   using namespace hermes::vm;
 
   Runtime &runtime = env->runtime;
-  GCScope gcScope(runtime);
 
   struct : public Locals {
     PinnedValue<JSArrayBuffer> ab;
@@ -235,8 +232,6 @@ napi_status NAPI_CDECL node_api_create_buffer_from_arraybuffer(
       env,
       byte_offset + byte_length <= vmcast<JSArrayBuffer>(*abPhv)->size(),
       napi_invalid_arg);
-
-  GCScope gcScope(runtime);
 
   struct : public Locals {
     PinnedValue<JSTypedArrayBase> ta;

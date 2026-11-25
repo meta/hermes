@@ -57,10 +57,8 @@ class JSMapImpl final : public JSObject,
       Handle<Callable> callbackfn,
       Handle<> thisArg) {
     self->assertInitialized();
-    GCScopeMarkerRAII marker{runtime};
     auto iterCtx = self->newIterator(runtime);
     while (self->advanceIterator(runtime, iterCtx)) {
-      marker.flush();
       if (LLVM_UNLIKELY(
               Callable::executeCall3(
                   callbackfn,
@@ -83,10 +81,8 @@ class JSMapImpl final : public JSObject,
   static ExecutionStatus
   forEachNative(Handle<JSMapImpl> self, Runtime &runtime, CB callback) {
     self->assertInitialized();
-    GCScopeMarkerRAII marker{runtime};
     auto iterCtx = self->newIterator(runtime);
     while (self->advanceIterator(runtime, iterCtx)) {
-      marker.flush();
       if constexpr (std::is_same_v<HashMapEntryType, HashMapEntry>) {
         if (LLVM_UNLIKELY(
                 callback(

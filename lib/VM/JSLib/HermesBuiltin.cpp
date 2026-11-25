@@ -86,8 +86,6 @@ CallResult<HermesValue> hermesBuiltinGetTemplateObject(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  GCScope gcScope{runtime};
-
   // Try finding the template object in the template object cache.
   uint32_t templateObjID = args.getArg(0).getNumberAs<uint32_t>();
 
@@ -132,7 +130,6 @@ CallResult<HermesValue> hermesBuiltinGetTemplateObject(
   dpf.writable = 0;
   dpf.configurable = 0;
   uint32_t cookedBegin = dup ? 2 : 2 + count;
-  auto marker = gcScope.createMarker();
   for (uint32_t i = 0; i < count; ++i) {
     lv.idx = HermesValue::encodeTrustedNumberValue(i);
 
@@ -149,8 +146,6 @@ CallResult<HermesValue> hermesBuiltinGetTemplateObject(
     assert(
         putRes != ExecutionStatus::EXCEPTION && *putRes &&
         "Failed to set raw value to raw object.");
-
-    gcScope.flushToMarker(marker);
   }
 
   if (LLVM_UNLIKELY(
@@ -252,12 +247,10 @@ CallResult<HermesValue> copyDataPropertiesSlowPath_RJS(
   }
   lv.keys = std::move(*cr);
 
-  GCScopeMarkerRAII marker{runtime};
   // 6. For each element nextKey of keys in List order, do
   for (uint32_t nextKeyIdx = 0, endIdx = lv.keys->getEndIndex();
        nextKeyIdx < endIdx;
        ++nextKeyIdx) {
-    marker.flush();
     lv.nextKeyHandle = lv.keys->at(runtime, nextKeyIdx).unboxToHV(runtime);
     if (lv.nextKeyHandle->isNumber()) {
       CallResult<PseudoHandle<StringPrimitive>> strRes =
@@ -342,8 +335,6 @@ CallResult<HermesValue> hermesBuiltinCopyDataProperties(
     PinnedValue<> valueHandle;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-
-  GCScope gcScope{runtime};
 
   // 1. Assert: Type(target) is Object.
   Handle<JSObject> target = args.dyncastArg<JSObject>(0);
@@ -508,7 +499,6 @@ CallResult<HermesValue> hermesBuiltinCopyRestArgsFast(
   lv.array.castAndSetHermesValue<FastArray>(*cr);
 
   for (uint32_t i = 0; i != length; ++i) {
-    GCScopeMarkerRAII marker{runtime};
     lv.val = it->getArgRef(from);
     if (LLVM_UNLIKELY(
             FastArray::push(lv.array, runtime, lv.val) ==
@@ -531,8 +521,6 @@ CallResult<HermesValue> hermesBuiltinCopyRestArgs(void *, Runtime &runtime) {
     PinnedValue<JSArray> array;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-
-  GCScopeMarkerRAII marker{runtime};
 
   // Obtain the caller's stack frame.
   auto frames = runtime.getStackFrames();
@@ -584,7 +572,6 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  GCScopeMarkerRAII topMarker{runtime};
   Handle<JSArray> target = args.dyncastArg<JSArray>(0);
   // To be safe, check for non-arrays.
   if (!target) {
@@ -608,10 +595,8 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
               slotValue.isObject() &&
               slotValue.getObject(runtime) == *runtime.arrayPrototypeValues)) {
         auto nextIndex = args.getArg(2).getNumberAs<JSArray::size_type>();
-        GCScopeMarkerRAII marker{runtime};
         for (JSArray::size_type i = 0; i < JSArray::getLength(*arr, runtime);
              ++i) {
-          marker.flush();
           // Fast path: look up the property in indexed storage.
           lv.nextValue = arr->at(runtime, i).unboxToHV(runtime);
           if (LLVM_UNLIKELY(lv.nextValue->isEmpty())) {
@@ -662,7 +647,7 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
   auto nextIndex = args.getArg(2).getNumberAs<JSArray::size_type>();
 
   // 4. Repeat,
-  for (GCScopeMarkerRAII marker{runtime}; /* nothing */; marker.flush()) {
+  for (;;) {
     // a. Let next be ? IteratorStep(iteratorRecord).
     auto nextRes = iteratorStep(runtime, iteratorRecord);
     if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
@@ -720,8 +705,6 @@ CallResult<HermesValue> hermesBuiltinApply(void *, Runtime &runtime) {
     PinnedValue<> thisVal;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-
-  GCScopeMarkerRAII marker{runtime};
 
   Handle<Callable> fn = args.dyncastArg<Callable>(0);
   if (LLVM_UNLIKELY(!fn)) {
@@ -844,7 +827,6 @@ CallResult<HermesValue> hermesBuiltinApplyWithNewTarget(
   assert(
       args.getArgCount() == 4 &&
       "builtinApplyWithNewTarget expected 4 arguments");
-  GCScopeMarkerRAII marker{runtime};
 
   Handle<Callable> fn = args.dyncastArg<Callable>(0);
   if (LLVM_UNLIKELY(!fn)) {

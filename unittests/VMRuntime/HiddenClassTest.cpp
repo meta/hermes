@@ -51,7 +51,6 @@ TEST_F(HiddenClassTest, SmokeTest) {
     PinnedValue<HiddenClass> x1;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{runtime, "HiddenClassTest.SmokeTest", 48};
 
   runtime.collect("test");
 
@@ -331,7 +330,6 @@ TEST_F(HiddenClassTest, AccessorsTest) {
     PinnedValue<HiddenClass> rootCls;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{runtime, "HiddenClassTest.SmokeTest", 48};
   runtime.collect("test");
   auto aSym = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"), lv.aSym);
   auto bSym = *getSymbolHandleForTest(runtime, createUTF16Ref(u"b"), lv.bSym);
@@ -537,9 +535,6 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
     PinnedValue<HiddenClass> partlyFrozenSingleton;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{
-      runtime, "HiddenClassTest.UpdatePropertyFlagsWithoutTransitionsTest", 48};
-
   runtime.collect("test");
 
   auto aHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"), lv.aHnd);
@@ -893,16 +888,13 @@ TEST_F(HiddenClassTest, ObjectParentTransitionCycleIsCollectedTest) {
       lv.root, runtime, createPseudoHandle(*lv.proto));
   lv.instance = JSObject::create(runtime, lv.proto, lv.child);
 
-  {
-    GCScopeMarkerRAII marker{runtime};
-    ASSERT_NE(
-        JSObject::putNamed_RJS(
-            lv.proto,
-            runtime,
-            Predefined::getSymbolID(Predefined::length),
-            lv.instance),
-        ExecutionStatus::EXCEPTION);
-  }
+  ASSERT_NE(
+      JSObject::putNamed_RJS(
+          lv.proto,
+          runtime,
+          Predefined::getSymbolID(Predefined::length),
+          lv.instance),
+      ExecutionStatus::EXCEPTION);
 
   WeakRef<HiddenClass> weakChild{runtime, lv.child};
   WeakRef<JSObject> weakProto{runtime, lv.proto};

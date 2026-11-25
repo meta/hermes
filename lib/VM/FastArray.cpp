@@ -152,7 +152,6 @@ CallResult<HermesValue> FastArray::create(
 
 ExecutionStatus
 FastArray::pushSlow(Handle<FastArray> self, Runtime &runtime, Handle<> val) {
-  GCScopeMarkerRAII marker{runtime};
   UsePinnedValueRAII<ArrayStorageSmall> storage{runtime.hvStorageTmp};
   storage = self->indexedStorage_.getNonNull(runtime);
   if (LLVM_UNLIKELY(
@@ -178,7 +177,6 @@ ExecutionStatus FastArray::appendSlow(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  GCScopeMarkerRAII marker{runtime};
   lv.storage = self->indexedStorage_.getNonNull(runtime);
   lv.otherStorage = other->indexedStorage_.getNonNull(runtime);
   if (LLVM_UNLIKELY(
@@ -259,7 +257,6 @@ HermesValue FastArray::_getOwnIndexedImpl(
     PseudoHandle<JSObject> selfObj,
     Runtime &runtime,
     uint32_t index) {
-  NoHandleScope noHandles{runtime};
   auto *self = vmcast<FastArray>(selfObj.get());
   auto *storage = self->indexedStorage_.getNonNull(runtime);
   if (index >= storage->size())

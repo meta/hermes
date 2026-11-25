@@ -397,7 +397,6 @@ static CallResult<double> makeTimeFromArgs_RJS(
   double fields[FIELD_COUNT] = {nan, nan, 1, 0, 0, 0, 0};
 
   for (size_t i = 0; i < std::min(7u, argCount); ++i) {
-    GCScopeMarkerRAII marker{runtime};
     auto res = toNumber_RJS(runtime, args.getArgHandle(i));
     if (res == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;

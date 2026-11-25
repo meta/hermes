@@ -167,7 +167,6 @@ void installTraceableBuiltinWrappers(
   }
 
   auto *runtime = static_cast<Runtime *>(hermes->getVMRuntimeUnsafe());
-  GCScope gcScope(*runtime);
   struct : public Locals {
     PinnedValue<JSObject> math;
     PinnedValue<NativeFunction> replacementMathFunction;
@@ -189,7 +188,6 @@ void installTraceableBuiltinWrappers(
       DefinePropertyFlags::getNewNonEnumerableFlags();
   for (const TraceableMathBuiltin &traceableMathBuiltin :
        traceableMathBuiltins) {
-    GCScopeMarkerRAII marker{gcScope};
     SymbolID functionID =
         Predefined::getSymbolID(traceableMathBuiltin.predefinedName);
     auto context = std::make_unique<TraceableMathContext>(

@@ -424,7 +424,6 @@ CallResult<HermesValue> stringConstructor(void *, Runtime &runtime) {
 
 CallResult<HermesValue> stringFromCharCode(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope(runtime);
   uint32_t n = args.getArgCount();
   if (LLVM_LIKELY(n == 1)) {
     // Fast path for when only one argument is provided.
@@ -466,7 +465,6 @@ CallResult<HermesValue> stringFromCharCode(void *, Runtime &runtime) {
 
 CallResult<HermesValue> stringFromCodePoint(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   // 1. Let codePoints be a List containing the arguments passed to this
   // function.
@@ -483,10 +481,8 @@ CallResult<HermesValue> stringFromCodePoint(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScopeMarkerRAII marker{gcScope};
   // 5. Repeat while nextIndex < length
-  for (; nextIndex < length; marker.flush()) {
-    marker.flush();
+  while (nextIndex < length) {
     // 5a. Let next be codePoints[nextIndex].
     lv.next = args.getArg(nextIndex);
     // 5b. Let nextCP be toNumber_RJS(next).
@@ -531,7 +527,6 @@ CallResult<HermesValue> stringFromCodePoint(void *, Runtime &runtime) {
 /// ES6.0 21.1.2.4 String.raw ( template , ...substitutions )
 CallResult<HermesValue> stringRaw(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   struct : public Locals {
     PinnedValue<JSObject> cooked;
@@ -598,8 +593,7 @@ CallResult<HermesValue> stringRaw(void *, Runtime &runtime) {
   lv.nextIndex = HermesValue::encodeTrustedNumberValue(0);
 
   // 12. Repeat
-  GCScopeMarkerRAII marker{gcScope};
-  for (;; marker.flush()) {
+  for (;;) {
     // 12. a. Let nextKey be ToString(nextIndex).
     // 12. b. Let nextSeg be ToString(Get(raw, nextKey)).
     auto nextSegPropRes =
@@ -657,7 +651,6 @@ CallResult<HermesValue> stringRaw(void *, Runtime &runtime) {
 /// 22.1.3.1
 CallResult<HermesValue> stringPrototypeAt(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope(runtime);
 
   struct : public Locals {
     PinnedValue<StringPrimitive> S;
@@ -826,7 +819,6 @@ CallResult<HermesValue> stringPrototypeCodePointAt(void *, Runtime &runtime) {
 
 CallResult<HermesValue> stringPrototypeConcat(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope(runtime);
 
   struct : public Locals {
     PinnedValue<StringPrimitive> S;
@@ -860,7 +852,6 @@ CallResult<HermesValue> stringPrototypeConcat(void *, Runtime &runtime) {
   // Track if all strings are ASCII.
   bool allASCII = lv.S->isASCII();
   // Run toString on the arguments to figure out the final size.
-  auto marker = gcScope.createMarker();
   for (uint32_t i = 0; i < argCount; ++i) {
     auto strRes = toString_RJS(runtime, args.getArgHandle(i));
     if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
@@ -880,8 +871,6 @@ CallResult<HermesValue> stringPrototypeConcat(void *, Runtime &runtime) {
     if (LLVM_UNLIKELY(size.isOverflowed())) {
       return runtime.raiseRangeError("resulting string length exceeds limit");
     }
-
-    gcScope.flushToMarker(marker);
   }
 
   // Allocate the complete result.
@@ -1791,7 +1780,6 @@ static CallResult<HermesValue> stringIndexOf(
 /// ES12 21.1.3.18 String.prototype.replaceAll ( searchValue, replaceValue )
 CallResult<HermesValue> stringPrototypeReplaceAll(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   struct : public Locals {
     PinnedValue<> flags;
@@ -1917,7 +1905,6 @@ CallResult<HermesValue> stringPrototypeReplaceAll(void *, Runtime &runtime) {
 
   // 11. Repeat, while position is not -1,
   while (position != -1) {
-    GCScopeMarkerRAII marker{runtime};
     // a. Append position to the end of matchPositions.
     matchPositions.push_back(position);
     // b. Set position to ! StringIndexOf(string, searchString, position +
@@ -1938,7 +1925,6 @@ CallResult<HermesValue> stringPrototypeReplaceAll(void *, Runtime &runtime) {
   // 14. For each position in matchPositions, do
   auto stringView = StringPrimitive::createStringView(runtime, lv.string);
   for (uint32_t i = 0, size = matchPositions.size(); i < size; ++i) {
-    GCScopeMarkerRAII marker{runtime};
     uint32_t position = matchPositions[i];
     // a. Let preserved be the substring of string from endOfLastMatch to
     // position.
@@ -2660,9 +2646,7 @@ static CallResult<HermesValue> splitEmptySep(
     }
   } else {
     // UTF16 path with allocations.
-    GCScopeMarkerRAII marker{runtime};
     for (uint32_t i = 0; i != len; ++i) {
-      marker.flush();
       auto str = SmallHermesValue::encodeStringValue(
           runtime.getCharacterString(S->at(i)).get(), runtime);
       JSArray::unsafeSetExistingElementAt(A.get(), runtime, i, str);
@@ -2675,7 +2659,6 @@ static CallResult<HermesValue> splitEmptySep(
 // ES11 21.1.3.20 String.prototype.split ( separator, limit )
 CallResult<HermesValue> stringPrototypeSplit(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   struct : public Locals {
     PinnedValue<> splitSymbol;
@@ -2814,13 +2797,9 @@ CallResult<HermesValue> stringPrototypeSplit(void *, Runtime &runtime) {
   // Place to attempt the start of the next match.
   uint32_t q = p;
 
-  auto marker = gcScope.createMarker();
-
   // 18. Repeat, while q ≠ s
   // Main loop: continue while we have space to find another match.
   while (q != s) {
-    gcScope.flushToMarker(marker);
-
     // a. Let e be SplitMatch(S, q, R).
     // b. If e is false, let q = q+1.
 

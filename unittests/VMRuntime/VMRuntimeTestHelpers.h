@@ -119,8 +119,6 @@ class RuntimeTestFixtureBase : public ::testing::Test {
 
   RuntimeConfig rtConfig;
 
-  GCScope gcScope;
-
   /// Roots for the fixture's own values.
   struct FixtureLocals : public Locals {
     PinnedValue<Domain> domain;
@@ -134,7 +132,6 @@ class RuntimeTestFixtureBase : public ::testing::Test {
       : rt(Runtime::create(runtimeConfig)),
         runtime(*rt),
         rtConfig(runtimeConfig),
-        gcScope(runtime),
         fixtureLocalsRAII_(runtime, &fixtureLocals_),
         domain(fixtureLocals_.domain) {
     fixtureLocals_.domain = Domain::create(runtime);
@@ -476,10 +473,8 @@ class DummyRuntimeTestFixtureBase : public ::testing::Test {
   // Convenience accessor that points to rt.
   DummyRuntime &runtime;
 
-  GCScope gcScope;
-
   DummyRuntimeTestFixtureBase(const GCConfig &gcConfig)
-      : rt(DummyRuntime::create(gcConfig)), runtime(*rt), gcScope(runtime) {}
+      : rt(DummyRuntime::create(gcConfig)), runtime(*rt) {}
 
   /// Can't copy due to internal pointer.
   DummyRuntimeTestFixtureBase(const DummyRuntimeTestFixtureBase &) = delete;
@@ -573,20 +568,6 @@ inline Handle<StringPrimitive> createNoThrowForTest(
     MutableHandle<StringPrimitive> out) {
   out = StringPrimitive::createNoThrow(runtime, ascii);
   return out;
-}
-
-/// Legacy allocating forms of createNoThrowForTest, kept only for
-/// HandleTest.cpp (which tests the GCScope machinery itself). Do not use in
-/// new code.
-inline Handle<StringPrimitive> createNoThrowForTest(
-    Runtime &runtime,
-    UTF16Ref str) {
-  return runtime.makeHandle(StringPrimitive::createNoThrow(runtime, str));
-}
-inline Handle<StringPrimitive> createNoThrowForTest(
-    Runtime &runtime,
-    llvh::StringRef ascii) {
-  return runtime.makeHandle(StringPrimitive::createNoThrow(runtime, ascii));
 }
 
 /// Test-only convenience: a new BigIntPrimitive for a signed integer, written

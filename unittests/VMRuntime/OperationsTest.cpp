@@ -156,7 +156,6 @@ TEST_F(OperationsTest, IsSameValueTest) {
 
 #define AbstractEqualityTest(result, x, y)                          \
   {                                                                 \
-    GCScopeMarkerRAII trimmer(gcScope);                             \
     Handle<> xHandle(x);                                            \
     Handle<> yHandle(y);                                            \
     auto res = abstractEqualityTest_RJS(runtime, xHandle, yHandle); \
@@ -192,7 +191,6 @@ TEST_F(OperationsTest, AbstractEqualityTest) {
     PinnedValue<> v3;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{runtime, "OperationsTest.AbstractEqualityTest", 80};
 
   lv.v1 = HermesValue::encodeNullValue();
   lv.v2 = HermesValue::encodeNullValue();
@@ -716,7 +714,6 @@ TEST_F(OperationsTest, ToStringTest) {
     PinnedValue<StringPrimitive> str2;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{runtime, "OperationsTest.ToStringTest", 128};
 
   // Simple tests
   {
@@ -913,7 +910,6 @@ TEST_F(OperationsLargeHeapTest, ToNumberTest) {
     PinnedValue<> hBigInt;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{runtime, "OperationsTest.ToNumberTest", 200};
 
   // Simple tests
   {
@@ -1450,7 +1446,6 @@ TEST_F(OperationsTest, AdditionTest) {
     PinnedValue<StringPrimitive> resStr;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{runtime, "OperationsTest.AdditionTest", 128};
 
   {
     auto a = createNoThrowForTest(runtime, createUTF16Ref(u"abc"), lv.a);

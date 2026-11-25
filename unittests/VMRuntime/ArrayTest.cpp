@@ -24,7 +24,6 @@ TEST_F(ArrayTest, CppAPITest) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
   // We allocate a lot of handles in row.
-  GCScope scope(runtime, "ArrayTest.CppAPITest", 128);
 
   auto arrayRes = JSArray::create(runtime, 1, 0);
   ASSERT_FALSE(isException(arrayRes));

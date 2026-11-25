@@ -2089,8 +2089,8 @@ class ScopedNativeCallFrame {
 
 #ifdef NDEBUG
 
-/// NoAllocScope and NoHandleScope have no impact in release mode (except that
-/// if they are embedded into another struct/class, they will still use space!)
+/// NoAllocScope has no impact in release mode (except that if it is embedded
+/// into another struct/class, it will still use space!)
 class NoAllocScope {
  public:
   explicit NoAllocScope(Runtime &runtime) {}
@@ -2104,18 +2104,7 @@ class NoAllocScope {
  private:
   NoAllocScope() = delete;
 };
-using NoHandleScope = NoAllocScope;
 using NoRJSScope = NoAllocScope;
-
-class NoLeakHandleScope {
- public:
-  explicit NoLeakHandleScope(Runtime &runtime) {}
-
-  NoLeakHandleScope(const NoLeakHandleScope &) = delete;
-  NoLeakHandleScope &operator=(const NoLeakHandleScope &) = delete;
-  NoLeakHandleScope(NoLeakHandleScope &&) = delete;
-  NoLeakHandleScope &operator=(NoLeakHandleScope &&) = delete;
-};
 
 struct NoMutatorScope {
   explicit NoMutatorScope([[maybe_unused]] vm::Runtime &runtime) {}
@@ -2177,15 +2166,6 @@ class BaseNoScope {
   BaseNoScope() = delete;
 };
 
-/// RAII class to temporarily disallow handle creation.
-class NoHandleScope : public BaseNoScope {
- public:
-  explicit NoHandleScope(Runtime &runtime)
-      : BaseNoScope(&runtime.noHandleLevel_) {}
-  using BaseNoScope::BaseNoScope;
-  using BaseNoScope::operator=;
-};
-
 /// RAII class to temporarily disallow allocating cells in the JS heap.
 class NoAllocScope : public BaseNoScope {
  public:
@@ -2201,28 +2181,6 @@ class NoRJSScope : public BaseNoScope {
   explicit NoRJSScope(Runtime &runtime) : BaseNoScope(&runtime.noRJSLevel_) {}
   using BaseNoScope::BaseNoScope;
   using BaseNoScope::operator=;
-};
-
-/// RAII class that ensures all handles allocated during its lifetime are freed
-/// before it is destroyed.
-class NoLeakHandleScope {
-  Runtime &runtime_;
-  size_t handleCount_;
-
- public:
-  explicit NoLeakHandleScope(Runtime &runtime)
-      : runtime_(runtime),
-        handleCount_(runtime_.getTopGCScope()->getHandleCountDbg()) {}
-  ~NoLeakHandleScope() {
-    assert(
-        handleCount_ == runtime_.getTopGCScope()->getHandleCountDbg() &&
-        "Handle leak detected");
-  }
-
-  NoLeakHandleScope(const NoLeakHandleScope &) = delete;
-  NoLeakHandleScope &operator=(const NoLeakHandleScope &) = delete;
-  NoLeakHandleScope(NoLeakHandleScope &&) = delete;
-  NoLeakHandleScope &operator=(NoLeakHandleScope &&) = delete;
 };
 
 /// Asserts no allocation or JS execution when this scope is alive.

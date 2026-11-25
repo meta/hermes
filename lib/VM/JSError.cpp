@@ -91,7 +91,6 @@ static PseudoHandle<JSError> getErrorFromStackTarget(
 
 CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope(runtime);
   struct : public Locals {
     PinnedValue<> prepareStackTraceVal;
     PinnedValue<> stackTraceFormatted;
@@ -378,9 +377,6 @@ static PseudoHandle<PropStorage> getCallStackFunctionNames(
   }
   lv.names.castAndSetHermesValue<PropStorage>(*arrRes);
 
-  GCScope gcScope(runtime);
-  auto marker = gcScope.createMarker();
-
   uint32_t frameIndex = 0;
   uint32_t namesIndex = 0;
   for (StackFramePtr cf : runtime.getStackFrames()) {
@@ -426,7 +422,6 @@ static PseudoHandle<PropStorage> getCallStackFunctionNames(
         SmallHermesValue::encodeHermesValue(lv.name.getHermesValue(), runtime);
     lv.names->set(namesIndex, shv, runtime.getHeap());
     ++namesIndex;
-    gcScope.flushToMarker(marker);
   }
 
   return createPseudoHandle(*lv.names);
@@ -459,7 +454,6 @@ ExecutionStatus JSError::recordStackTrace(
   // time check, but we don't have to loop through and check every domain to
   // deduplicate.
   auto addDomain = [&lv, &runtime](CodeBlock *codeBlock) -> ExecutionStatus {
-    GCScopeMarkerRAII marker{runtime};
     lv.domain = codeBlock->getRuntimeModule()->getDomainUnsafe(runtime);
     if (lv.domains->size() > 0 &&
         vmcast<Domain>(
@@ -636,7 +630,6 @@ ExecutionStatus JSError::constructStackTraceString_RJS(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
 
-  GCScope gcScope(runtime);
   struct : public Locals {
     PinnedValue<JSObject> thrownObj;
   } lv;
@@ -693,7 +686,6 @@ ExecutionStatus JSError::constructStackTraceString_RJS(
   llvh::DenseMap<const CodeBlock *, uint32_t> virtualOffsetCache;
 
   // Append each function location in the call stack to stack trace.
-  auto marker = gcScope.createMarker();
   for (size_t index = 0,
               max = selfHandle->stacktrace_->size() -
            selfHandle->firstExposedFrameIndex_;
@@ -722,7 +714,6 @@ ExecutionStatus JSError::constructStackTraceString_RJS(
 
     const size_t absIndex = index + selfHandle->firstExposedFrameIndex_;
     const auto &frame = selfHandle->stacktrace_->at(absIndex);
-    gcScope.flushToMarker(marker);
     // For each stacktrace entry, we add a line with the following format:
     // at <functionName> (<fileName>:<lineNo>:<columnNo>)
 
@@ -877,9 +868,6 @@ CallResult<HermesValue> JSError::constructCallSitesArray(
 
   size_t callSiteIndex = 0;
 
-  GCScope gcScope(runtime);
-  auto marker = gcScope.createMarker();
-
   for (size_t index = 0; index < max; index++) {
     // TODO: truncate traces? Support Error.stackTraceLimit?
     // Problem: The CallSite API doesn't provide a way to denote skipped frames.
@@ -901,8 +889,6 @@ CallResult<HermesValue> JSError::constructCallSitesArray(
                 lv.array, runtime, callSiteIndex++, lv.callSite) ==
             ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
-
-    gcScope.flushToMarker(marker);
   }
 
   auto cr = JSArray::setLengthProperty(

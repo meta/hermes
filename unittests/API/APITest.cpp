@@ -3823,9 +3823,9 @@ arr;
 
 TEST_P(HermesSerializationTest, SerializeManyValues) {
   // https://github.com/facebook/hermes/issues/2189: the number of properties,
-  // elements and entries must not be bounded by the handle limit of a GCScope.
-  // Errors are included because serializing and deserializing them creates
-  // handles.
+  // elements and entries must not be bounded by a limit on rooted values.
+  // Errors are included because serializing and deserializing them roots
+  // values.
   auto code = R"(
 var objs = [];
 var dict = {};

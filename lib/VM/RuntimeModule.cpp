@@ -177,7 +177,6 @@ CodeBlock *RuntimeModule::getCodeBlockSlowPath(unsigned index) {
 void RuntimeModule::importStringIDMapMayAllocate() {
   assert(bcProvider_ && "Uninitialized RuntimeModule");
   PerfSection perf("Import String ID Map");
-  GCScope scope(runtime_);
 
   auto strTableSize = bcProvider_->getStringCount();
 
@@ -344,9 +343,6 @@ SymbolID RuntimeModule::mapStringMayAllocate(
     id = runtime_.getIdentifierTable().registerLazyIdentifier(
         runtime_, str, hash);
   } else {
-    // Accessing a symbol non-lazily may allocate in the GC heap, so add a scope
-    // marker.
-    GCScopeMarkerRAII scopeMarker{runtime_};
     id = runtime_.ignoreAllocationFailure(
         runtime_.getIdentifierTable().getSymbolID(runtime_, str, hash));
   }

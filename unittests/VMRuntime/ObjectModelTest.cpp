@@ -182,7 +182,6 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
     PinnedValue<> num;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{runtime, "ObjectModelTest.DefineOwnPropertyTest", 200};
   auto *runtimeModule = RuntimeModule::createUninitialized(runtime, domain);
   CallResult<bool> cr{false};
 
@@ -564,7 +563,6 @@ TEST_F(ObjectModelTest, NonArrayComputedTest) {
     PinnedValue<JSObject> obj1;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope{runtime, "ObjectModelTest.NonArrayComputedTest", 128};
 
   auto prop1Name = createNoThrowForTest(runtime, "prop1", lv.prop1Name);
   auto prop1ID = *stringToSymbolIDForTest(runtime, prop1Name, lv.prop1ID);
@@ -679,7 +677,6 @@ TEST_F(ObjectModelTest, NamedOrIndexed) {
     PinnedValue<> nonIndexIDString;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{runtime, "ObjectModelTest.NamedOrIndexed", 128};
   CallResult<bool> cr{false};
 
   auto nonIndexID =
@@ -792,7 +789,6 @@ TEST_F(ObjectModelTest, HasProperty) {
     PinnedValue<JSObject> self;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{runtime, "ObjectModelTest.HasProperty", 256};
 
   auto nonIndexID =
       *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.nonIndexID);
@@ -860,8 +856,6 @@ TEST_F(ObjectModelTest, UpdatePropertyFlagsWithoutTransitionsTest) {
     PinnedValue<JSObject> obj;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope gcScope{
-      runtime, "ObjectModelTest.UpdatePropertyFlagsWithoutTransitionsTest", 48};
   auto aHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"), lv.aHnd);
   auto bHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"b"), lv.bHnd);
   auto cHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"c"), lv.cHnd);

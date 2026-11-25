@@ -73,7 +73,6 @@ NativeFunction *defineMethod(
     NativeFunctionPtr nativeFunctionPtr,
     unsigned paramCount,
     DefinePropertyFlags dpf) {
-  GCScope gcScope{runtime};
   struct : public Locals {
     PinnedValue<NativeFunction> method;
   } lv;
@@ -143,8 +142,6 @@ void defineAccessor(
       "at least a getter or a setter must be specified");
   ExecutionStatus status{};
   (void)status;
-
-  GCScope gcScope{runtime};
 
   struct : public Locals {
     PinnedValue<NativeFunction> getter;
@@ -283,8 +280,6 @@ CallResult<HermesValue> createDynamicFunction(
     Runtime &runtime,
     NativeArgs args,
     DynamicFunctionKind kind) {
-  GCScope gcScope(runtime);
-
   // Number of arguments supplied to Function().
   uint32_t argCount = args.getArgCount();
 
@@ -370,9 +365,7 @@ CallResult<HermesValue> createDynamicFunction(
     lv.body = runtime.getPredefinedString(Predefined::emptyString);
   } else {
     // If there's arguments, store the parameters and the provided body.
-    auto marker = gcScope.createMarker();
     for (uint32_t i = 0; i < paramCount; ++i) {
-      gcScope.flushToMarker(marker);
       auto strRes = toString_RJS(runtime, args.getArgHandle(i));
       if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;

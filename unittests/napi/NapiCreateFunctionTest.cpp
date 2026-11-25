@@ -193,7 +193,6 @@ TEST_F(NapiCreateFunctionTest, CallReturnsUndefined) {
       napi_ok, napi_create_function(env_, nullptr, 0, cb, nullptr, &func));
 
   // Call it via Hermes VM APIs.
-  GCScope gcScope(env_->runtime);
   auto res =
       callFunction(env_->runtime, func, Runtime::getUndefinedValue(), {});
   ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
@@ -217,7 +216,6 @@ TEST_F(NapiCreateFunctionTest, CallReturnsNumber) {
       napi_ok, napi_create_function(env_, nullptr, 0, cb, nullptr, &func));
 
   // Call it.
-  GCScope gcScope(env_->runtime);
   auto res =
       callFunction(env_->runtime, func, Runtime::getUndefinedValue(), {});
   ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
@@ -251,7 +249,6 @@ TEST_F(NapiCreateFunctionTest, CallWithArgsAddsNumbers) {
       napi_create_function(env_, "add", NAPI_AUTO_LENGTH, cb, nullptr, &func));
 
   // Call it with args 10 and 32.
-  GCScope gcScope(env_->runtime);
   HermesValue args[] = {
       HermesValue::encodeTrustedNumberValue(10),
       HermesValue::encodeTrustedNumberValue(32)};
@@ -279,7 +276,6 @@ TEST_F(NapiCreateFunctionTest, CallbackReceivesThisArg) {
       napi_ok, napi_create_function(env_, nullptr, 0, cb, nullptr, &func));
 
   // Call it with 'this' = 99.
-  GCScope gcScope(env_->runtime);
   struct : public Locals {
     PinnedValue<> thisVal;
   } lv;
@@ -314,7 +310,6 @@ TEST_F(NapiCreateFunctionTest, CallbackReceivesData) {
       napi_ok, napi_create_function(env_, nullptr, 0, cb, &userData, &func));
 
   // Call it.
-  GCScope gcScope(env_->runtime);
   auto res =
       callFunction(env_->runtime, func, Runtime::getUndefinedValue(), {});
   ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
@@ -338,7 +333,6 @@ TEST_F(NapiCreateFunctionTest, CallbackThrowsException) {
       napi_ok, napi_create_function(env_, nullptr, 0, cb, nullptr, &func));
 
   // Call it — should get an exception.
-  GCScope gcScope(env_->runtime);
   auto res =
       callFunction(env_->runtime, func, Runtime::getUndefinedValue(), {});
   EXPECT_EQ(ExecutionStatus::EXCEPTION, res.getStatus());
@@ -390,7 +384,6 @@ TEST_F(NapiCreateFunctionTest, CallbackReturnsString) {
       napi_ok, napi_create_function(env_, nullptr, 0, cb, nullptr, &func));
 
   // Call it.
-  GCScope gcScope(env_->runtime);
   auto res =
       callFunction(env_->runtime, func, Runtime::getUndefinedValue(), {});
   ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
@@ -426,7 +419,6 @@ TEST_F(NapiCreateFunctionTest, MultipleCreatedFunctions) {
 
   // Call both and verify different results.
   {
-    GCScope gcScope(env_->runtime);
     auto res1 =
         callFunction(env_->runtime, func1, Runtime::getUndefinedValue(), {});
     ASSERT_NE(ExecutionStatus::EXCEPTION, res1.getStatus());
@@ -434,7 +426,6 @@ TEST_F(NapiCreateFunctionTest, MultipleCreatedFunctions) {
   }
 
   {
-    GCScope gcScope(env_->runtime);
     auto res2 =
         callFunction(env_->runtime, func2, Runtime::getUndefinedValue(), {});
     ASSERT_NE(ExecutionStatus::EXCEPTION, res2.getStatus());
@@ -474,7 +465,6 @@ TEST_F(NapiCreateFunctionTest, CallbackNoArgsPassed) {
       napi_ok, napi_create_function(env_, nullptr, 0, cb, nullptr, &func));
 
   // Call with no args.
-  GCScope gcScope(env_->runtime);
   auto res =
       callFunction(env_->runtime, func, Runtime::getUndefinedValue(), {});
   ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());

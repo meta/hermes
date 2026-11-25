@@ -648,7 +648,6 @@ CallResult<HermesValue> Interpreter::interpretFunction(
     ip = (Inst const *)curCodeBlock->begin();
   }
 
-  GCScope gcScope(runtime);
   struct : public Locals {
     PinnedValue<> tmp;
   } lv;
@@ -660,13 +659,6 @@ CallResult<HermesValue> Interpreter::interpretFunction(
   CallResult<bool> boolRes{ExecutionStatus::EXCEPTION};
   // Start of the bytecode file, used to calculate IP offset in crash traces.
   const uint8_t *bytecodeFileStart;
-
-  // Mark the gcScope so we can clear all allocated handles.
-  // Remember how many handles the scope has so we can clear them in the loop.
-  static constexpr unsigned KEEP_HANDLES = 0;
-  assert(
-      gcScope.getHandleCountDbg() == KEEP_HANDLES &&
-      "scope has unexpected number of handles");
 
   INIT_OPCODE_PROFILER;
 
@@ -726,9 +718,6 @@ tailCall:
     HERMES_SLOW_ASSERT(                                                      \
         curCodeBlock->contains(ip) && "curCodeBlock must contain ip");       \
     HERMES_SLOW_ASSERT((printDebugInfo(curCodeBlock, frameRegs, ip), true)); \
-    HERMES_SLOW_ASSERT(                                                      \
-        gcScope.getHandleCountDbg() == KEEP_HANDLES &&                       \
-        "unaccounted handles were created");                                 \
     HERMES_SLOW_ASSERT(lv.tmp.isCleared() && "lv.tmp not cleared");          \
     RECORD_OPCODE_START_TIME;                                                \
     INC_OPCODE_COUNT;                                                        \
@@ -841,7 +830,6 @@ tailCall:
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {          \
       goto exception;                                                \
     }                                                                \
-    gcScope.flushToSmallCount(KEEP_HANDLES);                         \
     ip = NEXTINST(name);                                             \
     DISPATCH;                                                        \
   }
@@ -865,7 +853,6 @@ tailCall:
         doOperSlowPath_RJS<do##name>(runtime, frameRegs, &ip->i##name));   \
     if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION))               \
       goto exception;                                                      \
-    gcScope.flushToSmallCount(KEEP_HANDLES);                               \
     ip = NEXTINST(name);                                                   \
     DISPATCH;                                                              \
   }                                                                        \
@@ -890,7 +877,6 @@ tailCall:
     if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {                 \
       goto exception;                                                          \
     }                                                                          \
-    gcScope.flushToSmallCount(KEEP_HANDLES);                                   \
     ip = NEXTINST(name);                                                       \
     DISPATCH;                                                                  \
   }
@@ -917,7 +903,6 @@ tailCall:
     if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {                \
       goto exception;                                                         \
     }                                                                         \
-    gcScope.flushToSmallCount(KEEP_HANDLES);                                  \
     ip = NEXTINST(name);                                                      \
     DISPATCH;                                                                 \
   }
@@ -943,7 +928,6 @@ tailCall:
     if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {              \
       goto exception;                                                       \
     }                                                                       \
-    gcScope.flushToSmallCount(KEEP_HANDLES);                                \
     ip = NEXTINST(name);                                                    \
     DISPATCH;                                                               \
   }
@@ -968,7 +952,6 @@ tailCall:
             runtime, Handle<>(&O2REG(name)), Handle<>(&O3REG(name))));     \
     if (boolRes == ExecutionStatus::EXCEPTION)                             \
       goto exception;                                                      \
-    gcScope.flushToSmallCount(KEEP_HANDLES);                               \
     O1REG(name) = HermesValue::encodeBoolValue(boolRes.getValue());        \
     ip = NEXTINST(name);                                                   \
     DISPATCH;                                                              \
@@ -1004,7 +987,6 @@ tailCall:
             Handle<>(&O3REG(name##suffix))));                             \
     if (boolRes == ExecutionStatus::EXCEPTION)                            \
       goto exception;                                                     \
-    gcScope.flushToSmallCount(KEEP_HANDLES);                              \
     if (boolRes.getValue()) {                                             \
       ip = trueDest;                                                      \
       DISPATCH;                                                           \
@@ -1057,7 +1039,6 @@ tailCall:
     if (eqRes == ExecutionStatus::EXCEPTION) {           \
       goto exception;                                    \
     }                                                    \
-    gcScope.flushToSmallCount(KEEP_HANDLES);             \
     if (*eqRes) {                                        \
       ip = trueDest;                                     \
       DISPATCH;                                          \
@@ -1186,7 +1167,6 @@ tailCall:
       }
       O1REG(CoerceThisNS) = res.getValue();
       lv.tmp.clear();
-      gcScope.flushToSmallCount(KEEP_HANDLES);
       ip = nextIP;
       DISPATCH;
     }
@@ -1269,7 +1249,6 @@ tailCall:
       if (uint8_t asyncFlags =
               runtime.testAndClearDebuggerAsyncBreakRequest()) {
         RUN_DEBUGGER_ASYNC_BREAK(asyncFlags);
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         DISPATCH;
       }
 #endif
@@ -1367,7 +1346,6 @@ tailCall:
       SLOW_DEBUG(
           dbgs() << "native return value r" << (unsigned)ip->iCall.op1 << "="
                  << DumpHermesValue(O1REG(Call)) << "\n");
-      gcScope.flushToSmallCount(KEEP_HANDLES);
       ip = nextIP;
       DISPATCH;
     }
@@ -1386,7 +1364,6 @@ tailCall:
               doCallRequireSlowPath_RJS(runtime, frameRegs, ip, runtimeModule));
           if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
             goto exception;
-          gcScope.flushToSmallCount(KEEP_HANDLES);
         }
         ip = NEXTINST(CallRequire);
         DISPATCH;
@@ -1407,7 +1384,6 @@ tailCall:
                 runtime, frameRegs, curCodeBlock, ip->iCallBuiltin.op3));
         if (LLVM_UNLIKELY(cres == ExecutionStatus::EXCEPTION))
           goto exception;
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(CallBuiltin);
         DISPATCH;
       }
@@ -1418,7 +1394,6 @@ tailCall:
                 runtime, frameRegs, curCodeBlock, ip->iCallBuiltinLong.op3));
         if (LLVM_UNLIKELY(cres == ExecutionStatus::EXCEPTION))
           goto exception;
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(CallBuiltinLong);
         DISPATCH;
       }
@@ -1443,7 +1418,6 @@ tailCall:
           if (uint8_t asyncFlags =
                   runtime.testAndClearDebuggerAsyncBreakRequest()) {
             RUN_DEBUGGER_ASYNC_BREAK(asyncFlags);
-            gcScope.flushToSmallCount(KEEP_HANDLES);
             DISPATCH;
           }
         }
@@ -1601,7 +1575,6 @@ tailCall:
               frameRegs = &runtime.getCurrentFrame().getFirstLocalRef();
             }
           }
-          gcScope.flushToSmallCount(KEEP_HANDLES);
         }
         DISPATCH;
 #else
@@ -1625,7 +1598,6 @@ tailCall:
             }
           }
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
 
         ip = NEXTINST(AsyncBreakCheck);
         DISPATCH;
@@ -1672,7 +1644,6 @@ tailCall:
       if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
         goto exception;
       }
-      gcScope.flushToSmallCount(KEEP_HANDLES);
       ip = nextIP;
       DISPATCH;
     }
@@ -1704,7 +1675,6 @@ tailCall:
                   runtimeModule->getCodeBlockMayAllocate(idVal))
                   .getHermesValue());
       lv.tmp.clear();
-      gcScope.flushToSmallCount(KEEP_HANDLES);
       ip = nextIP;
       DISPATCH;
     }
@@ -1725,7 +1695,6 @@ tailCall:
         }
         O1REG(CreateGenerator) = res->getHermesValue();
         res->invalidate();
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(CreateGenerator);
         DISPATCH;
       }
@@ -1743,7 +1712,6 @@ tailCall:
         }
         O1REG(CreateGeneratorLongIndex) = res->getHermesValue();
         res->invalidate();
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(CreateGeneratorLongIndex);
         DISPATCH;
       }
@@ -1963,7 +1931,6 @@ tailCall:
           runtime, frameRegs, ip, curCodeBlock, idVal, tryProp));             \
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))                       \
     goto exception;                                                           \
-  gcScope.flushToSmallCount(KEEP_HANDLES);                                    \
   ip = NEXTINST(name);                                                        \
   DISPATCH;
 
@@ -2020,7 +1987,6 @@ tailCall:
                 runtime, frameRegs, ip, curCodeBlock));
         if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
           goto exception;
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(GetByIdWithReceiverLong);
         DISPATCH;
       }
@@ -2136,7 +2102,6 @@ tailCall:
               tryProp));
       if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
         goto exception;
-      gcScope.flushToSmallCount(KEEP_HANDLES);
       ip = nextIP;
       DISPATCH;
     }
@@ -2163,7 +2128,6 @@ tailCall:
         if (LLVM_UNLIKELY(resPH == ExecutionStatus::EXCEPTION)) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         O1REG(GetByIndex) = resPH->get();
         ip = NEXTINST(GetByIndex);
         DISPATCH;
@@ -2200,7 +2164,6 @@ tailCall:
             ExecutionStatus res, caseGetByVal(runtime, frameRegs, ip));
         if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
           goto exception;
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(GetByVal);
         DISPATCH;
       }
@@ -2230,7 +2193,6 @@ tailCall:
         if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(DefineOwnById);
         DISPATCH;
       }
@@ -2260,7 +2222,6 @@ tailCall:
         if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(DefineOwnByIdLong);
         DISPATCH;
       }
@@ -2271,7 +2232,6 @@ tailCall:
             ExecutionStatus status, casePutByVal(runtime, frameRegs, ip));
         if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION))
           goto exception;
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(PutByValLoose);
         DISPATCH;
       }
@@ -2297,7 +2257,6 @@ tailCall:
               DefinePropertyFlags::getDefaultNewPropertyFlags(),
               Handle<>(&O2REG(DefineOwnByIndex)),
               PropOpFlags().plusThrowOnError()));
-      gcScope.flushToSmallCount(KEEP_HANDLES);
       lv.tmp.clear();
       ip = nextIP;
       DISPATCH;
@@ -2342,7 +2301,6 @@ tailCall:
             goto exception;
           }
           O1REG(ToPropertyKey) = res->getHermesValue();
-          gcScope.flushToSmallCount(KEEP_HANDLES);
         }
         ip = NEXTINST(ToPropertyKey);
         DISPATCH;
@@ -2356,7 +2314,6 @@ tailCall:
           CAPTURE_IP(res = toNumber_RJS(runtime, Handle<>(&O2REG(ToNumber))));
           if (res == ExecutionStatus::EXCEPTION)
             goto exception;
-          gcScope.flushToSmallCount(KEEP_HANDLES);
           O1REG(ToNumber) = res.getValue();
           ip = NEXTINST(ToNumber);
         }
@@ -2371,7 +2328,6 @@ tailCall:
           CAPTURE_IP(res = toNumeric_RJS(runtime, Handle<>(&O2REG(ToNumeric))));
           if (res == ExecutionStatus::EXCEPTION)
             goto exception;
-          gcScope.flushToSmallCount(KEEP_HANDLES);
           O1REG(ToNumeric) = res.getValue();
           ip = NEXTINST(ToNumeric);
         }
@@ -2388,7 +2344,6 @@ tailCall:
           CAPTURE_IP(res = toInt32_RJS(runtime, Handle<>(&O2REG(ToInt32))));
           if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
             goto exception;
-          gcScope.flushToSmallCount(KEEP_HANDLES);
           O1REG(ToInt32) = res.getValue();
         }
         ip = NEXTINST(ToInt32);
@@ -2405,7 +2360,6 @@ tailCall:
           CAPTURE_IP(res = toUInt32_RJS(runtime, Handle<>(&O2REG(ToUint32))));
           if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
             goto exception;
-          gcScope.flushToSmallCount(KEEP_HANDLES);
           O1REG(ToUint32) = res.getValue();
         }
         ip = NEXTINST(ToUint32);
@@ -2429,7 +2383,6 @@ tailCall:
           if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION))
             goto exception;
           lv.tmp.clear();
-          gcScope.flushToSmallCount(KEEP_HANDLES);
           O1REG(AddEmptyString) = strRes->getHermesValue();
           ip = NEXTINST(AddEmptyString);
         }
@@ -2554,7 +2507,6 @@ tailCall:
         if (res == ExecutionStatus::EXCEPTION) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         O1REG(Add) = res.getValue();
         ip = NEXTINST(Add);
         DISPATCH;
@@ -2568,7 +2520,6 @@ tailCall:
         if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         O1REG(AddS) = res.getValue();
         ip = NEXTINST(AddS);
         DISPATCH;
@@ -2589,7 +2540,6 @@ tailCall:
         if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(BitNot);
         DISPATCH;
       }
@@ -2615,7 +2565,6 @@ tailCall:
         if (resPH == ExecutionStatus::EXCEPTION) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         O1REG(GetArgumentsLength) = resPH->get();
         ip = NEXTINST(GetArgumentsLength);
         DISPATCH;
@@ -2649,7 +2598,6 @@ tailCall:
         if (res == ExecutionStatus::EXCEPTION) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         O1REG(GetArgumentsPropByValLoose) = res->getHermesValue();
         ip = NEXTINST(GetArgumentsPropByValLoose);
         DISPATCH;
@@ -2673,7 +2621,6 @@ tailCall:
           goto exception;
         }
         O1REG(ReifyArgumentsLoose) = resArgs->getHermesValue();
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(ReifyArgumentsLoose);
         DISPATCH;
       }
@@ -2684,9 +2631,6 @@ tailCall:
         // it.
         CAPTURE_IP(
             O1REG(NewObject) = JSObject::create(runtime).getHermesValue());
-        assert(
-            gcScope.getHandleCountDbg() == KEEP_HANDLES &&
-            "Should not create handles.");
         ip = NEXTINST(NewObject);
         DISPATCH;
       }
@@ -2702,9 +2646,6 @@ tailCall:
                     ? Runtime::makeNullHandle<JSObject>()
                     : Handle<JSObject>::vmcast(&runtime.objectPrototype),
                 ip->iNewObjectWithParent.op3));
-        assert(
-            gcScope.getHandleCountDbg() == KEEP_HANDLES &&
-            "Should not create handles.");
         ip = NEXTINST(NewObjectWithParent);
         DISPATCH;
       }
@@ -2796,7 +2737,6 @@ tailCall:
 
       CASE(NewFastArray) {
         {
-          GCScopeMarkerRAII marker{runtime};
           auto protoHandle = Handle<JSObject>::vmcast(&O2REG(NewFastArray));
           CAPTURE_IP_ASSIGN(
               auto createRes,
@@ -2883,7 +2823,6 @@ tailCall:
           goto exception;
         }
         O1REG(NewArrayWithBuffer) = resPH->get();
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         lv.tmp.clear();
         ip = NEXTINST(NewArrayWithBuffer);
         DISPATCH;
@@ -2901,7 +2840,6 @@ tailCall:
           goto exception;
         }
         O1REG(NewArrayWithBufferLong) = resPH->get();
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         lv.tmp.clear();
         ip = NEXTINST(NewArrayWithBufferLong);
         DISPATCH;
@@ -2921,7 +2859,6 @@ tailCall:
           goto exception;
         }
         O1REG(CreateThisForSuper) = *res;
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(CreateThisForSuper);
         DISPATCH;
       }
@@ -2964,7 +2901,6 @@ tailCall:
         if (eqRes == ExecutionStatus::EXCEPTION) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         O1REG(Eq) = HermesValue::encodeBoolValue(
             ip->opCode == OpCode::Eq ? *eqRes : !*eqRes);
         ip = NEXTINST(Eq);
@@ -2999,7 +2935,6 @@ tailCall:
             doNegateSlowPath_RJS(runtime, frameRegs, ip));
         if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION))
           goto exception;
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(Negate);
         DISPATCH;
       }
@@ -3023,7 +2958,6 @@ tailCall:
         if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(Mod);
         DISPATCH;
       }
@@ -3038,7 +2972,6 @@ tailCall:
           goto exception;
         }
         O1REG(InstanceOf) = HermesValue::encodeBoolValue(*result);
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(InstanceOf);
         DISPATCH;
       }
@@ -3060,7 +2993,6 @@ tailCall:
           }
           O1REG(IsIn) = HermesValue::encodeBoolValue(*cr);
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(IsIn);
         DISPATCH;
       }
@@ -3085,7 +3017,6 @@ tailCall:
         if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(PrivateIsIn);
         DISPATCH;
       }
@@ -3149,7 +3080,6 @@ tailCall:
 
       CASE(CreateRegExp) {
         CAPTURE_IP(caseCreateRegExp(runtime, frameRegs, curCodeBlock, ip));
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(CreateRegExp);
         DISPATCH;
       }
@@ -3277,7 +3207,6 @@ tailCall:
         if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(Imul);
         DISPATCH;
       }
@@ -3347,7 +3276,6 @@ tailCall:
         if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
           goto exception;
         }
-        gcScope.flushToSmallCount(KEEP_HANDLES);
         ip = NEXTINST(AddOwnPrivateBySym);
         DISPATCH;
       }
@@ -3381,7 +3309,6 @@ tailCall:
             goto exception;
           }
           O1REG(GetOwnPrivateBySym) = *res;
-          gcScope.flushToSmallCount(KEEP_HANDLES);
           ip = NEXTINST(GetOwnPrivateBySym);
           DISPATCH;
         } else {
@@ -3421,7 +3348,6 @@ tailCall:
           if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
             goto exception;
           }
-          gcScope.flushToSmallCount(KEEP_HANDLES);
           ip = NEXTINST(PutOwnPrivateBySym);
           DISPATCH;
         } else {
@@ -3457,7 +3383,6 @@ tailCall:
               goto exception;
             }
           }
-          gcScope.flushToSmallCount(KEEP_HANDLES);
         }
         ip = NEXTINST(IteratorClose);
         DISPATCH;
@@ -3491,7 +3416,6 @@ tailCall:
       catchable = jsError->catchable();
     }
 
-    gcScope.flushToSmallCount(KEEP_HANDLES);
     lv.tmp.clear();
 
 #ifdef HERMES_ENABLE_DEBUGGER
@@ -3530,7 +3454,6 @@ tailCall:
           assert(
               tmpState == InterpreterState(curCodeBlock, CUROFFSET) &&
               "not allowed to step internally in a pauseOnThrow");
-          gcScope.flushToSmallCount(KEEP_HANDLES);
         }
       }
     }

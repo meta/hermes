@@ -1197,7 +1197,6 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
 
   lv.obj = JSObject::create(runtime);
   {
-    vm::GCScope gcScope(runtime);
     ASSERT_FALSE(isException(
         vm::stringToSymbolIDForTest(
             runtime,
@@ -1628,7 +1627,6 @@ baz();
   Handle<JSObject> resObj = lv.resObj;
   SymbolID fooSym, barSym;
   {
-    vm::GCScope gcScope(runtime);
     fooSym = vm::stringToSymbolIDForTest(
                  runtime,
                  vm::createNoThrowForTest(runtime, "foo", lv.fooStr),

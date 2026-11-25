@@ -329,19 +329,15 @@ ExecutionStatus Debugger::debuggerLoop(
   const bool startException = pauseReason == PauseReason::Exception;
   EvalResultMetadata evalResultMetadata;
   CallResult<InterpreterState> result{ExecutionStatus::EXCEPTION};
-  GCScope gcScope{runtime_};
   struct : public Locals {
     PinnedValue<> evalResult;
   } lv;
   LocalsRAII lraii{runtime_, &lv};
-  // evalResult is pinned in Locals, so no handles need to be kept.
-  static constexpr unsigned KEEP_HANDLES = 0;
 #if HERMESVM_SAMPLING_PROFILER_AVAILABLE
   SuspendSamplingProfilerRAII ssp{
       runtime_, SamplingProfiler::SuspendFrameInfo::Kind::Debugger};
 #endif // HERMESVM_SAMPLING_PROFILER_AVAILABLE
   while (true) {
-    GCScopeMarkerRAII marker{runtime_};
     auto command = getNextCommand(
         state, pauseReason, *lv.evalResult, evalResultMetadata, breakpoint);
     lv.evalResult = HermesValue::encodeUndefinedValue();
@@ -379,9 +375,6 @@ ExecutionStatus Debugger::debuggerLoop(
             return ExecutionStatus::RETURNED;
           }
           while (true) {
-            // NOTE: this loop doesn't actually allocate any handles presently,
-            // but it could, and clearing all handles is really cheap.
-            gcScope.flushToSmallCount(KEEP_HANDLES);
             OpCode curCode = getRealOpCode(state.codeBlock, state.offset);
 
             if (curCode == OpCode::Ret) {
@@ -588,14 +581,12 @@ void Debugger::resolveBreakpoints(CodeBlock *codeBlock) {
 
 auto Debugger::getCallFrameInfo(const CodeBlock *codeBlock, uint32_t ipOffset)
     const -> CallFrameInfo {
-  GCScopeMarkerRAII marker{runtime_};
   CallFrameInfo frameInfo;
   if (!codeBlock) {
     frameInfo.functionName = "(native)";
   } else {
     // The caller doesn't expect that this function is allocating new handles,
     // so make sure we aren't.
-    GCScopeMarkerRAII gcMarker{runtime_};
 
     struct : public Locals {
       PinnedValue<StringPrimitive> nameStr;
@@ -643,7 +634,6 @@ auto Debugger::getStackTrace() const -> StackTrace {
       runtime_.getCurrentFrame() &&
       "Must have at least one stack frame to call this function");
   using fhd::CallFrameInfo;
-  GCScopeMarkerRAII marker{runtime_};
   struct : public Locals {
     PinnedValue<> displayName;
     PinnedValue<JSObject> propObj;
@@ -656,9 +646,7 @@ auto Debugger::getStackTrace() const -> StackTrace {
   // the Callee CodeBlock of the top frame.
   const CodeBlock *codeBlock = runtime_.getCurrentFrame()->getCalleeCodeBlock();
   const inst::Inst *ip = runtime_.getCurrentIP();
-  GCScopeMarkerRAII marker2{runtime_};
   for (auto cf : runtime_.getStackFrames()) {
-    marker2.flush();
     uint32_t ipOffset = (codeBlock && ip) ? codeBlock->getOffsetOf(ip) : 0;
     CallFrameInfo frameInfo = getCallFrameInfo(codeBlock, ipOffset);
     if (auto callableHandle = Handle<Callable>::dyn_vmcast(
@@ -1202,7 +1190,6 @@ HermesValue Debugger::getVariableInFrame(
     uint32_t scopeDepth,
     uint32_t variableIndex,
     std::string *outName) const {
-  GCScope gcScope{runtime_};
   auto frameInfo = runtime_.stackFrameInfoByIndex(frame);
   assert(frameInfo && "Invalid frame");
 
@@ -1316,7 +1303,6 @@ HermesValue Debugger::evalInFrame(
     const std::string &src,
     const InterpreterState &state,
     EvalResultMetadata *outMetadata) {
-  GCScope gcScope{runtime_};
   *outMetadata = EvalResultMetadata{};
   uint32_t frame = args.frameIdx;
   auto frameInfo = runtime_.stackFrameInfoByIndex(frame);
@@ -1422,7 +1408,6 @@ bool Debugger::resolveBreakpointLocation(Breakpoint &breakpoint) const {
   // exactly when a CodeBlock is lazy, because that's only when the AST exists.
   // If it is, we compile the CodeBlock and start over,
   // skipping any CodeBlocks we've seen before.
-  GCScope gcScope{runtime_};
   for (auto &runtimeModule : runtime_.getRuntimeModules()) {
     const auto &request = breakpoint.requestedLocation;
     if (request.fileId != kInvalidLocation &&
@@ -1434,7 +1419,6 @@ bool Debugger::resolveBreakpointLocation(Breakpoint &breakpoint) const {
     llvh::DenseSet<CodeBlock *> visited{};
     std::vector<CodeBlock *> toVisit{};
     for (uint32_t i = 0, e = runtimeModule.getNumCodeBlocks(); i < e; ++i) {
-      GCScopeMarkerRAII marker{gcScope};
       // Use getCodeBlock to ensure they get initialized (but not compiled).
       toVisit.push_back(runtimeModule.getCodeBlockMayAllocate(i));
     }
@@ -1458,7 +1442,6 @@ bool Debugger::resolveBreakpointLocation(Breakpoint &breakpoint) const {
     }
 
     while (!toVisit.empty()) {
-      GCScopeMarkerRAII marker{gcScope};
       CodeBlock *codeBlock = toVisit.back();
       toVisit.pop_back();
 
@@ -1495,7 +1478,6 @@ bool Debugger::resolveBreakpointLocation(Breakpoint &breakpoint) const {
         // Compiling the function will add more functions to the runtimeModule.
         // Re-add them all so we can continue the search.
         for (uint32_t i = 0, e = runtimeModule.getNumCodeBlocks(); i < e; ++i) {
-          GCScopeMarkerRAII marker2{gcScope};
           // Use getCodeBlock to ensure they get initialized (but not compiled).
           toVisit.push_back(runtimeModule.getCodeBlockMayAllocate(i));
         }
@@ -1512,7 +1494,6 @@ bool Debugger::resolveBreakpointLocation(Breakpoint &breakpoint) const {
        it != runtime_.getRuntimeModules().rend();
        ++it) {
     auto &runtimeModule = *it;
-    GCScope gcScope{runtime_};
 
     if (!runtimeModule.getBytecode()->getDebugInfo()) {
       // No debug info in this module, keep going.

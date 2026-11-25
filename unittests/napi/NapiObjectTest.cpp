@@ -2698,7 +2698,6 @@ TEST_F(NapiTestFixture, DefineProperties_MethodUtf8) {
   auto *phv = reinterpret_cast<PinnedHermesValue *>(func);
   auto funcHandle = Handle<Callable>::vmcast(phv);
   {
-    GCScope gcScope(env_->runtime);
     auto res = Callable::executeCall0(
         funcHandle, env_->runtime, Runtime::getUndefinedValue());
     ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
@@ -2746,7 +2745,6 @@ TEST_F(NapiTestFixture, DefineProperties_MethodWithData) {
   auto *phv = reinterpret_cast<PinnedHermesValue *>(func);
   auto funcHandle = Handle<Callable>::vmcast(phv);
   {
-    GCScope gcScope(env_->runtime);
     auto res = Callable::executeCall0(
         funcHandle, env_->runtime, Runtime::getUndefinedValue());
     ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
@@ -2972,7 +2970,6 @@ TEST_F(NapiTestFixture, DefineProperties_SymbolKey) {
   // Create a symbol via the VM API.
   napi_value symKey = nullptr;
   {
-    GCScope gcScope(env_->runtime);
     auto strRes =
         StringPrimitive::createEfficient(env_->runtime, ASCIIRef{"sym", 3});
     ASSERT_NE(ExecutionStatus::EXCEPTION, strRes.getStatus());

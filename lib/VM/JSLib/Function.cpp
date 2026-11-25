@@ -129,7 +129,6 @@ CallResult<HermesValue> functionConstructor(void *, Runtime &runtime) {
 
 CallResult<HermesValue> functionPrototypeToString(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   struct : public Locals {
     PinnedValue<> propValue;
@@ -252,7 +251,6 @@ CallResult<HermesValue> functionPrototypeToString(void *, Runtime &runtime) {
 
 CallResult<HermesValue> functionPrototypeApply(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope(runtime);
   auto func = args.dyncastThis<Callable>();
   if (LLVM_UNLIKELY(!func)) {
     return runtime.raiseTypeError("Can't apply() to non-callable");

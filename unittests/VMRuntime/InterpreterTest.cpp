@@ -83,7 +83,6 @@ namespace {
 /// Convert all arguments to string and print them followed by new line.
 static CallResult<HermesValue> print(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope scope(runtime);
   struct : public Locals {
     PinnedValue<StringPrimitive> str;
   } lv;
@@ -603,19 +602,23 @@ TEST_F(InterpreterTest, FrameSizeTest) {
 
   ASSERT_EQ(vmdetail::mapStringMayAllocate(*runtimeModule, "getSP"), getSPID);
 
-  auto getSPFn = runtime.makeHandle<NativeFunction>(NativeFunction::create(
+  struct : public Locals {
+    PinnedValue<NativeFunction> getSPFn;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.getSPFn = NativeFunction::create(
       runtime,
       nullptr,
       getSP,
       Predefined::getSymbolID(Predefined::emptyString),
-      0));
+      0);
 
   // Define the 'getSP' function.
   (void)JSObject::putNamed_RJS(
       runtime.getGlobal(),
       runtime,
       runtimeModule->getSymbolIDFromStringIDMayAllocate(getSPID),
-      getSPFn);
+      lv.getSPFn);
 
   ScopedNativeCallFrame frame(
       runtime, 0, nullptr, false, HermesValue::encodeUndefinedValue());

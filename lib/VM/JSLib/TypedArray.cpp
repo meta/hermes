@@ -72,8 +72,6 @@ CallResult<HermesValue> iterableToArrayLikeFastPath(
   // getter may have changed it.
   uint32_t k = 0;
   while (k < JSArray::getLength(*sourceArray, runtime)) {
-    GCScopeMarkerRAII marker{runtime};
-
     // Get(array, k). Use the value in indexed storage if there is one. Holes,
     // accessors and elements stored as named properties need the full Get,
     // which may run a getter.
@@ -115,7 +113,6 @@ CallResult<HermesValue> iterableToArrayLike(Runtime &runtime, Handle<> items) {
     CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope{runtime};
 
   // 1. Let usingIterator be ? GetMethod(items, @@iterator).
   lv.iteratorSymbol = HermesValue::encodeSymbolValue(
@@ -184,8 +181,6 @@ CallResult<HermesValue> iterableToArrayLike(Runtime &runtime, Handle<> items) {
   // 5. Repeat,
   uint32_t k = 0;
   while (true) {
-    GCScopeMarkerRAII marker{gcScope};
-
     // Get the next value. As in IteratorToList, errors from next(), done or
     // value propagate without closing the iterator.
     auto stepRes = iteratorStepValue(runtime, iteratorRecord, &lv.nextValue);
@@ -435,11 +430,9 @@ CallResult<HermesValue> typedArrayConstructorFromObject(
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  GCScope scope(runtime);
   // 8. Let k be 0.
   // Note: createBuffer validates that len fits in size_type.
   JSTypedArrayBase::size_type i = 0;
-  auto marker = scope.createMarker();
   // 9. Repeat, while k < len.
   for (; i < len; ++i) {
     // a. Let Pk be ! ToString(k).
@@ -453,7 +446,6 @@ CallResult<HermesValue> typedArrayConstructorFromObject(
         ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    scope.flushToMarker(marker);
     // d. Increase k by 1.
   }
   // 10. Return O.
@@ -581,7 +573,6 @@ CallResult<HermesValue> mapFilterLoop(
     PinnedValue<> val;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-  GCScopeMarkerRAII marker{runtime};
   for (JSTypedArrayBase::size_type i = 0; i < len; ++i) {
     lv.val =
         JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
@@ -609,7 +600,6 @@ CallResult<HermesValue> mapFilterLoop(
               ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
     }
-    marker.flush();
   }
   return HermesValue::encodeTrustedNumberValue(insert);
 }
@@ -623,9 +613,6 @@ class TypedArraySortModel : public SortModel {
  protected:
   /// Runtime to sort in.
   Runtime &runtime_;
-
-  /// Scope to allocate handles in, gets destroyed with this.
-  GCScope gcScope_;
 
   /// JS comparison function, return -1 for less, 0 for equal, 1 for greater.
   Handle<Callable> compareFn_;
@@ -643,10 +630,6 @@ class TypedArraySortModel : public SortModel {
     PinnedValue<> callResult;
   } lv_;
   LocalsRAII lraii_;
-
-  /// Marker created after initializing all fields so handles allocated later
-  /// can be flushed.
-  GCScope::Marker gcMarker_;
 
   /// Get the element at index from items_. This does not allocate.
   HermesValue getElement(uint32_t index) const {
@@ -675,11 +658,9 @@ class TypedArraySortModel : public SortModel {
       Handle<> items,
       Handle<Callable> compareFn)
       : runtime_(runtime),
-        gcScope_(runtime),
         compareFn_(compareFn),
         items_(items),
-        lraii_(runtime, &lv_),
-        gcMarker_(gcScope_.createMarker()) {
+        lraii_(runtime, &lv_) {
     inputIsTypedArray_ = vmisa<JSTypedArrayBase>(items_.get());
     assert(inputIsTypedArray_ || vmisa<ArrayStorage>(items_.get()));
 #ifndef NDEBUG
@@ -704,8 +685,6 @@ class TypedArraySortModel : public SortModel {
 
   // Compare elements at index a and at index b.
   virtual CallResult<int> compare(uint32_t a, uint32_t b) override {
-    GCScopeMarkerRAII gcMarker{gcScope_, gcMarker_};
-
     lv_.a = getElement(a);
     lv_.b = getElement(b);
     auto callRes = Callable::executeCall2(
@@ -825,9 +804,7 @@ CallResult<HermesValue> typedArrayPrototypeSetObject(
   }
   // Read everything from the other array and write it into self starting from
   // offset.
-  GCScope scope(runtime);
   uint64_t k = 0;
-  auto marker = scope.createMarker();
   for (; k < srcLength; ++k) {
     if ((propRes = getIndexed_RJS(runtime, lv.src, k)) ==
         ExecutionStatus::EXCEPTION) {
@@ -838,7 +815,6 @@ CallResult<HermesValue> typedArrayPrototypeSetObject(
         ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    scope.flushToMarker(marker);
   }
   return HermesValue::encodeUndefinedValue();
 }
@@ -1001,7 +977,6 @@ CallResult<HermesValue> typedArrayFrom(void *, Runtime &runtime) {
   JSTypedArrayBase::size_type k = 0;
   // 10. Repeat, while k < len.
   for (; k < len; ++k) {
-    GCScopeMarkerRAII marker{runtime};
     // a - b. Get the value of the property at k.
     if ((propRes = getIndexed_RJS(runtime, lv.arrayLike, k)) ==
         ExecutionStatus::EXCEPTION) {
@@ -1065,8 +1040,6 @@ CallResult<HermesValue> typedArrayOf(void *, Runtime &runtime) {
     return ExecutionStatus::EXCEPTION;
   }
   // 6. Let k be 0.
-  GCScope scope(runtime);
-  auto marker = scope.createMarker();
   // 7. Repeat, while k < len.
   // Note: typedArrayCreate validates that len fits in size_type.
   for (JSTypedArrayBase::size_type k = 0; k < len; ++k) {
@@ -1079,7 +1052,6 @@ CallResult<HermesValue> typedArrayOf(void *, Runtime &runtime) {
       return ExecutionStatus::EXCEPTION;
     }
     // d. Increase k by 1. (In the loop increment).
-    scope.flushToMarker(marker);
   }
   // Return newObj.
   return lv.newObj.getHermesValue();
@@ -1140,7 +1112,6 @@ CallResult<HermesValue> typedArrayPrototypeAt(void *, Runtime &runtime) {
           ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  GCScope gcScope{runtime};
 
   auto O = args.vmcastThis<JSTypedArrayBase>();
 
@@ -1193,8 +1164,6 @@ CallResult<HermesValue> typedArrayPrototypeCopyWithin(
           runtime, args.getThisHandle(), true) == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-
-  GCScope gcScope{runtime};
 
   auto O = args.vmcastThis<JSTypedArrayBase>();
 
@@ -1274,7 +1243,6 @@ CallResult<HermesValue> typedArrayPrototypeEverySome(
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   // NOTE: this was implemented as separate from Array.prototype.every to take
   // advantage of the known contiguous memory region.
-  GCScope gcScope(runtime);
   auto every = static_cast<bool>(ctx);
   if (JSTypedArrayBase::validateTypedArray(runtime, args.getThisHandle()) ==
       ExecutionStatus::EXCEPTION) {
@@ -1287,7 +1255,6 @@ CallResult<HermesValue> typedArrayPrototypeEverySome(
   }
   auto thisArg = args.getArgHandle(1);
   // Run the callback over every element.
-  auto marker = gcScope.createMarker();
   for (JSTypedArrayBase::size_type i = 0; i < self->getLength(); ++i) {
     HermesValue val =
         JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
@@ -1301,7 +1268,6 @@ CallResult<HermesValue> typedArrayPrototypeEverySome(
     if (callRes == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    gcScope.flushToMarker(marker);
     auto testResult = toBoolean(callRes->get());
     if (every && !testResult) {
       return HermesValue::encodeBoolValue(false);
@@ -1422,8 +1388,6 @@ typedFindHelper(void *ctx, bool reverse, Runtime &runtime, NativeArgs args) {
     return runtime.raiseTypeError("callbackfn must be a Callable");
   }
   auto thisArg = args.getArgHandle(1);
-  GCScope gcScope(runtime);
-  auto marker = gcScope.createMarker();
   for (JSTypedArrayBase::size_type counter = 0; counter < len; counter++) {
     auto i = reverse ? (len - counter - 1) : counter;
     lv.val =
@@ -1443,7 +1407,6 @@ typedFindHelper(void *ctx, bool reverse, Runtime &runtime, NativeArgs args) {
       // Found one, return it.
       return index ? idx : lv.val.getHermesValue();
     }
-    gcScope.flushToMarker(marker);
   }
   return index ? HermesValue::encodeTrustedNumberValue(-1)
                : HermesValue::encodeUndefinedValue();
@@ -1474,8 +1437,6 @@ CallResult<HermesValue> typedArrayPrototypeForEach(void *, Runtime &runtime) {
     return runtime.raiseTypeError("callbackfn must be a Callable");
   }
   auto thisArg = args.getArgHandle(1);
-  GCScope gcScope(runtime);
-  auto marker = gcScope.createMarker();
   for (JSTypedArrayBase::size_type i = 0; i < len; ++i) {
     HermesValue val =
         JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
@@ -1488,7 +1449,6 @@ CallResult<HermesValue> typedArrayPrototypeForEach(void *, Runtime &runtime) {
             self.getHermesValue()) == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    gcScope.flushToMarker(marker);
   }
   return HermesValue::encodeUndefinedValue();
 }
@@ -1807,7 +1767,6 @@ CallResult<HermesValue> typedArrayPrototypeMapFilter(
     void *ctx,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   // Whether this call is "map" or "filter".
   bool map = static_cast<bool>(ctx);
@@ -1857,14 +1816,12 @@ CallResult<HermesValue> typedArrayPrototypeMapFilter(
     return ExecutionStatus::EXCEPTION;
   }
   lv.TA = std::move(*result);
-  auto marker = gcScope.createMarker();
   for (JSTypedArrayBase::size_type i = 0; i < insert; ++i) {
     lv.storage = lv.values->at(runtime, i).unboxToHV(runtime);
     if (JSObject::setOwnIndexed(lv.TA, runtime, i, lv.storage) ==
         ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    gcScope.flushToMarker(marker);
   }
   return lv.TA.getHermesValue();
 }
@@ -1943,7 +1900,6 @@ CallResult<HermesValue> typedArrayPrototypeJoin(void *, Runtime &runtime) {
   {
     // Make sure to drop the Handle early, it's not needed outside of the loop.
     for (decltype(len) i = 0; i < len; ++i) {
-      GCScope gcScope(runtime);
       lv.elem =
           JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
 
@@ -2033,8 +1989,6 @@ CallResult<HermesValue> typedArrayPrototypeReduce(void *ctx, Runtime &runtime) {
   }
 
   Handle<> undefinedThis = Runtime::getUndefinedValue();
-  GCScope scope(runtime);
-  auto marker = scope.createMarker();
   for (; inRange(i, len); i += right ? -1 : 1) {
     HermesValue val =
         JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
@@ -2050,7 +2004,6 @@ CallResult<HermesValue> typedArrayPrototypeReduce(void *ctx, Runtime &runtime) {
       return ExecutionStatus::EXCEPTION;
     }
     lv.accumulator = std::move(*callRes);
-    scope.flushToMarker(marker);
   }
   return lv.accumulator.getHermesValue();
 }
@@ -2320,7 +2273,6 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
     void *,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope(runtime);
   if (JSTypedArrayBase::validateTypedArray(runtime, args.getThisHandle()) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -2363,7 +2315,6 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
   }
   lv.strings = std::move(*arrRes);
 
-  auto marker = gcScope.createMarker();
   for (JSTypedArrayBase::size_type i = 0; i < len; ++i) {
     lv.storage =
         JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
@@ -2416,7 +2367,6 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
     } else {
       return runtime.raiseTypeError("toLocaleString() not callable");
     }
-    gcScope.flushToMarker(marker);
   }
 
   auto builder =
@@ -2627,7 +2577,6 @@ CallResult<HermesValue> createReadWrittenResult(
 /// Uint8Array.prototype.toBase64([options])
 CallResult<HermesValue> uint8ArrayPrototypeToBase64(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   auto selfRes = validateUint8Array(runtime, args.getThisHandle());
   if (selfRes == ExecutionStatus::EXCEPTION)
@@ -2719,7 +2668,6 @@ CallResult<HermesValue> uint8ArrayPrototypeToHex(void *, Runtime &runtime) {
 /// Uint8Array.fromBase64(string[, options])
 CallResult<HermesValue> uint8ArrayFromBase64(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   // 1. Validate the string argument.
   auto strArg = args.getArgHandle(0);
@@ -2766,7 +2714,6 @@ CallResult<HermesValue> uint8ArrayFromBase64(void *, Runtime &runtime) {
 /// Uint8Array.fromHex(string)
 CallResult<HermesValue> uint8ArrayFromHex(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   auto strArg = args.getArgHandle(0);
   if (!strArg->isString()) {
@@ -2806,7 +2753,6 @@ CallResult<HermesValue> uint8ArrayPrototypeSetFromBase64(
     void *,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   auto selfRes = validateUint8Array(runtime, args.getThisHandle());
   if (selfRes == ExecutionStatus::EXCEPTION)
@@ -2858,7 +2804,6 @@ CallResult<HermesValue> uint8ArrayPrototypeSetFromHex(
     void *,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   auto selfRes = validateUint8Array(runtime, args.getThisHandle());
   if (selfRes == ExecutionStatus::EXCEPTION)

@@ -223,8 +223,6 @@ static CallResult<HermesValue> constructErrorObject(
   // InstallErrorCause(O, options).
   // If Type(options) is Object and ? HasProperty(options, "cause") is true
   if (auto options = Handle<JSObject>::dyn_vmcast(opts)) {
-    GCScopeMarkerRAII marker{runtime};
-
     auto causeName = Predefined::getSymbolID(Predefined::cause);
 
     // Use the below to ensure we trigger the `[[HasProperty]]` proxy trap.
@@ -349,7 +347,6 @@ CallResult<HermesValue> AggregateErrorConstructor(void *, Runtime &runtime) {
 /// ES2023 20.5.3.4
 CallResult<HermesValue> errorPrototypeToString(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   // 1. Let O be the this value.
   auto O = args.dyncastThis<JSObject>();

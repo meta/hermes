@@ -67,9 +67,7 @@ CallResult<HermesValue> localesToJS(
   }
   lv.array = std::move(*arrayRes);
   uint64_t index = 0;
-  GCScopeMarkerRAII marker{runtime};
   for (auto &locale : result) {
-    marker.flush();
     CallResult<HermesValue> nameRes =
         StringPrimitive::createEfficient(runtime, std::move(locale));
     if (LLVM_UNLIKELY(nameRes == ExecutionStatus::EXCEPTION)) {
@@ -99,9 +97,7 @@ CallResult<HermesValue> optionsToJS(
     return ExecutionStatus::EXCEPTION;
   }
   lv.obj = std::move(*objRes);
-  GCScopeMarkerRAII marker{runtime};
   for (auto &kv : result) {
-    marker.flush();
     CallResult<HermesValue> keyRes = StringPrimitive::createEfficient(
         runtime, createUTF16Ref(kv.first.c_str()));
     if (LLVM_UNLIKELY(keyRes == ExecutionStatus::EXCEPTION)) {
@@ -146,10 +142,7 @@ ExecutionStatus partToJS(
     return ExecutionStatus::EXCEPTION;
   }
   lv.obj = std::move(*objRes);
-  GCScopeMarkerRAII marker{runtime};
   for (auto &kv : result) {
-    marker.flush();
-
     CallResult<HermesValue> keyRes = StringPrimitive::createEfficient(
         runtime, createUTF16Ref(kv.first.c_str()));
     if (LLVM_UNLIKELY(keyRes == ExecutionStatus::EXCEPTION)) {
@@ -189,9 +182,7 @@ CallResult<HermesValue> partsToJS(
   }
   lv.array = std::move(*arrayRes);
   uint64_t index = 0;
-  GCScopeMarkerRAII marker{runtime};
   for (auto &part : result) {
-    marker.flush();
     if (LLVM_UNLIKELY(
             partToJS(
                 runtime,
@@ -370,9 +361,7 @@ CallResult<platform_intl::Options> normalizeOptions(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  GCScopeMarkerRAII marker{runtime};
   for (const OptionData &pod : optionData) {
-    marker.flush();
     CallResult<HermesValue> nameRes = StringPrimitive::createEfficient(
         runtime, UTF16Ref{pod.name.data(), pod.name.size()});
     if (LLVM_UNLIKELY(nameRes == ExecutionStatus::EXCEPTION)) {

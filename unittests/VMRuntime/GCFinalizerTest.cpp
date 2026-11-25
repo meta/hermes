@@ -120,7 +120,6 @@ TEST(GCFinalizerTest, FinalizeAllOnRuntimeDestructRealRuntime) {
   int finalized = 0;
   std::shared_ptr<Runtime> rt{Runtime::create(kTestRTConfig)};
   {
-    GCScope gcScope(*rt);
     struct : public Locals {
       PinnedValue<> r1;
       PinnedValue<> r2;

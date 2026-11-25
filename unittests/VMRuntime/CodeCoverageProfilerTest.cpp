@@ -132,7 +132,6 @@ TEST_F(CodeCoverageProfilerTest, BasicFunctionUsedUnused) {
 #if !(LLVM_ADDRESS_SANITIZER_BUILD && defined(__APPLE__))
 TEST_F(CodeCoverageProfilerTest, BasicFunctionUsedUnusedTwoRuntimes) {
   auto runtime2 = newRuntime();
-  GCScope scope{*runtime2};
   std::vector<Runtime *> runtimes = {&runtime, runtime2.get()};
 
   std::vector<std::future<PinnedHermesValue>> resFuts;

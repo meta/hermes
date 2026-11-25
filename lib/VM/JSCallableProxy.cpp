@@ -63,7 +63,6 @@ void JSCallableProxy::setTargetAndHandler(
 CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
     void *,
     Runtime &runtime) {
-  GCScope gcScope(runtime);
   // We don't use NativeArgs; the implementations just read the current
   // stack frame directly.
   StackFramePtr callerFrame = runtime.getCurrentFrame();

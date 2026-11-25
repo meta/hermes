@@ -157,7 +157,6 @@ CallResult<HermesValue> ordinaryToPrimitive(
     Handle<JSObject> selfHandle,
     Runtime &runtime,
     PreferredType preferredType) {
-  GCScope gcScope{runtime};
   assert(
       preferredType != PreferredType::NONE &&
       "OrdinaryToPrimitive requires a type hint");
@@ -593,7 +592,6 @@ CallResult<HermesValue> toNumber_RJS(Runtime &runtime, Handle<> valueHandle) {
 }
 
 CallResult<HermesValue> toNumeric_RJS(Runtime &runtime, Handle<> valueHandle) {
-  GCScopeMarkerRAII marker{runtime};
   struct : public Locals {
     PinnedValue<> prim;
   } lv;
@@ -1079,8 +1077,7 @@ EqualityResult areEqualSmallNumbers(const double x, BigIntPrimitive *y) {
 /// ES11 7.2.15 Abstract Equality Comparison
 CallResult<bool>
 abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
-  // Fast path: handle common same-type comparisons without allocating
-  // MutableHandles, which avoids GCScope overhead for the frequent cases.
+  // Fast path: handle common same-type comparisons without setting up Locals.
   {
     HermesValue xFast = xHandle.get();
     HermesValue yFast = yHandle.get();
@@ -1579,7 +1576,6 @@ numberToStringWithRadix(Runtime &runtime, double number, unsigned radix) {
 
 CallResult<PseudoHandle<>>
 getMethod(Runtime &runtime, Handle<> O, Handle<> key) {
-  GCScopeMarkerRAII gcScope{runtime};
   struct : public Locals {
     PinnedValue<JSObject> obj;
   } lv;
@@ -1678,8 +1674,6 @@ CallResult<PseudoHandle<JSObject>> iteratorNext(
     Runtime &runtime,
     const CheckedIteratorRecord &iteratorRecord,
     llvh::Optional<Handle<>> value) {
-  GCScopeMarkerRAII marker{runtime};
-
   auto resultRes = value
       ? Callable::executeCall1(
             iteratorRecord.nextMethod,
@@ -1875,8 +1869,7 @@ CallResult<PseudoHandle<JSArray>> iterableToArray(
   // CreateArrayFromList: 2. Let n be 0.
   size_t n = 0;
 
-  GCScopeMarkerRAII marker{runtime};
-  for (;; marker.flush()) {
+  for (;;) {
     // IterableToList: 5.a. Set next to ? IteratorStep(iteratorRecord).
     CallResult<PseudoHandle<JSObject>> nextRes =
         iteratorStep(runtime, iteratorRecord);
@@ -2108,7 +2101,6 @@ ordinaryHasInstance(Runtime &runtime, Handle<> constructor, Handle<> object) {
   constexpr unsigned int kMaxProxyCount = 1024;
   unsigned int proxyCount = 0;
   lv.head = vmcast<JSObject>(object.get());
-  GCScopeMarkerRAII gcScope{runtime};
   // 6. Repeat
   while (true) {
     // 6a. Let O be O.[[GetPrototypeOf]]().
@@ -2133,7 +2125,6 @@ ordinaryHasInstance(Runtime &runtime, Handle<> constructor, Handle<> object) {
       }
     }
     lv.head = parentRes->get();
-    gcScope.flush();
   }
 }
 
@@ -2300,7 +2291,6 @@ ExecutionStatus toPropertyDescriptor(
     Runtime &runtime,
     DefinePropertyFlags &flags,
     MutableHandle<> valueOrAccessor) {
-  GCScopeMarkerRAII gcMarker{runtime};
   struct : public Locals {
     PinnedValue<Callable> getter;
     PinnedValue<Callable> setter;
@@ -2845,9 +2835,6 @@ groupBy(Runtime &runtime, Handle<T> target, Handle<> items, Handle<> callback) {
 
   const CheckedIteratorRecord &iteratorRecord = *iteratorRecordResult;
 
-  GCScope gcScope(runtime);
-  auto marker = gcScope.createMarker();
-
   // 5. Let k be 0.
   uint64_t k = 0;
 
@@ -3000,8 +2987,6 @@ groupBy(Runtime &runtime, Handle<T> target, Handle<> items, Handle<> callback) {
       return ExecutionStatus::EXCEPTION;
     }
 
-    gcScope.flushToMarker(marker);
-
     // j. Set k to k + 1.
     k++;
   }
@@ -3040,7 +3025,6 @@ extern "C" SHLegacyValue _sh_ljs_to_property_key(
   Runtime &runtime = getRuntime(shr);
   CallResult<HermesValue> ret{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII marker{runtime};
     ret =
         toPropertyKey(runtime, Handle<>(toPHV(val))).toCallResultHermesValue();
   }
@@ -3058,7 +3042,6 @@ extern "C" double _sh_ljs_to_double_rjs(
   Runtime &runtime = getRuntime(shr);
   CallResult<HermesValue> cr{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII marker{runtime};
     cr = toNumber_RJS(runtime, Handle<>::vmcast(pn));
   }
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
@@ -3075,7 +3058,6 @@ extern "C" SHLegacyValue _sh_ljs_to_numeric_rjs(
   Runtime &runtime = getRuntime(shr);
   CallResult<HermesValue> cr{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII marker{runtime};
     cr = toNumeric_RJS(runtime, Handle<>::vmcast(pn));
   }
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
@@ -3090,7 +3072,6 @@ extern "C" double _sh_ljs_to_int32_rjs(SHRuntime *shr, const SHLegacyValue *n) {
   Runtime &runtime = getRuntime(shr);
   CallResult<HermesValue> cr{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII marker{runtime};
     cr = toInt32_RJS(runtime, Handle<>::vmcast(pn));
   }
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
@@ -3109,7 +3090,6 @@ extern "C" double _sh_ljs_to_uint32_rjs(
   Runtime &runtime = getRuntime(shr);
   CallResult<HermesValue> cr{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII marker{runtime};
     cr = toUInt32_RJS(runtime, Handle<>::vmcast(pn));
   }
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
@@ -3125,11 +3105,8 @@ extern "C" double _sh_ljs_to_uint32_rjs(
     if (LLVM_LIKELY(_sh_ljs_are_both_non_nan_numbers(*a, *b)))          \
       return pa->getNumber() oper pb->getNumber();                      \
     Runtime &runtime = getRuntime(shr);                                 \
-    CallResult<bool> cr{false};                                         \
-    {                                                                   \
-      GCScopeMarkerRAII marker{runtime};                                \
-      cr = call(runtime, Handle<>::vmcast(pa), Handle<>::vmcast(pb));   \
-    }                                                                   \
+    CallResult<bool> cr =                                               \
+        call(runtime, Handle<>::vmcast(pa), Handle<>::vmcast(pb));      \
     if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))                \
       _sh_throw_current(shr);                                           \
     return *cr;                                                         \
@@ -3153,7 +3130,6 @@ extern "C" SHLegacyValue _sh_ljs_add_rjs(
   Runtime &runtime = getRuntime(shr);
   CallResult<HermesValue> cr{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII marker{runtime};
     cr = addOp_RJS(runtime, Handle<>::vmcast(pa), Handle<>::vmcast(pb));
   }
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
@@ -3268,7 +3244,6 @@ binOpImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
 
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
-    GCScopeMarkerRAII marker{runtime};
     struct : public Locals {
       PinnedValue<> prim;
       PinnedValue<BigIntPrimitive> bigint;
@@ -3309,7 +3284,6 @@ SHLegacyValue incDecOperImpl(SHRuntime *shr, const SHLegacyValue *n) {
 
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
-    GCScopeMarkerRAII marker{runtime};
     struct : public Locals {
       PinnedValue<> prim;
       PinnedValue<BigIntPrimitive> bigint;
@@ -3349,7 +3323,6 @@ bitOperImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
         hermes::truncateToInt32(rhs->getNumber())));
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
-    GCScopeMarkerRAII marker{runtime};
     struct : public Locals {
       PinnedValue<> prim;
       PinnedValue<BigIntPrimitive> bigint;
@@ -3395,7 +3368,6 @@ shiftOperImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
   }
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
-    GCScopeMarkerRAII marker{runtime};
     struct : public Locals {
       PinnedValue<> prim;
       PinnedValue<BigIntPrimitive> bigint;
@@ -3515,7 +3487,6 @@ extern "C" SHLegacyValue _sh_ljs_imul_rjs(
   // bitOperImpl, there is no BigInt path here.
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
-    GCScopeMarkerRAII marker{runtime};
     auto lIntRes = toInt32_RJS(runtime, lhs);
     if (LLVM_UNLIKELY(lIntRes == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
@@ -3605,7 +3576,6 @@ extern "C" SHLegacyValue _sh_ljs_minus_rjs(
     return HermesValue::encodeTrustedNumberValue(-toPHV(n)->getNumber());
   auto res = [shr, n]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
-    GCScopeMarkerRAII marker{runtime};
     struct : public Locals {
       PinnedValue<BigIntPrimitive> bigint;
     } lv;
@@ -3641,7 +3611,6 @@ extern "C" bool _sh_ljs_equal_rjs(
   Handle<> aHandle{toPHV(a)}, bHandle{toPHV(b)};
   CallResult<bool> eqRes{false};
   {
-    GCScopeMarkerRAII marker(getRuntime(shr));
     eqRes = abstractEqualityTest_RJS(getRuntime(shr), aHandle, bHandle);
   }
   if (LLVM_UNLIKELY(eqRes == ExecutionStatus::EXCEPTION))
@@ -3678,7 +3647,6 @@ extern "C" SHLegacyValue _sh_ljs_add_empty_string_rjs(
   } else {
     // Slow path, convert to primitive then call toString.
     auto res = [&runtime, val]() -> CallResult<HermesValue> {
-      GCScopeMarkerRAII marker{runtime};
       struct : public Locals {
         PinnedValue<> prim;
       } lv;
@@ -3708,7 +3676,6 @@ extern "C" SHLegacyValue _sh_ljs_instance_of_rjs(
   Runtime &runtime = getRuntime(shr);
   CallResult<bool> cr{false};
   {
-    GCScopeMarkerRAII marker{runtime};
     cr = instanceOfOperator_RJS(
         runtime, Handle<>(toPHV(object)), Handle<>(toPHV(constructor)));
   }
@@ -3723,7 +3690,6 @@ extern "C" SHLegacyValue _sh_ljs_iterator_begin_rjs(
     SHLegacyValue *src) {
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
-    GCScopeMarkerRAII marker{runtime};
     Handle srcHandle{toPHV(src)};
     if (LLVM_LIKELY(vmisa<JSArray>(*srcHandle))) {
       // Check if we can take the fast path for array iteration, if the
@@ -3782,7 +3748,6 @@ extern "C" SHLegacyValue _sh_ljs_iterator_next_rjs(
       auto arr = Handle<JSArray>::vmcast(srcOrNextHandle);
 
       {
-        NoHandleScope noHandles{runtime};
         NoAllocScope noAlloc{runtime};
 
         if (i >=
@@ -3805,7 +3770,6 @@ extern "C" SHLegacyValue _sh_ljs_iterator_next_rjs(
         }
       }
       // Slow path, just run the full getComputedPropertyValue_RJS path.
-      GCScopeMarkerRAII marker{runtime};
       CallResult<PseudoHandle<>> valueRes =
           JSObject::getComputed_RJS(arr, runtime, iteratorOrIdxHandle);
       if (LLVM_UNLIKELY(valueRes == ExecutionStatus::EXCEPTION))
@@ -3817,7 +3781,6 @@ extern "C" SHLegacyValue _sh_ljs_iterator_next_rjs(
       return HermesValue::encodeUndefinedValue();
     }
 
-    GCScopeMarkerRAII marker{runtime};
     struct : public Locals {
       PinnedValue<JSObject> resultObj;
     } lv;
@@ -3869,7 +3832,6 @@ extern "C" void _sh_ljs_iterator_close_rjs(
   Runtime &runtime = getRuntime(shr);
   ExecutionStatus res;
   {
-    GCScopeMarkerRAII marker{runtime};
     // The iterator must be closed if it's still an object.
     // That means it was never an index and is not done iterating (a state
     // which is indicated by `undefined`).

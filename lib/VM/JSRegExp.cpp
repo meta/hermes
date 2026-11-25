@@ -233,7 +233,6 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  GCScope gcScope(runtime);
   if (parsedMappings.size() == 0)
     return ExecutionStatus::RETURNED;
 
@@ -245,8 +244,6 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
   lv.obj = objRes.get();
 
   for (const auto &identifier : orderedNamedGroups) {
-    GCScopeMarkerRAII marker{gcScope};
-
     auto mappingIt = parsedMappings.find(identifier);
     assert(
         mappingIt != parsedMappings.end() &&

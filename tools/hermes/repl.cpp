@@ -332,7 +332,6 @@ int repl(const vm::RuntimeConfig &config) {
           hermesRuntime.get())
           ->getVMRuntimeUnsafe());
 
-  vm::GCScope gcScope(*runtime);
   struct : public vm::Locals {
     vm::PinnedValue<> thrown;
     vm::PinnedValue<vm::Callable> evalFn;
@@ -434,9 +433,6 @@ int repl(const vm::RuntimeConfig &config) {
     static_assert(sizeof(llvh::UTF16) == sizeof(char16_t));
     llvh::ArrayRef<char16_t> utf16Code = llvh::makeArrayRef(
         reinterpret_cast<const char16_t *>(utf16Buf.data()), utf16Buf.size());
-
-    // Ensure we don't keep accumulating handles.
-    vm::GCScopeMarkerRAII gcMarker{*runtime};
 
     bool threwException = false;
 

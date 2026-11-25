@@ -23,7 +23,6 @@ void inc(GC &, NativeState *ns) {
 TEST_F(NativeStateTest, NativeStateFinalizerRunsOnce) {
   int counter = 0;
   {
-    GCScope scope{runtime, "NativeStateTest"};
     struct : public Locals {
       PinnedValue<NativeState> state;
     } lv;

@@ -31,7 +31,6 @@ struct TestDecoration : public DecoratedObject::Decoration {
 TEST_F(DecoratedObjectTest, DecoratedObjectFinalizerRunsOnce) {
   auto counter = std::make_shared<int>(0);
   {
-    GCScope scope{runtime, "DecoratedObjectTest"};
     struct : public Locals {
       PinnedValue<DecoratedObject> obj;
     } lv;
@@ -57,7 +56,6 @@ TEST_F(DecoratedObjectTest, ChangeDecoration) {
   // Should be possisble to swap out decorations.
   auto counter = std::make_shared<int>(0);
   {
-    GCScope scope{runtime, "DecoratedObjectTest"};
     struct : public Locals {
       PinnedValue<DecoratedObject> handle;
     } lv;
@@ -80,7 +78,6 @@ TEST_F(DecoratedObjectTest, ChangeDecoration) {
 TEST_F(DecoratedObjectTest, NullDecoration) {
   // Null decorations do not crash.
   {
-    GCScope scope{runtime, "DecoratedObjectTest"};
     struct : public Locals {
       PinnedValue<DecoratedObject> handle;
     } lv;

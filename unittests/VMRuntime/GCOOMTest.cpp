@@ -70,7 +70,6 @@ TEST(GCOOMDeathTest, WeakMapMarking) {
     auto rt = Runtime::create(
         RuntimeConfig::Builder().withGCConfig(kTestGCConfig).build());
     auto &runtime = *rt;
-    GCScope scope{runtime};
     struct : public Locals {
       PinnedValue<JSWeakMap> map;
       PinnedValue<ArrayStorage> keysSlot;
@@ -84,7 +83,6 @@ TEST(GCOOMDeathTest, WeakMapMarking) {
     MutableHandle<ArrayStorage> keys{lv.keysSlot};
     keys = vmcast<ArrayStorage>(*ArrayStorage::create(runtime, 5));
     while (true) {
-      GCScopeMarkerRAII marker(runtime);
       lv.key = JSObject::create(runtime);
       ArrayStorage::push_back(keys, runtime, lv.key);
       lv.value = JSObject::create(runtime);

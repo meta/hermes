@@ -243,8 +243,6 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::parseValue() {
   };
   auto pushContext = [&contexts](CtxTy ctx) { contexts.push_back(ctx); };
 
-  GCScope gcScope{runtime_};
-  auto marker = gcScope.createMarker();
   // This outer loop iterates after a value has been added to an object/array,
   // and we are starting to parsing the next element of it. Take the following
   // JSON value: [1, 2, 3]. We produce the value of 1 from the first inner loop,
@@ -252,7 +250,6 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::parseValue() {
   // come back around on the outer loop to get to the first inner loop again to
   // produce the 2.
   while (true) {
-    gcScope.flushToMarker(marker);
     // 'break' will jump to the bottom of the loop which will consume the
     // produced values; 'continue' will restart the loop.
     while (true) {
@@ -365,7 +362,6 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::parseValue() {
     // arrays or objects. If we see that there are more elements or properties
     // left to parse, we break out of this loop, and continue in the top loop.
     while (true) {
-      gcScope.flushToMarker(marker);
       if (std::holds_alternative<RootCtx>(curContext)) {
         return lv.curVal.getHermesValue();
       } else if (auto *objCtx = std::get_if<ObjectCtx>(&curContext)) {
@@ -445,7 +441,6 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::parseValue() {
               runtime_.classJSObject,
               numElements);
           for (size_t i = 0; i < numElements; i++) {
-            gcScope.flushToMarker(marker);
             size_t propIdx = beginPropIdx + i;
             size_t valIdx = beginValIdx + i;
             lv.key = lv.properties->at(propIdx).getSymbol();
@@ -581,9 +576,6 @@ template <EncodingKind Kind>
 CallResult<HermesValue> RuntimeJSONParser<Kind>::operationWalk(
     Handle<JSObject> holder,
     Handle<> property) {
-  // The operation is recursive so it needs a GCScope.
-  GCScope gcScope(runtime_);
-
   llvh::SaveAndRestore<decltype(remainingDepth_)> oldDepth{
       remainingDepth_, remainingDepth_ - 1};
   if (remainingDepth_ <= 0) {
@@ -619,7 +611,6 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::operationWalk(
       return ExecutionStatus::EXCEPTION;
     }
 
-    GCScopeMarkerRAII marker(runtime_);
     for (uint64_t index = 0, e = *lenRes; index < e; ++index) {
       lv.tmpHandle = HermesValue::encodeTrustedNumberValue(index);
       // Note that deleting elements doesn't affect array length.
@@ -627,7 +618,6 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::operationWalk(
               filter(objHandle, lv.tmpHandle) == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      marker.flush();
     }
   } else if (vmisa<JSObject>(lv.valHandle.getHermesValue())) {
     auto scopedObject = Handle<JSObject>::vmcast(&lv.valHandle);
@@ -636,7 +626,6 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::operationWalk(
       return ExecutionStatus::EXCEPTION;
     }
     lv.keys = std::move(*cr);
-    GCScopeMarkerRAII marker(runtime_);
     for (uint32_t index = 0, e = lv.keys->getEndIndex(); index < e; ++index) {
       lv.tmpHandle = lv.keys->at(runtime_, index).unboxToHV(runtime_);
       if (LLVM_UNLIKELY(
@@ -644,7 +633,6 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::operationWalk(
               ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      marker.flush();
     }
   }
   // We have delayed converting the property to a string if it was index.

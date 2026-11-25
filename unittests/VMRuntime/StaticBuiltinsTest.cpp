@@ -48,7 +48,6 @@ namespace {
 /// Verify builtin objects and the builtin methods on those objects
 /// are frozen and marked as static builtins.
 static void verifyAllBuiltinsFrozen(Runtime &runtime) {
-  GCScope gcScope{runtime};
   struct : public Locals {
     PinnedValue<JSObject> objHandleSlot;
   } lv;

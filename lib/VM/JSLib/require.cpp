@@ -55,7 +55,6 @@ CallResult<HermesValue> runRequireCall(
     return res->get();
   }
 
-  GCScope gcScope{runtime};
   // If not initialized yet, start initializing and set the module object.
   lv.module = JSObject::create(runtime);
   lv.exports = JSObject::create(runtime);
@@ -207,7 +206,6 @@ static llvh::SmallString<32> canonicalizePath(
 
 CallResult<HermesValue> require(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   struct : public Locals {
     PinnedValue<Domain> domain;

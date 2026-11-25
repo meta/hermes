@@ -67,9 +67,6 @@ napi_status NAPI_CDECL napi_create_external(
   Runtime &runtime = env->runtime;
 
   // Create a DecoratedObject with an NapiExternalDecoration.
-  // DecoratedObject::create needs a GCScope because it allocates
-  // handles internally (HiddenClass lookup).
-  GCScope gcScope(runtime);
 
   auto decoration = std::make_unique<NapiExternalDecoration>(
       env, data, reinterpret_cast<napi_finalize>(finalize_cb), finalize_hint);

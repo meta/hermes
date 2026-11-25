@@ -146,9 +146,7 @@ CallResult<HermesValue> runContextFunc2Arg(void *ctx, Runtime &runtime) {
 CallResult<HermesValue> mathMax(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   double result = -std::numeric_limits<double>::infinity();
-  GCScopeMarkerRAII marker{runtime};
   for (const Handle<> sarg : args.handles()) {
-    marker.flush();
     auto res = toNumber_RJS(runtime, sarg);
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -170,9 +168,7 @@ CallResult<HermesValue> mathMax(void *, Runtime &runtime) {
 CallResult<HermesValue> mathMin(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   double result = std::numeric_limits<double>::infinity();
-  GCScopeMarkerRAII marker{runtime};
   for (const Handle<> sarg : args.handles()) {
-    marker.flush();
     auto res = toNumber_RJS(runtime, sarg);
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -278,7 +274,6 @@ CallResult<HermesValue> mathF16round(void *, Runtime &runtime) {
 // ES2022 21.3.2.18
 CallResult<HermesValue> mathHypot(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
   // 1. Let coerced be a new empty List.
   llvh::SmallVector<double, 4> coerced{};
   coerced.reserve(args.getArgCount());
@@ -289,10 +284,8 @@ CallResult<HermesValue> mathHypot(void *, Runtime &runtime) {
   double max = 0;
 
   bool hasNaN = false, hasInf = false;
-  auto marker = gcScope.createMarker();
   // 2. For each element arg of args, do
   for (const Handle<> arg : args.handles()) {
-    gcScope.flushToMarker(marker);
     // a. Let n be ? ToNumber(arg).
     auto res = toNumber_RJS(runtime, arg);
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {

@@ -437,7 +437,6 @@ CallResult<HermesValue> addEntriesFromIterable(
     Handle<> iterable,
     llvh::Optional<Handle<Callable>> method,
     AdderCB adder) {
-  GCScope gcScope{runtime};
   // 2. Assert: iterable is present, and is neither undefined nor null.
   assert(
       !iterable->isUndefined() && !iterable->isNull() &&
@@ -457,10 +456,8 @@ CallResult<HermesValue> addEntriesFromIterable(
   }
   auto iteratorRecord = *iterRes;
 
-  auto marker = gcScope.createMarker();
-
   // 4. Repeat,
-  for (;; gcScope.flushToMarker(marker)) {
+  for (;;) {
     // a. Let next be ? IteratorStep(iteratorRecord).
     auto nextRes = iteratorStep(runtime, iteratorRecord);
     if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {

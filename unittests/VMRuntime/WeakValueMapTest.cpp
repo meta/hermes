@@ -49,13 +49,9 @@ TEST_F(WeakValueMapTest, SmokeTest) {
   MutableHandle<JSNumber> h2{lv.h2Slot};
   MutableHandle<JSNumber> h3{lv.h3Slot};
 
-  auto marker = gcScope.createMarker();
-
   h1 = makeNumber(1);
   h2 = makeNumber(2);
   h3 = makeNumber(3);
-
-  gcScope.flushToMarker(marker);
 
   EXPECT_TRUE(wvp.insertNew(runtime, 1, h1));
   EXPECT_TRUE(wvp.insertNew(runtime, 2, h2));
@@ -87,9 +83,6 @@ TEST_F(WeakValueMapTest, SmokeTest) {
   // Now make sure 1 gets garbage collected.
   ASSERT_TRUE(wvp.containsKey(1));
   h1.clear();
-  // Make sure no temporary handles exist.
-  gcScope.flushToMarker(marker);
-
   runtime.collect("test");
 #if HERMESVM_GCKIND != _HERMESVM_GCVALUE_HADES
   // Hades doesn't support DebugHeapInfo yet.
@@ -104,9 +97,6 @@ TEST_F(WeakValueMapTest, SmokeTest) {
 
   // Now make sure 2 gets garbage collected, but check differently.
   h2.clear();
-  // Make sure no temporary handles exist.
-  gcScope.flushToMarker(marker);
-
   runtime.collect("test");
 #if HERMESVM_GCKIND != _HERMESVM_GCVALUE_HADES
   // Hades doesn't support debugInfo yet.

@@ -762,7 +762,6 @@ napi_status hermes_run_bytecode(
   }
 
   // Run bytecode.
-  GCScope gcScope(runtime);
   auto runRes = runtime.runBytecode(
       std::move(bcResult.first),
       rmFlags,

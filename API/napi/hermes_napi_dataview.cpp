@@ -39,8 +39,6 @@ napi_status NAPI_CDECL napi_create_dataview(
   RETURN_STATUS_IF_FALSE(
       env, byte_offset + length <= ab->size(), napi_invalid_arg);
 
-  GCScope gcScope(runtime);
-
   struct : public Locals {
     PinnedValue<JSDataView> dv;
   } lv;
@@ -89,8 +87,6 @@ napi_status NAPI_CDECL napi_get_dataview_info(
   }
 
   if (data != nullptr || arraybuffer != nullptr) {
-    GCScope gcScope(runtime);
-
     if (dv->attached(runtime)) {
       JSArrayBuffer *buf = dv->getBuffer(runtime);
       if (data != nullptr) {

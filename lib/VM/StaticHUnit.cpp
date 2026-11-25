@@ -32,7 +32,6 @@ extern "C" bool _sh_initialize_units(SHRuntime *shr, uint32_t count, ...) {
     SHUnitCreator unitCreator = va_arg(ap, SHUnitCreator);
     SHLegacyValue val;
     if (!_sh_unit_init_guarded(shr, unitCreator, &val)) {
-      GCScope gcScope{runtime};
       struct : public Locals {
         PinnedValue<> exc;
       } lv;
@@ -55,7 +54,6 @@ extern "C" bool _sh_unit_init_guarded(
     SHUnitCreator unitCreator,
     SHLegacyValue *resOrExc) {
   Runtime &runtime = getRuntime(shr);
-  GCScope gcScope{runtime};
 
   SHLocals locals;
   SHLegacyValue *frame = runtime.getCurrentFrame().ptr();
@@ -331,7 +329,6 @@ extern "C" SHLegacyValue _sh_get_template_object(
   va_start(args, argCount);
 
   CallResult<HermesValue> result = [&]() -> CallResult<HermesValue> {
-    GCScope gcScope{runtime};
     struct : public Locals {
       PinnedValue<JSObject> rawObj;
       PinnedValue<JSObject> templateObj;
@@ -370,9 +367,7 @@ extern "C" SHLegacyValue _sh_get_template_object(
     DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
     dpf.writable = 0;
     dpf.configurable = 0;
-    auto marker = gcScope.createMarker();
     for (uint32_t i = 0; i < count; ++i) {
-      gcScope.flushToMarker(marker);
       lv.idx = HermesValue::encodeTrustedNumberValue(i);
 
       const SHLegacyValue *rawLegacyValue = va_arg(args, const SHLegacyValue *);
@@ -395,7 +390,6 @@ extern "C" SHLegacyValue _sh_get_template_object(
     }
     if (!dup) {
       for (uint32_t i = 0; i < count; ++i) {
-        gcScope.flushToMarker(marker);
         lv.idx = HermesValue::encodeTrustedNumberValue(i);
 
         const SHLegacyValue *cookedLegacyValue =

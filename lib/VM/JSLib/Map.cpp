@@ -197,7 +197,6 @@ mapFromMapFastPath(Runtime &runtime, Handle<JSMap> target, Handle<JSMap> src) {
 
 CallResult<HermesValue> mapConstructor(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
   if (LLVM_UNLIKELY(!args.isConstructorCall())) {
     return runtime.raiseTypeError("Constructor Map requires 'new'");
   }

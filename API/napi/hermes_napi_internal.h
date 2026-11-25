@@ -96,8 +96,7 @@ getNapiObjectData(napi_env env, napi_value js_object, NapiObjectData **outData);
 
 /// Lazy-creation lookup for NapiObjectData on an object. If the
 /// internal property is absent, creates a new NapiObjectData and
-/// defines the property. Caller must provide an active GCScope.
-/// Defined in hermes_napi_wrap.cpp.
+/// defines the property. Defined in hermes_napi_wrap.cpp.
 napi_status getOrCreateNapiObjectData(
     napi_env env,
     hermes::vm::Handle<hermes::vm::JSObject> objHandle,
@@ -122,7 +121,7 @@ hermes::vm::CallResult<hermes::vm::HermesValue> napiConstructorTrampoline(
 /// Helper: create a NativeFunction wrapping a napi_callback for use as
 /// a method, getter, or setter in napi_define_properties and
 /// napi_define_class. The callback bundle is stored in the env's deque
-/// for lifetime management. Requires an active GCScope. Defined in
+/// for lifetime management. Defined in
 /// hermes_napi_object.cpp.
 napi_status createNapiNativeFunction(
     napi_env env,

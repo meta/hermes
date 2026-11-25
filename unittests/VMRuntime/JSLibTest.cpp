@@ -423,7 +423,6 @@ TEST_F(JSLibTest, ObjectGetOwnPropertyDescriptorTest) {
     PinnedValue<> num;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope scope{runtime, "JSLibTest.ObjectGetOwnPropertyDescriptorTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
   {
@@ -581,7 +580,6 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
     PinnedValue<> prop;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope scope{runtime, "JSLibTest.ObjectDefinePropertyTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
   // Get global object.
@@ -750,7 +748,6 @@ TEST_F(JSLibTest, ObjectDefinePropertiesTest) {
     PinnedValue<> value2;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope scope{runtime, "JSLibTest.ObjectDefinePropertiesTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
   createNoThrowForTest(runtime, createUTF16Ref(u"key1"), lv.str1);
@@ -894,7 +891,6 @@ TEST_F(JSLibTest, ObjectCreateTest) {
     PinnedValue<> value2;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope scope{runtime, "JSLibTest.ObjectCreateTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
   createNoThrowForTest(runtime, createUTF16Ref(u"key1"), lv.str1);
@@ -1032,7 +1028,6 @@ TEST_F(JSLibTest, CreateStringTest) {
     PinnedValue<JSObject> newStr;
   } lv;
   LocalsRAII lraii_lv(runtime, &lv);
-  GCScope scope(runtime);
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
   // String constructor.

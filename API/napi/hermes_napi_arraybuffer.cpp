@@ -26,7 +26,6 @@ napi_status NAPI_CDECL napi_create_arraybuffer(
   Runtime &runtime = env->runtime;
 
   // Create the ArrayBuffer object.
-  GCScope gcScope(runtime);
 
   auto proto = Handle<JSObject>::vmcast(&runtime.arrayBufferPrototype);
   auto abPH = JSArrayBuffer::create(runtime, proto);
@@ -70,7 +69,6 @@ napi_status NAPI_CDECL napi_create_external_arraybuffer(
   Runtime &runtime = env->runtime;
 
   // Create the ArrayBuffer object.
-  GCScope gcScope(runtime);
 
   auto proto = Handle<JSObject>::vmcast(&runtime.arrayBufferPrototype);
   auto abPH = JSArrayBuffer::create(runtime, proto);
@@ -163,10 +161,6 @@ napi_detach_arraybuffer(napi_env env, napi_value arraybuffer) {
 
   Runtime &runtime = env->runtime;
 
-  // detach() needs a Handle, which requires a GCScope.
-  // setExternalFinalizer (called inside detach for external buffers)
-  // may allocate handles internally.
-  GCScope gcScope(runtime);
   struct : public Locals {
     PinnedValue<JSArrayBuffer> ab;
   } lv;

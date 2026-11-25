@@ -40,7 +40,6 @@ napi_status NAPI_CDECL napi_create_string_utf8(
 
   // Fast path: if all bytes are ASCII, create directly.
   if (hermes::isAllASCII(utf8, utf8 + length)) {
-    hermes::vm::GCScope gcScope(env->runtime);
     auto strRes = hermes::vm::StringPrimitive::createEfficient(
         env->runtime, hermes::vm::ASCIIRef(str, length));
     if (strRes == hermes::vm::ExecutionStatus::EXCEPTION) {
@@ -66,7 +65,6 @@ napi_status NAPI_CDECL napi_create_string_utf8(
     hermes::encodeUTF16(inserter, cp);
   }
 
-  hermes::vm::GCScope gcScope(env->runtime);
   auto strRes = hermes::vm::StringPrimitive::createEfficient(
       env->runtime, hermes::vm::UTF16Ref(buf.data(), buf.size()));
   if (strRes == hermes::vm::ExecutionStatus::EXCEPTION) {
@@ -104,7 +102,6 @@ napi_status NAPI_CDECL napi_create_string_latin1(
     buf[i] = static_cast<char16_t>(src[i]);
   }
 
-  hermes::vm::GCScope gcScope(env->runtime);
   auto strRes = hermes::vm::StringPrimitive::createEfficient(
       env->runtime, hermes::vm::UTF16Ref(buf.data(), length));
   if (strRes == hermes::vm::ExecutionStatus::EXCEPTION) {
@@ -132,9 +129,6 @@ napi_status NAPI_CDECL napi_create_string_utf16(
     length = std::char_traits<char16_t>::length(str);
   }
 
-  // A GCScope is needed because createEfficient may internally
-  // allocate temporary Handle objects.
-  hermes::vm::GCScope gcScope(env->runtime);
   auto strRes = hermes::vm::StringPrimitive::createEfficient(
       env->runtime, hermes::vm::UTF16Ref(str, length));
   if (strRes == hermes::vm::ExecutionStatus::EXCEPTION) {
@@ -222,7 +216,6 @@ napi_status NAPI_CDECL node_api_create_property_key_latin1(
   // Check if all bytes are ASCII — if so, we can use ASCIIRef directly.
   const auto *src = reinterpret_cast<const uint8_t *>(str);
   if (hermes::isAllASCII(src, src + length)) {
-    hermes::vm::GCScope gcScope(runtime);
     auto symRes = runtime.getIdentifierTable().getSymbolID(
         runtime, hermes::vm::ASCIIRef(str, length));
     if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -240,7 +233,6 @@ napi_status NAPI_CDECL node_api_create_property_key_latin1(
     buf[i] = static_cast<char16_t>(src[i]);
   }
 
-  hermes::vm::GCScope gcScope(runtime);
   auto symRes = runtime.getIdentifierTable().getSymbolID(
       runtime, hermes::vm::UTF16Ref(buf.data(), length));
   if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -274,7 +266,6 @@ napi_status NAPI_CDECL node_api_create_property_key_utf8(
 
   // If all bytes are ASCII, intern directly via ASCIIRef.
   if (hermes::isAllASCII(utf8, utf8 + length)) {
-    hermes::vm::GCScope gcScope(runtime);
     auto symRes = runtime.getIdentifierTable().getSymbolID(
         runtime, hermes::vm::ASCIIRef(str, length));
     if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -304,7 +295,6 @@ napi_status NAPI_CDECL node_api_create_property_key_utf8(
   }
   size_t utf16Len = targetStart - reinterpret_cast<llvh::UTF16 *>(buf.data());
 
-  hermes::vm::GCScope gcScope(runtime);
   auto symRes = runtime.getIdentifierTable().getSymbolID(
       runtime, hermes::vm::UTF16Ref(buf.data(), utf16Len));
   if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -334,7 +324,6 @@ napi_status NAPI_CDECL node_api_create_property_key_utf16(
   }
 
   auto &runtime = env->runtime;
-  hermes::vm::GCScope gcScope(runtime);
   auto symRes = runtime.getIdentifierTable().getSymbolID(
       runtime, hermes::vm::UTF16Ref(str, length));
   if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {

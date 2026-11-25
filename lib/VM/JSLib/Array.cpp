@@ -92,10 +92,6 @@ tryGetFastArrayElement(Runtime &runtime, JSObject *O, uint64_t k) {
 /// prototype chain, invoking getters and Proxy traps as needed. This is the
 /// fallback for tryGetFastArrayElement(). It is not inlined, so that the
 /// callers' loops stay small and do not reserve stack for its Locals.
-/// The handles that the lookup allocates, for example for a getter or a Proxy
-/// key, are released before returning. So they do not accumulate in the
-/// caller's GCScope, even when a callback re-enters the caller through native
-/// frames only, for example a forEach bound to an array.
 /// \return the value of the property, or empty if it is not present. The
 ///   value is not rooted.
 LLVM_ATTRIBUTE_NOINLINE
@@ -107,9 +103,6 @@ getElementGeneric(Runtime &runtime, Handle<JSObject> O, uint64_t k) {
     PinnedValue<SymbolID> tmpPropNameStorage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  // Flushed on return. The result is a plain HermesValue, which stays valid
-  // because flushing does not allocate.
-  GCScopeMarkerRAII marker{runtime};
 
   lv.key = HermesValue::encodeTrustedNumberValue(k);
   ComputedPropertyDescWithSymStorage desc{lv.tmpPropNameStorage};
@@ -725,13 +718,11 @@ CallResult<HermesValue> arrayConstructor(void *, Runtime &runtime) {
 
   // Initialize the elements.
   uint32_t index = 0;
-  GCScopeMarkerRAII marker(runtime);
   for (Handle<> arg : args.handles()) {
     if (LLVM_UNLIKELY(
             JSArray::setElementAt(lv.self, runtime, index++, arg) ==
             ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
-    marker.flush();
   }
 
   return lv.self.getHermesValue();
@@ -777,7 +768,6 @@ CallResult<HermesValue> arrayPrototypeToString(void *, Runtime &runtime) {
 
 CallResult<HermesValue> arrayPrototypeToLocaleString(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -842,10 +832,8 @@ CallResult<HermesValue> arrayPrototypeToLocaleString(void *, Runtime &runtime) {
   }
   lv.strings = std::move(*arrRes);
 
-  auto marker = gcScope.createMarker();
   for (uint32_t i = 0; i < len32; ++i) {
     auto propRes = getIndexed_RJS(runtime, lv.array, i);
-    gcScope.flushToMarker(marker);
     if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -944,7 +932,6 @@ CallResult<HermesValue> arrayPrototypeAt(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   // 1. Let O be ? ToObject(this value).
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
@@ -1011,7 +998,6 @@ CallResult<HermesValue> arrayPrototypeConcat(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -1052,7 +1038,6 @@ CallResult<HermesValue> arrayPrototypeConcat(void *, Runtime &runtime) {
 
   // Index to insert into A.
   uint64_t n = 0;
-  auto marker = gcScope.createMarker();
   ComputedPropertyDescWithSymStorage desc{lv.tmpPropNameStorage};
 
   // Loop first through the "this" value and then through the arguments.
@@ -1144,10 +1129,8 @@ CallResult<HermesValue> arrayPrototypeConcat(void *, Runtime &runtime) {
               return ExecutionStatus::EXCEPTION;
             }
           }
-          gcScope.flushToMarker(marker);
         }
       }
-      gcScope.flushToMarker(marker);
     } else {
       // 5.d.i. NOTE: E is added as a single item rather than spread.
       // 5.d.ii. If n >= 2**53 - 1, throw a TypeError exception.
@@ -1177,7 +1160,6 @@ CallResult<HermesValue> arrayPrototypeConcat(void *, Runtime &runtime) {
           return ExecutionStatus::EXCEPTION;
         }
       }
-      gcScope.flushToMarker(marker);
       ++n;
     }
   }
@@ -1211,7 +1193,6 @@ CallResult<HermesValue> arrayPrototypeJoin(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -1324,11 +1305,9 @@ CallResult<HermesValue> arrayPrototypeJoin(void *, Runtime &runtime) {
       return ExecutionStatus::EXCEPTION;
     lv.strings.castAndSetHermesValue<JSArray::StorageType>(*arrRes);
 
-    auto marker = gcScope.createMarker();
     // Call toString on the remaining elements of the array.
     // i can't be larger than UINT32_MAX as checked above.
-    for (uint32_t i = fastPathEnd; i < len;
-         gcScope.flushToMarker(marker), ++i) {
+    for (uint32_t i = fastPathEnd; i < len; ++i) {
       // Add the size of the separator, except the first time.
       if (i)
         size.add(lv.sep->getStringLength());
@@ -1485,19 +1464,12 @@ static CallResult<HermesValue> arrayPrototypePushSlowPath(
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   uint32_t argCount = args.getArgCount();
 
-  // Ensure the fast path does not leak any handles.
-  NoLeakHandleScope noLeaks{runtime};
-
   struct : Locals {
     PinnedValue<JSObject> O;
     PinnedValue<JSArray> arr;
     PinnedValue<> len;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-
-  // The slow path may create additional handles, so create a GCScope to avoid
-  // leaking them.
-  GCScope gcScope(runtime);
 
   // If the fast path did not populate the length, then get it the slow way.
   if (lenOpt) {
@@ -1530,7 +1502,6 @@ static CallResult<HermesValue> arrayPrototypePushSlowPath(
     return runtime.raiseTypeError("Array length exceeded in push()");
   }
 
-  auto marker = gcScope.createMarker();
   // 6. Repeat, while items is not empty
   for (auto arg : args.handles()) {
     // a. Remove the first element from items and let E be the value of the
@@ -1548,7 +1519,6 @@ static CallResult<HermesValue> arrayPrototypePushSlowPath(
             ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    gcScope.flushToMarker(marker);
     // c. Let len be len+1.
     lv.len = HermesValue::encodeTrustedNumberValue(lv.len->getNumber() + 1);
   }
@@ -1572,9 +1542,6 @@ static CallResult<HermesValue> arrayPrototypePushSlowPath(
 /// ES9.0 22.1.3.18.
 CallResult<HermesValue> arrayPrototypePush(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-
-  // Ensure the fast path does not leak any handles.
-  NoLeakHandleScope noLeaks{runtime};
 
   // 3. Let items be a List whose elements are, in left to right order, the
   // arguments that were passed to this function invocation.
@@ -1615,7 +1582,6 @@ namespace {
 class DirectSortModel : public SortModel {
  private:
   Runtime &runtime_;
-  GCScope gcScope_;
   Handle<Callable> compareFn_;
   Handle<JSArray> arr_;
 
@@ -1628,7 +1594,6 @@ class DirectSortModel : public SortModel {
     PinnedValue<JSArray> keys;
   } lv_;
   LocalsRAII lraii_;
-  GCScope::Marker gcMarker_;
 
   /// Get the indexed storage, which must be re-fetched after any GC safepoint.
   JSArray::StorageType *storage() {
@@ -1684,11 +1649,9 @@ class DirectSortModel : public SortModel {
       Handle<JSArray> arr,
       Handle<Callable> compareFn)
       : runtime_(runtime),
-        gcScope_(runtime),
         compareFn_(compareFn),
         arr_(arr),
-        lraii_(runtime_, &lv_),
-        gcMarker_(gcScope_.createMarker()) {
+        lraii_(runtime_, &lv_) {
     assert(arr_->getIndexedStorageUnsafe(runtime_) && "Empty array");
 #ifndef NDEBUG
     NoAllocScope noAlloc{runtime};
@@ -1738,7 +1701,6 @@ class DirectSortModel : public SortModel {
       }
     }
 
-    GCScopeMarkerRAII gcMarker{gcScope_, gcMarker_};
     if (compareFn_) {
       auto callRes = Callable::executeCall2(
           compareFn_,
@@ -1869,7 +1831,6 @@ ExecutionStatus arrayFastPathSort(
   }
 
   for (uint32_t k = 0; k < len; ++k) {
-    GCScopeMarkerRAII marker{runtime};
     lv.index = HermesValue::encodeTrustedNumberValue(k);
     if (k >= count) {
       if (LLVM_UNLIKELY(
@@ -1913,7 +1874,6 @@ ExecutionStatus appendOwnIndexKeysFromNames(
     uint32_t from,
     uint32_t len,
     std::vector<uint32_t> &keys) {
-  GCScopeMarkerRAII marker{runtime};
   auto namesRes = JSObject::getOwnPropertyNames(obj, runtime, false);
   if (LLVM_UNLIKELY(namesRes == ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
@@ -1948,7 +1908,6 @@ ExecutionStatus appendOwnIndexKeys(
   // property with an index-like name.
   if (LLVM_UNLIKELY(obj->getClass(runtime)->getHasIndexLikeProperties()))
     return appendOwnIndexKeysFromNames(runtime, obj, from, len, keys);
-  GCScopeMarkerRAII marker{runtime};
   JSObject::forEachOwnPropertyWhile(
       obj,
       runtime,
@@ -2005,7 +1964,6 @@ CallResult<bool> readElementAt(
     PinnedValue<SymbolID> tmpName;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScopeMarkerRAII marker{runtime};
   lv.index = HermesValue::encodeTrustedNumberValue(index);
   ComputedPropertyDescWithSymStorage desc{lv.tmpName};
   if (LLVM_UNLIKELY(
@@ -2123,7 +2081,6 @@ deleteIndex(Runtime &runtime, Handle<JSObject> obj, uint32_t index) {
     PinnedValue<> index;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScopeMarkerRAII marker{runtime};
   lv.index = HermesValue::encodeTrustedNumberValue(index);
   return JSObject::deleteComputed(
              obj, runtime, lv.index, PropOpFlags().plusThrowOnError())
@@ -2144,7 +2101,6 @@ ExecutionStatus writeBackElements(
   } lv;
   LocalsRAII lraii{runtime, &lv};
   for (uint32_t j = 0; j < count; ++j) {
-    GCScopeMarkerRAII marker{runtime};
     lv.index = HermesValue::encodeTrustedNumberValue(j);
     lv.value = items->at(runtime, j).unboxToHV(runtime);
     if (LLVM_UNLIKELY(
@@ -2282,10 +2238,6 @@ inline CallResult<HermesValue> arrayPrototypeForEach(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  // Handles allocated below, for example by getters or native callbacks, are
-  // released on every iteration and on return.
-  GCScopeMarkerRAII marker{runtime};
-
   // 1. Let O be ? ToObject(this value).
   // ToObject is the identity on objects, so it is only called for primitives.
   if (LLVM_LIKELY(args.getThisArg().isObject())) {
@@ -2317,8 +2269,6 @@ inline CallResult<HermesValue> arrayPrototypeForEach(void *, Runtime &runtime) {
   // 4. Let k be 0.
   // 5. Repeat, while k < len
   for (uint64_t k = 0; k < len; ++k) {
-    marker.flush();
-
     // 5a. Let Pk be ! ToString(𝔽(k)).
     // 5b. Let kPresent be ? HasProperty(O, Pk).
     // 5c. If kPresent is true, then
@@ -2384,7 +2334,6 @@ static CallResult<uint64_t> flattenIntoArray(
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope{runtime};
   // 1. Let targetIndex be start.
   uint64_t targetIndex = start;
   // 2. Let sourceIndex be 0.
@@ -2393,12 +2342,8 @@ static CallResult<uint64_t> flattenIntoArray(
   // Temporary storage for sourceIndex and targetIndex.
   MutableHandle<JSObject> propObj{lv.propObj};
 
-  auto marker = gcScope.createMarker();
-
   // 3. Repeat, while sourceIndex < sourceLen
   while (sourceIndex < sourceLen) {
-    gcScope.flushToMarker(marker);
-
     // a. Let P be ! ToString(sourceIndex).
     // b. Let exists be ? HasProperty(source, P).
     ComputedPropertyDescWithSymStorage desc{lv.tmpPropNameStorage};
@@ -2665,7 +2610,6 @@ CallResult<HermesValue> arrayPrototypeSlice(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -2766,8 +2710,6 @@ CallResult<HermesValue> arrayPrototypeSlice(void *, Runtime &runtime) {
   // Next index in A to write to.
   uint32_t n = 0;
 
-  auto marker = gcScope.createMarker();
-
   // Copy the elements between the actual start and end indices into A.
   while (k < fin) {
     lv.k = HermesValue::encodeTrustedNumberValue(k);
@@ -2788,8 +2730,6 @@ CallResult<HermesValue> arrayPrototypeSlice(void *, Runtime &runtime) {
     }
     k += 1;
     ++n;
-
-    gcScope.flushToMarker(marker);
   }
 
   if (LLVM_UNLIKELY(
@@ -2942,8 +2882,6 @@ CallResult<HermesValue> arrayPrototypeSplice(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
-
   uint64_t len;
   if (LLVM_LIKELY(vmisa<JSArray>(args.getThisArg()))) {
     lv.O.castAndSetHermesValue<JSObject>(args.getThisArg());
@@ -3045,7 +2983,6 @@ CallResult<HermesValue> arrayPrototypeSplice(void *, Runtime &runtime) {
         args);
   }
 
-  auto gcMarker = gcScope.createMarker();
   {
     // Copy actualDeleteCount elements to A, starting at actualStart.
     for (uint32_t j = 0; j < actualDeleteCount; ++j) {
@@ -3067,8 +3004,6 @@ CallResult<HermesValue> arrayPrototypeSplice(void *, Runtime &runtime) {
                 ExecutionStatus::EXCEPTION))
           return ExecutionStatus::EXCEPTION;
       }
-
-      gcScope.flushToMarker(gcMarker);
     }
 
     if (LLVM_UNLIKELY(
@@ -3127,8 +3062,6 @@ CallResult<HermesValue> arrayPrototypeSplice(void *, Runtime &runtime) {
           return ExecutionStatus::EXCEPTION;
         }
       }
-
-      gcScope.flushToMarker(gcMarker);
     }
 
     // Use i here to refer to (k-1) in the spec, and reindex the loop.
@@ -3144,7 +3077,6 @@ CallResult<HermesValue> arrayPrototypeSplice(void *, Runtime &runtime) {
         return ExecutionStatus::EXCEPTION;
       }
       i -= 1;
-      gcScope.flushToMarker(gcMarker);
     }
   } else if (itemCount > actualDeleteCount) {
     // Inserting more items than deleting.
@@ -3186,8 +3118,6 @@ CallResult<HermesValue> arrayPrototypeSplice(void *, Runtime &runtime) {
           return ExecutionStatus::EXCEPTION;
         }
       }
-
-      gcScope.flushToMarker(gcMarker);
     }
   }
 
@@ -3206,7 +3136,6 @@ CallResult<HermesValue> arrayPrototypeSplice(void *, Runtime &runtime) {
         return ExecutionStatus::EXCEPTION;
       }
       lv.k = HermesValue::encodeTrustedNumberValue(lv.k->getDouble() + 1);
-      gcScope.flushToMarker(gcMarker);
     }
   }
 
@@ -3238,7 +3167,6 @@ CallResult<HermesValue> arrayPrototypeCopyWithin(void *, Runtime &runtime) {
     PinnedValue<SymbolID> fromNameTmpStorage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope{runtime};
 
   // 1. Let O be ToObject(this value).
   // 2. ReturnIfAbrupt(O).
@@ -3331,8 +3259,7 @@ CallResult<HermesValue> arrayPrototypeCopyWithin(void *, Runtime &runtime) {
   lv.from = HermesValue::encodeTrustedNumberValue(from);
   lv.to = HermesValue::encodeTrustedNumberValue(to);
 
-  GCScopeMarkerRAII marker{gcScope};
-  for (; count > 0; marker.flush()) {
+  while (count > 0) {
     // 17. Repeat, while count > 0
     // a. Let fromKey be ToString(from).
     // b. Let toKey be ToString(to).
@@ -3433,9 +3360,6 @@ CallResult<HermesValue> arrayPrototypePop(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  // Ensure the fast path does not leak any handles.
-  NoLeakHandleScope noLeaks{runtime};
-
   uint64_t len;
   if (LLVM_LIKELY(vmisa<JSArray>(args.getThisArg()))) {
     // Fast path for getting the length.
@@ -3451,10 +3375,6 @@ CallResult<HermesValue> arrayPrototypePop(void *, Runtime &runtime) {
     // slow path.
     lv.O = args.vmcastThis<JSObject>();
   }
-
-  // The slow path may create additional handles, so create a GCScope to avoid
-  // leaking them.
-  GCScope gcScope(runtime);
 
   // If the fast path has not populated the object, do that now.
   if (!*lv.O) {
@@ -3528,7 +3448,6 @@ CallResult<HermesValue> arrayPrototypeShift(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -3572,8 +3491,6 @@ CallResult<HermesValue> arrayPrototypeShift(void *, Runtime &runtime) {
   // Move every element to the left one slot.
   // TODO: Add a fast path for actual arrays.
   while (lv.from->getDouble() < len) {
-    GCScopeMarkerRAII marker{gcScope};
-
     // Moving an element from "from" to "from - 1".
     lv.to = HermesValue::encodeTrustedNumberValue(lv.from->getDouble() - 1);
 
@@ -3659,7 +3576,6 @@ static int64_t fastSearch(
 /// \p reverse true if searching in reverse (lastIndexOf), false otherwise.
 static inline CallResult<HermesValue>
 indexOfHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
-  GCScope gcScope(runtime);
   struct : Locals {
     PinnedValue<JSObject> obj;
     PinnedValue<> lenProp;
@@ -3866,9 +3782,7 @@ indexOfHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
 
   // Slow path for non-array objects or arrays with holes.
   lv.k = HermesValue::encodeTrustedNumberValue(k);
-  auto marker = gcScope.createMarker();
   while (true) {
-    gcScope.flushToMarker(marker);
     // Check that we're not done yet.
     if (!reverse) {
       if (lv.k->getDouble() >= len) {
@@ -3913,7 +3827,6 @@ CallResult<HermesValue> arrayPrototypeUnshift(void *, Runtime &runtime) {
     PinnedValue<SymbolID> fromNameTmpStorage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope(runtime);
 
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
@@ -3948,9 +3861,7 @@ CallResult<HermesValue> arrayPrototypeUnshift(void *, Runtime &runtime) {
 
     // Move elements to the right by argCount to account for the new elements.
     // TODO: Add a fast path for actual arrays.
-    auto marker = gcScope.createMarker();
     while (k > 0) {
-      gcScope.flushToMarker(marker);
       lv.from = HermesValue::encodeTrustedNumberValue(k - 1);
       lv.to = HermesValue::encodeTrustedNumberValue(k + argCount - 1);
 
@@ -3997,7 +3908,6 @@ CallResult<HermesValue> arrayPrototypeUnshift(void *, Runtime &runtime) {
               ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      gcScope.flushToMarker(marker);
       j += 1;
     }
   }
@@ -4039,7 +3949,6 @@ everySomeHelper(Runtime &runtime, NativeArgs args, const bool every) {
     PinnedValue<SymbolID> tmpPropNameStorage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope(runtime);
 
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
@@ -4066,12 +3975,9 @@ everySomeHelper(Runtime &runtime, NativeArgs args, const bool every) {
   }
 
   // Loop through and run the callback.
-  auto marker = gcScope.createMarker();
   // Index to check the callback on.
   uint64_t k = 0;
   while (k < len) {
-    gcScope.flushToMarker(marker);
-
     ComputedPropertyDescWithSymStorage desc{lv.tmpPropNameStorage};
     lv.k = HermesValue::encodeTrustedNumberValue(k);
     JSObject::getComputedPrimitiveDescriptor(
@@ -4139,7 +4045,6 @@ CallResult<HermesValue> arrayPrototypeMap(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -4179,10 +4084,7 @@ CallResult<HermesValue> arrayPrototypeMap(void *, Runtime &runtime) {
 
   // Main loop to execute callback and store the results in A.
   // TODO: Implement a fast path for actual arrays.
-  auto marker = gcScope.createMarker();
   while (lv.k->getDouble() < len) {
-    gcScope.flushToMarker(marker);
-
     ComputedPropertyDescWithSymStorage desc{lv.tmpPropNameStorage};
     JSObject::getComputedPrimitiveDescriptor(
         lv.O, runtime, lv.k, lv.descObj, desc);
@@ -4231,7 +4133,6 @@ CallResult<HermesValue> arrayPrototypeFilter(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -4270,10 +4171,7 @@ CallResult<HermesValue> arrayPrototypeFilter(void *, Runtime &runtime) {
   // Index to copy to in the new array.
   uint32_t to = 0;
 
-  auto marker = gcScope.createMarker();
   while (k < len) {
-    gcScope.flushToMarker(marker);
-
     ComputedPropertyDescWithSymStorage desc{lv.tmpPropNameStorage};
     lv.k = HermesValue::encodeTrustedNumberValue(k);
     JSObject::getComputedPrimitiveDescriptor(
@@ -4326,7 +4224,6 @@ CallResult<HermesValue> arrayPrototypeFill(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -4370,7 +4267,6 @@ CallResult<HermesValue> arrayPrototypeFill(void *, Runtime &runtime) {
   double actualEnd = relativeEnd < 0 ? std::max(len + relativeEnd, 0.0)
                                      : std::min(relativeEnd, len);
   lv.k = HermesValue::encodeTrustedNumberValue(actualStart);
-  auto marker = gcScope.createMarker();
   while (lv.k->getDouble() < actualEnd) {
     if (LLVM_UNLIKELY(
             JSObject::putComputed_RJS(
@@ -4383,7 +4279,6 @@ CallResult<HermesValue> arrayPrototypeFill(void *, Runtime &runtime) {
       return ExecutionStatus::EXCEPTION;
     }
     lv.k = HermesValue::encodeTrustedNumberValue(lv.k->getDouble() + 1);
-    gcScope.flushToMarker(marker);
   }
   return lv.O.getHermesValue();
 }
@@ -4398,7 +4293,6 @@ findHelper(void *ctx, bool reverse, Runtime &runtime, NativeArgs args) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope{runtime};
   bool findIndex = ctx != nullptr;
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
@@ -4426,11 +4320,9 @@ findHelper(void *ctx, bool reverse, Runtime &runtime, NativeArgs args) {
 
   // "this" argument to the callback function.
   auto T = args.getArgHandle(1);
-  auto marker = gcScope.createMarker();
   for (size_t i = 0; i < len; ++i) {
     uint64_t k = reverse ? len - i - 1 : i;
     lv.k = HermesValue::encodeTrustedNumberValue(k);
-    gcScope.flushToMarker(marker);
     if (LLVM_UNLIKELY(
             (propRes = getIndexed_RJS(runtime, lv.O, k)) ==
             ExecutionStatus::EXCEPTION)) {
@@ -4486,7 +4378,6 @@ reduceHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -4522,8 +4413,6 @@ reduceHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
   // Current index in the reduction iteration.
   double k = reverse ? (len - 1) : 0;
 
-  auto marker = gcScope.createMarker();
-
   // How much to increment k by each iteration of a loop.
   int increment = reverse ? -1 : 1;
 
@@ -4534,7 +4423,6 @@ reduceHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
   } else {
     bool kPresent = false;
     while (!kPresent) {
-      gcScope.flushToMarker(marker);
       if (!reverse) {
         if (k >= len) {
           break;
@@ -4568,7 +4456,6 @@ reduceHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
 
   // Perform the reduce.
   while (true) {
-    gcScope.flushToMarker(marker);
     if (!reverse) {
       if (k >= len) {
         break;
@@ -4660,14 +4547,11 @@ CallResult<HermesValue> arrayPrototypeReverse(void *, Runtime &runtime) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
   auto objRes = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
   lv.O.castAndSetHermesValue<JSObject>(*objRes);
-
-  auto marker = gcScope.createMarker();
 
   auto propRes = JSObject::getNamed_RJS(
       lv.O, runtime, Predefined::getSymbolID(Predefined::length));
@@ -4685,8 +4569,6 @@ CallResult<HermesValue> arrayPrototypeReverse(void *, Runtime &runtime) {
   uint64_t middle = len / 2;
   uint64_t lower = 0;
   while (lower != middle) {
-    gcScope.flushToMarker(marker);
-
     lv.upper = HermesValue::encodeTrustedNumberValue(len - lower - 1);
     lv.lower = HermesValue::encodeTrustedNumberValue(lower);
     CallResult<bool> lowerExistsRes =
@@ -4701,7 +4583,6 @@ CallResult<HermesValue> arrayPrototypeReverse(void *, Runtime &runtime) {
         return ExecutionStatus::EXCEPTION;
       }
       lv.lowerValue = std::move(*lowerValueRes);
-      gcScope.flushToMarker(marker);
     }
 
     CallResult<bool> upperExistsRes =
@@ -4716,7 +4597,6 @@ CallResult<HermesValue> arrayPrototypeReverse(void *, Runtime &runtime) {
         return ExecutionStatus::EXCEPTION;
       }
       lv.upperValue = std::move(*upperValueRes);
-      gcScope.flushToMarker(marker);
     }
 
     // Handle cases in which lower/upper do/don't exist.
@@ -4790,7 +4670,6 @@ CallResult<HermesValue> arrayPrototypeIncludes(void *, Runtime &runtime) {
     PinnedValue<> lenProp;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope{runtime};
 
   // 1. Let O be ? ToObject(this value).
   auto oRes = toObject(runtime, args.getThisHandle());
@@ -4964,10 +4843,7 @@ CallResult<HermesValue> arrayPrototypeIncludes(void *, Runtime &runtime) {
   }
 
   // 7. Repeat, while k < len
-  auto marker = gcScope.createMarker();
   while (k < len) {
-    gcScope.flushToMarker(marker);
-
     // 7a. Let elementK be the result of ? Get(O, ! ToString(k)).
     auto elementKRes = getIndexed_RJS(runtime, lv.O, k);
     if (LLVM_UNLIKELY(elementKRes == ExecutionStatus::EXCEPTION)) {
@@ -5067,7 +4943,6 @@ CallResult<HermesValue> arrayPrototypeToReversed(void *, Runtime &runtime) {
     }
 
     // Slow path
-    GCScopeMarkerRAII marker{runtime};
     // It is OK to have a PinnedValue here, because we are only storing a number
     // in it.
     PinnedValue<> fromV = HermesValue::encodeTrustedNumberValue(from);
@@ -5164,10 +5039,7 @@ CallResult<HermesValue> arrayPrototypeToSorted(void *, Runtime &runtime) {
     // A is freshly created with the default class, so length is writable.
     auto newLen = SmallHermesValue::encodeNumberValue(len32, runtime);
     JSArray::putLengthUnsafe(lv.A.get(), runtime, newLen);
-    GCScope gcScope{runtime};
-    auto marker = gcScope.createMarker();
     for (uint32_t k = 0; k < len32; ++k) {
-      gcScope.flushToMarker(marker);
       CallResult<PseudoHandle<>> propRes = getIndexed_RJS(runtime, lv.O, k);
       if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
@@ -5194,7 +5066,6 @@ CallResult<HermesValue> arrayPrototypeToSorted(void *, Runtime &runtime) {
 /// Copies \p count elements from \p from (or \p fromArr if is simple array)
 static inline CallResult<uint32_t> arrayCopyHelper(
     Runtime &runtime,
-    GCScope &gcScope,
     Handle<JSObject> from,
     uint64_t fromStartIndex,
     Handle<JSArray> to,
@@ -5205,12 +5076,9 @@ static inline CallResult<uint32_t> arrayCopyHelper(
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  auto marker = gcScope.createMarker();
   uint64_t i = 0;
 
   while (i < count) {
-    gcScope.flushToMarker(marker);
-
     auto propRes = getIndexed_RJS(runtime, from, fromStartIndex + i);
     if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
@@ -5239,7 +5107,6 @@ static inline CallResult<uint32_t> arrayCopyHelper(
 /// ES14.0 23.1.3.35
 CallResult<HermesValue> arrayPrototypeToSpliced(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
   struct : Locals {
     PinnedValue<JSObject> O;
     PinnedValue<> insertIndex;
@@ -5345,8 +5212,7 @@ CallResult<HermesValue> arrayPrototypeToSpliced(void *, Runtime &runtime) {
   // 16a - 16d
   // Copy elements from original array O from beginning until actualStart into
   // new array A
-  auto copyRes =
-      arrayCopyHelper(runtime, gcScope, lv.O, 0, lv.A, 0, actualStart);
+  auto copyRes = arrayCopyHelper(runtime, lv.O, 0, lv.A, 0, actualStart);
   if (LLVM_UNLIKELY(copyRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -5378,8 +5244,7 @@ CallResult<HermesValue> arrayPrototypeToSpliced(void *, Runtime &runtime) {
   // 18a - 18f
   // Copy remaining elements from original array O including skipCount into new
   // array A
-  copyRes =
-      arrayCopyHelper(runtime, gcScope, lv.O, r, lv.A, i, lenAfterInsert - i);
+  copyRes = arrayCopyHelper(runtime, lv.O, r, lv.A, i, lenAfterInsert - i);
   if (LLVM_UNLIKELY(copyRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -5397,7 +5262,6 @@ CallResult<HermesValue> arrayPrototypeWith(void *, Runtime &runtime) {
     PinnedValue<> fromValue;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope{runtime};
 
   // 1. Let O be ? ToObject(this value).
   auto oRes = toObject(runtime, args.getThisHandle());
@@ -5454,11 +5318,8 @@ CallResult<HermesValue> arrayPrototypeWith(void *, Runtime &runtime) {
   // 8. Let k be 0.
   uint64_t k = 0;
 
-  auto marker = gcScope.createMarker();
   // 9. Repeat, while k < len,
   while (k < len) {
-    gcScope.flushToMarker(marker);
-
     // 9a. Let Pk be ! ToString(𝔽(k)).
     // 9b. If k is actualIndex, let fromValue be value.
     if (k == actualIndex) {
@@ -5502,7 +5363,6 @@ CallResult<HermesValue> arrayOf(void *, Runtime &runtime) {
     PinnedValue<> lenProp;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope{runtime};
 
   // 1. Let len be the actual number of arguments passed to this function.
   uint32_t len = args.getArgCount();
@@ -5532,9 +5392,8 @@ CallResult<HermesValue> arrayOf(void *, Runtime &runtime) {
   // 7. Let k be 0.
   lv.k = HermesValue::encodeTrustedNumberValue(0);
 
-  GCScopeMarkerRAII marker{gcScope};
   // 8. Repeat, while k < len
-  for (; lv.k->getNumberAs<uint32_t>() < len; marker.flush()) {
+  while (lv.k->getNumberAs<uint32_t>() < len) {
     // a. Let kValue be items[k].
     lv.kValue = args.getArg(lv.k->getNumber());
 
@@ -5590,7 +5449,6 @@ CallResult<HermesValue> arrayFrom(void *, Runtime &runtime) {
     CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope{runtime};
   auto itemsHandle = args.getArgHandle(0);
   // 1. Let C be the this value.
   auto C = args.getThisHandle();
@@ -5623,7 +5481,6 @@ CallResult<HermesValue> arrayFrom(void *, Runtime &runtime) {
   if (!lv.usingIterator->isUndefined()) {
     // a. If IsConstructor(C) is true, then
     if (isConstructor(runtime, *C)) {
-      GCScopeMarkerRAII markerConstruct{gcScope};
       // i. Let A be Construct(C).
       auto callRes =
           Callable::executeConstruct0(Handle<Callable>::vmcast(C), runtime);
@@ -5658,7 +5515,6 @@ CallResult<HermesValue> arrayFrom(void *, Runtime &runtime) {
     lv.k = HermesValue::encodeTrustedNumberValue(0);
     // g. Repeat
     while (true) {
-      GCScopeMarkerRAII marker1{runtime};
       // ii. Let next be IteratorStep(iteratorRecord).
       // iii. ReturnIfAbrupt(next).
       auto next = iteratorStep(runtime, iteratorRecord);
@@ -5773,7 +5629,6 @@ CallResult<HermesValue> arrayFrom(void *, Runtime &runtime) {
   lv.k = HermesValue::encodeTrustedNumberValue(0);
   // 16. Repeat, while k < len
   while (lv.k->getNumber() < (double)len) {
-    GCScopeMarkerRAII marker2{runtime};
     // b. Let kValue be Get(arrayLike, Pk).
     propRes =
         getIndexed_RJS(runtime, lv.arrayLike, (uint64_t)lv.k->getNumber());

@@ -193,7 +193,6 @@ struct StackTracesTreeParameterizedTest
     LocalsRAII lraii(runtime, &lv);
     SymbolID enableAllocationLocationTrackerSym;
     {
-      vm::GCScope gcScope(runtime);
       enableAllocationLocationTrackerSym =
           vm::stringToSymbolIDForTest(
               runtime,

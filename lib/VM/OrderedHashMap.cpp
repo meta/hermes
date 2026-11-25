@@ -168,7 +168,6 @@ OrderedHashMapBase<BucketType, Derived>::lookupInBucket(
   [[maybe_unused]] const uint32_t firstBucket = bucket;
 
   NoAllocScope noAlloc{runtime};
-  NoHandleScope noHandle{runtime};
 
   // We can deref the handles because we are in NoAllocScope.
   StorageType *dataTable = dataTable_.getNonNull(runtime);
@@ -246,8 +245,6 @@ ExecutionStatus OrderedHashMapBase<BucketType, Derived>::rehash(
   // We'll record the deleted indices as: [1 3 5 7]
   std::vector<uint32_t> deletedEntryIndices;
   deletedEntryIndices.reserve(self->deletedCount_);
-
-  NoHandleScope noHandle{runtime};
 
   const uint32_t mask = self->capacity_ - 1;
   for (uint32_t i = 0; i < totalEntries; ++i) {

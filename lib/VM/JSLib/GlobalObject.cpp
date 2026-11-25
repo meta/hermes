@@ -282,8 +282,6 @@ CallResult<HermesValue> throwTypeError(void *ctx, Runtime &runtime) {
 // NOTE: when declaring more global symbols, don't forget to update
 // "Libhermes.h".
 void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
-  GCScope gcScope{runtime, "initGlobalObject", 350};
-
   struct : public Locals {
     PinnedValue<JSObject> tempHandle;
     PinnedValue<HiddenClass> tempClazzCreateRoot;
@@ -334,8 +332,6 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
   // Allocates a NativeObject and puts it in the global object.
   auto defineGlobalFunc =
       [&](SymbolID name, NativeFunctionPtr functionPtr, unsigned paramCount) {
-        gcScope.clearAllHandles();
-
         lv.func = NativeFunction::create(
             runtime, nullptr, functionPtr, name, paramCount);
         runtime.ignoreAllocationFailure(
@@ -355,7 +351,6 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
     lv.tempClazzCreateRoot = HiddenClass::createRoot(runtime, parent, flags);
     // Add the base number of slots.
     for (size_t i = 0; i < baseNumSlots; ++i) {
-      GCScopeMarkerRAII marker{runtime};
       auto addResult = HiddenClass::reserveSlot(
           lv.tempClazzCreateRoot,
           runtime,
@@ -705,8 +700,7 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
 // All Error constructors.
 #define ALL_ERROR_TYPE(name)                                          \
   runtime.name##Constructor.castAndSetHermesValue<NativeConstructor>( \
-      create##name##Constructor(runtime));                            \
-  gcScope.clearAllHandles();
+      create##name##Constructor(runtime));
 #include "hermes/VM/NativeErrorTypes.def"
 
   // Populate the internal CallSite prototype.
@@ -757,8 +751,7 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
 
 #define TYPED_ARRAY(name, type)                                            \
   runtime.name##ArrayConstructor.castAndSetHermesValue<NativeConstructor>( \
-      create##name##ArrayConstructor(runtime));                            \
-  gcScope.clearAllHandles();
+      create##name##ArrayConstructor(runtime));
 #include "hermes/VM/TypedArrays.def"
 
   // Add Uint8Array-specific base64/hex methods.

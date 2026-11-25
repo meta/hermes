@@ -82,8 +82,6 @@ TEST_F(ArrayStorageTest, RandomResizeTest) {
   MutableHandle<StorageType> arrHandle{lv.arr};
 
   for (int i = 0; i < 1000; ++i) {
-    GCScopeMarkerRAII marker{runtime};
-
     auto size = randomInt();
     // We need to make sure capacity is always >= size.
     lv.arr.castAndSetHermesValue<StorageType>(

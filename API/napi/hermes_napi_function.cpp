@@ -186,7 +186,6 @@ napi_status NAPI_CDECL napi_create_function(
   using namespace hermes::vm;
 
   Runtime &runtime = env->runtime;
-  GCScope gcScope(runtime);
   struct : public Locals {
     PinnedValue<Callable> func;
     PinnedValue<JSObject> proto;
@@ -293,10 +292,6 @@ napi_status NAPI_CDECL napi_call_function(
 
   auto *callable = vmcast<Callable>(*phvFunc);
 
-  // A GCScope is needed because ScopedNativeCallFrame and
-  // Callable::call may allocate internal handles.
-  GCScope gcScope(runtime);
-
   auto *phvRecv = reinterpret_cast<const PinnedHermesValue *>(recv);
 
   // Build the call frame.
@@ -362,10 +357,6 @@ napi_status NAPI_CDECL napi_new_instance(
     PinnedValue<> proto;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-
-  // A GCScope is needed because getNamed_RJS and JSObject::create
-  // may internally allocate temporary Handle objects.
-  GCScope gcScope(runtime);
 
   // Get the constructor's .prototype property. If it's an
   // object, use it as the new object's prototype; otherwise
@@ -472,7 +463,6 @@ hermes::vm::CallResult<hermes::vm::HermesValue> napiConstructorTrampoline(
 
   if (!args.getNewTarget().isUndefined()) {
     // Constructor call: create a new 'this' object.
-    GCScope gcScope(runtime);
 
     auto newTarget = Handle<Callable>::vmcast(&args.getNewTarget());
 
@@ -569,7 +559,6 @@ napi_status NAPI_CDECL napi_define_class(
 
   Runtime &runtime = env->runtime;
 
-  // Use Locals for values that must survive across GCScope flushes.
   struct : public Locals {
     PinnedValue<Callable> ctor;
     PinnedValue<JSObject> proto;
@@ -581,12 +570,6 @@ napi_status NAPI_CDECL napi_define_class(
     PinnedValue<SymbolID> propSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-
-  // GCScope is needed because NativeConstructor::create,
-  // defineNameLengthAndPrototype, and property definition APIs
-  // allocate temporary Handle objects internally.
-  GCScope gcScope(runtime);
-  auto marker = gcScope.createMarker();
 
   // Allocate a callback bundle for the constructor.
   env->callbackBundles_.push_back({env, constructor, data});
@@ -617,8 +600,6 @@ napi_status NAPI_CDECL napi_define_class(
     }
   }
 
-  gcScope.flushToMarker(marker);
-
   // Create the NativeConstructor. Using NativeConstructor (not
   // NativeFunction) ensures isConstructor() returns true, so
   // 'new MyClass()' works from JavaScript.
@@ -629,8 +610,6 @@ napi_status NAPI_CDECL napi_define_class(
       napiConstructorTrampoline,
       0 /* paramCount */);
   lv.ctor.castAndSetHermesValue<Callable>(ctorPH.getHermesValue());
-
-  gcScope.flushToMarker(marker);
 
   // Create the prototype object.
   auto protoObj = JSObject::create(runtime);
@@ -650,16 +629,12 @@ napi_status NAPI_CDECL napi_define_class(
     return captureRuntimeException(env, napi_generic_failure);
   }
 
-  gcScope.flushToMarker(marker);
-
   // Separate instance properties from static properties.
   // Instance properties go on the prototype; static properties
   // go on the constructor.
   std::vector<napi_property_descriptor> staticDescs;
 
   for (size_t i = 0; i < property_count; ++i) {
-    gcScope.flushToMarker(marker);
-
     const napi_property_descriptor *p = &properties[i];
 
     if ((p->attributes & napi_static) != 0) {

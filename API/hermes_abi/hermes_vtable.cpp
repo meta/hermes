@@ -455,7 +455,6 @@ HermesABIValueOrError runBCProvider(
     llvh::StringRef sourceURL) {
   auto &runtime = *hart->rt;
   vm::RuntimeModuleFlags runtimeFlags{};
-  vm::GCScope gcScope(runtime);
   auto res = runtime.runBytecode(
       std::move(provider),
       runtimeFlags,
@@ -516,7 +515,6 @@ HermesABIStringOrError create_string_from_utf8(
     size_t length) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto strRes = vm::StringPrimitive::createEfficient(
       runtime, llvh::makeArrayRef(utf8, length), /* IgnoreInputErrors */ true);
   if (strRes == vm::ExecutionStatus::EXCEPTION)
@@ -527,7 +525,6 @@ HermesABIStringOrError create_string_from_utf8(
 HermesABIObjectOrError create_object(HermesABIRuntime *abiRt) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   return hart->createObjectOrError(
       vm::JSObject::create(runtime).getHermesValue());
 }
@@ -538,7 +535,6 @@ HermesABIBoolOrError has_object_property_from_value(
     const HermesABIValue *key) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
 
   vm::PinnedHermesValue numberStorage;
   auto res = vm::JSObject::hasComputed(
@@ -554,7 +550,6 @@ HermesABIBoolOrError has_object_property_from_propnameid(
     HermesABIPropNameID name) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto res =
       vm::JSObject::hasNamedOrIndexed(toHandle(obj), runtime, *toHandle(name));
   if (res == vm::ExecutionStatus::EXCEPTION)
@@ -568,7 +563,6 @@ HermesABIValueOrError get_object_property_from_value(
     const HermesABIValue *key) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
 
   vm::PinnedHermesValue numberStorage;
   auto res = vm::JSObject::getComputed_RJS(
@@ -584,7 +578,6 @@ HermesABIValueOrError get_object_property_from_propnameid(
     HermesABIPropNameID sym) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto res = vm::JSObject::getNamedOrIndexed(
       toHandle(object), runtime, *toHandle(sym));
   if (res == vm::ExecutionStatus::EXCEPTION)
@@ -599,7 +592,6 @@ HermesABIVoidOrError set_object_property_from_value(
     const HermesABIValue *val) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
 
   vm::PinnedHermesValue numberStorageKey;
   vm::PinnedHermesValue numberStorageVal;
@@ -622,7 +614,6 @@ HermesABIVoidOrError set_object_property_from_propnameid(
     const HermesABIValue *val) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
 
   vm::PinnedHermesValue numberStorage;
   auto res = vm::JSObject::putNamedOrIndexed(
@@ -642,7 +633,6 @@ HermesABIArrayOrError get_object_property_names(
     HermesABIObject obj) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   uint32_t beginIndex;
   uint32_t endIndex;
   auto objHandle = toHandle(obj);
@@ -702,7 +692,6 @@ HermesABIVoidOrError set_object_external_memory_pressure(
     size_t amt) {
   auto *hart = impl(abiRt);
   auto &rt = *hart->rt;
-  vm::GCScope gcScope(rt);
   auto objHandle = toHandle(obj);
   if (objHandle->isProxyObject(rt)) {
     hart->nativeExceptionMessage = "Cannot set external memory on Proxy";
@@ -797,7 +786,6 @@ HermesABIVoidOrError set_object_external_memory_pressure(
 HermesABIArrayOrError create_array(HermesABIRuntime *abiRt, size_t length) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto result = vm::JSArray::create(runtime, length, length);
   if (result == vm::ExecutionStatus::EXCEPTION)
     return abi::createArrayOrError(HermesABIErrorCodeJSError);
@@ -816,7 +804,6 @@ HermesABISizeTOrError get_array_length(
   }
 
   // The array may be a Proxy, so read and convert its length property.
-  vm::GCScope gcScope(runtime);
   struct : public vm::Locals {
     vm::PinnedValue<> lenProp;
   } lv;
@@ -844,8 +831,6 @@ HermesABIArrayBufferOrError create_arraybuffer_from_external_data(
     HermesABIMutableBuffer *buf) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-
-  vm::GCScope gcScope(runtime);
 
   struct : public vm::Locals {
     vm::PinnedValue<vm::JSArrayBuffer> arrayBuffer;
@@ -901,7 +886,6 @@ HermesABIPropNameIDOrError create_propnameid_from_string(
     HermesABIString str) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   struct : public vm::Locals {
     vm::PinnedValue<vm::SymbolID> sym;
   } lv;
@@ -941,7 +925,6 @@ HermesABIValueOrError call(
   }
 
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   vm::Handle<vm::Callable> funcHandle = toHandle(func);
 
   // Set up the call frame and create space for the arguments.
@@ -981,7 +964,6 @@ HermesABIValueOrError call_as_constructor(
   }
 
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
 
   struct : public vm::Locals {
     vm::PinnedValue<> thisArg;
@@ -1094,7 +1076,6 @@ HermesABIFunctionOrError create_function_from_host_function(
     HermesABIHostFunction *func) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto *hfw = new HostFunctionWrapper(hart, func);
 
   // Create a FinalizableNativeFunction that uses the HostFunctionWrapper as its
@@ -1213,7 +1194,6 @@ HermesABIObjectOrError create_object_from_host_object(
     HermesABIHostObject *ho) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto objRes = vm::HostObject::createWithoutPrototype(
       runtime, std::make_unique<HostObjectWrapper>(hart, ho));
   assert(
@@ -1233,7 +1213,6 @@ HermesABINativeState *get_native_state(
     HermesABIObject obj) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto h = toHandle(obj);
 
   // Proxy and HostObject cannot have native state.
@@ -1268,7 +1247,6 @@ HermesABIVoidOrError set_native_state(
 
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
 
   struct : public vm::Locals {
     vm::PinnedValue<vm::NativeState> ns;
@@ -1353,7 +1331,6 @@ void get_utf8_from_string(
     HermesABIGrowableBuffer *buf) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto view = vm::StringPrimitive::createStringView(runtime, toHandle(str));
 
   // If the string is already ASCII, we can write it directly into the buffer.
@@ -1377,7 +1354,6 @@ void get_utf8_from_propnameid(
     HermesABIGrowableBuffer *buf) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   struct : public vm::Locals {
     vm::PinnedValue<vm::StringPrimitive> nameStr;
   } lv;
@@ -1403,7 +1379,6 @@ void get_utf8_from_symbol(
     HermesABIGrowableBuffer *buf) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   struct : public vm::Locals {
     vm::PinnedValue<vm::StringPrimitive> nameStr;
   } lv;
@@ -1435,7 +1410,6 @@ HermesABIBoolOrError
 instance_of(HermesABIRuntime *abiRt, HermesABIObject o, HermesABIFunction f) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto result = vm::instanceOfOperator_RJS(runtime, toHandle(o), toHandle(f));
   if (result == vm::ExecutionStatus::EXCEPTION)
     return abi::createBoolOrError(HermesABIErrorCodeJSError);
@@ -1495,7 +1469,6 @@ HermesABIBigIntOrError create_bigint_from_int64(
     int64_t value) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto res = vm::BigIntPrimitive::fromSigned(runtime, value);
   if (res == vm::ExecutionStatus::EXCEPTION)
     return abi::createBigIntOrError(HermesABIErrorCodeJSError);
@@ -1506,7 +1479,6 @@ HermesABIBigIntOrError create_bigint_from_uint64(
     uint64_t value) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  vm::GCScope gcScope(runtime);
   auto res = vm::BigIntPrimitive::fromUnsigned(runtime, value);
   if (res == vm::ExecutionStatus::EXCEPTION)
     return abi::createBigIntOrError(HermesABIErrorCodeJSError);
@@ -1538,7 +1510,6 @@ HermesABIStringOrError bigint_to_string(
     return abi::createStringOrError(HermesABIErrorCodeNativeException);
   }
 
-  vm::GCScope gcScope(runtime);
   auto toStringRes = vm::BigIntPrimitive::toString(
       runtime, vm::createPseudoHandle(*toHandle(bigint)), radix);
 

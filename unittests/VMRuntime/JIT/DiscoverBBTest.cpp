@@ -44,7 +44,6 @@ TEST(DiscoverBBTest, SmokeTest) {
       "",
       runFlags);
 
-  GCScope gcScope{runtime};
   auto benchSym =
       getSymbolHandleForTest(runtime, createASCIIRef("bench"), lv.benchSym);
   ASSERT_EQ(ExecutionStatus::RETURNED, benchSym);

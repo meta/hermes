@@ -316,18 +316,13 @@ TEST_F(WeakValueObjectMapTest, KeyReachingValueIsCollectedTest) {
   map.insert(runtime, *lv.key, *lv.value);
 
   // The key reaches its own value, as in proto.inst = Object.create(proto).
-  // The marker drops the handles putNamed_RJS makes, which would keep the key
-  // alive.
-  {
-    GCScopeMarkerRAII marker{runtime};
-    ASSERT_NE(
-        JSObject::putNamed_RJS(
-            lv.key,
-            runtime,
-            Predefined::getSymbolID(Predefined::length),
-            lv.value),
-        ExecutionStatus::EXCEPTION);
-  }
+  ASSERT_NE(
+      JSObject::putNamed_RJS(
+          lv.key,
+          runtime,
+          Predefined::getSymbolID(Predefined::length),
+          lv.value),
+      ExecutionStatus::EXCEPTION);
 
   WeakRef<JSObject> weakKey{runtime, lv.key};
   lv.key = nullptr;

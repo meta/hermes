@@ -41,7 +41,6 @@ SHLegacyValue _sh_ljs_create_bytecode_closure(
     uint32_t functionID) {
   Runtime &runtime = getRuntime(shr);
   auto *runtimeModule = (RuntimeModule *)shRuntimeModule;
-  GCScopeMarkerRAII marker{runtime};
   struct : public Locals {
     PinnedValue<Domain> domain;
   } lv;
@@ -68,7 +67,6 @@ SHLegacyValue _interpreter_create_generator(
   auto *runtimeModule = (RuntimeModule *)shRuntimeModule;
   CallResult<PseudoHandle<JSGeneratorObject>> res{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII marker{runtime};
     res = Interpreter::createGenerator_RJS(
         runtime,
         runtimeModule,
@@ -99,7 +97,6 @@ SHLegacyValue _sh_ljs_get_bytecode_bigint(
   Runtime &runtime = getRuntime(shr);
   CallResult<HermesValue> res{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII marker{runtime};
     res = BigIntPrimitive::fromBytes(
         runtime,
         ((RuntimeModule *)runtimeModule)->getBigIntBytesFromBigIntId(bigintID));
@@ -230,7 +227,6 @@ SHLegacyValue _interpreter_create_array_from_buffer(
     unsigned bufferIndex) {
   Runtime &runtime = getRuntime(shr);
   CallResult<PseudoHandle<>> res = [&] {
-    GCScopeMarkerRAII marker{runtime};
     return Interpreter::createArrayFromBuffer(
         runtime, (CodeBlock *)codeBlock, numElements, numLiterals, bufferIndex);
   }();
@@ -309,7 +305,6 @@ _sh_ljs_string_add(SHRuntime *shr, SHLegacyValue *left, SHLegacyValue *right) {
   auto rhsHandle = Handle<StringPrimitive>::vmcast(toPHV(right));
   CallResult<HermesValue> result{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII marker{runtime};
     result = StringPrimitive::concat(runtime, lhsHandle, rhsHandle);
   }
   if (LLVM_UNLIKELY(result == ExecutionStatus::EXCEPTION))
@@ -409,7 +404,6 @@ void _jit_put_by_id(
 
   ExecutionStatus status;
   {
-    GCScopeMarkerRAII marker{runtime};
     status = Interpreter::putByIdSlowPath_RJS(
         runtime,
         curCodeBlock,
@@ -1149,7 +1143,6 @@ _jit_direct_eval(Runtime &runtime, PinnedHermesValue *text, bool strictCaller) {
 
   CallResult<HermesValue> cr{ExecutionStatus::EXCEPTION};
   {
-    GCScopeMarkerRAII gcMarker{runtime};
     cr = vm::directEval(
         runtime,
         Handle<StringPrimitive>::vmcast(text),
@@ -1262,7 +1255,6 @@ SHLegacyValue _jit_call_builtin(
     // interpreter's implCallBuiltin does.
     newFrame.getThisArgRef() = HermesValue::encodeUndefinedValue();
 
-    GCScopeMarkerRAII marker{runtime};
     return NativeFunction::_nativeCall(callee, runtime);
   }();
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))

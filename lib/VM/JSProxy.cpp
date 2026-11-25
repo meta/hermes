@@ -249,9 +249,8 @@ CallResult<PseudoHandle<JSObject>> JSProxy::getPrototypeOf(
   // Proxies are complex, and various parts of the logic (finding
   // traps, undefined traps handling, calling traps, etc) are all
   // potentially recursive.  Therefore, every entry point creates a
-  // scope and a ScopedNativeDepthTracker, as it's possible to use up
-  // arbitrary native stack depth with nested proxies.
-  GCScope gcScope(runtime);
+  // ScopedNativeDepthTracker, as it's possible to use up arbitrary native
+  // stack depth with nested proxies.
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -322,7 +321,6 @@ CallResult<bool> JSProxy::setPrototypeOf(
     Handle<JSObject> selfHandle,
     Runtime &runtime,
     Handle<JSObject> parent) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -391,7 +389,6 @@ CallResult<bool> JSProxy::setPrototypeOf(
 CallResult<bool> JSProxy::isExtensible(
     Handle<JSObject> selfHandle,
     Runtime &runtime) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -445,7 +442,6 @@ CallResult<bool> JSProxy::preventExtensions(
     Handle<JSObject> selfHandle,
     Runtime &runtime,
     PropOpFlags opFlags) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -508,7 +504,6 @@ CallResult<bool> JSProxy::getOwnProperty(
     Handle<> nameValHandle,
     ComputedPropertyDescriptor &desc,
     MutableHandle<> *valueOrAccessor) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -688,7 +683,6 @@ CallResult<bool> JSProxy::defineOwnProperty(
     DefinePropertyFlags dpFlags,
     Handle<> valueOrAccessor,
     PropOpFlags opFlags) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -873,7 +867,6 @@ CallResult<bool> JSProxy::hasNamed(
     Handle<JSObject> selfHandle,
     Runtime &runtime,
     SymbolID name) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -908,7 +901,6 @@ CallResult<bool> JSProxy::hasComputed(
     Handle<JSObject> selfHandle,
     Runtime &runtime,
     Handle<> nameValHandle) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -1010,7 +1002,6 @@ CallResult<PseudoHandle<>> JSProxy::getNamed(
     Runtime &runtime,
     SymbolID name,
     Handle<> receiver) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -1051,7 +1042,6 @@ CallResult<PseudoHandle<>> JSProxy::getComputed(
     Runtime &runtime,
     Handle<> nameValHandle,
     Handle<> receiver) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -1160,7 +1150,6 @@ CallResult<bool> JSProxy::setNamed(
     Handle<> valueHandle,
     // TODO could be HermesValue
     Handle<> receiver) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -1201,7 +1190,6 @@ CallResult<bool> JSProxy::setComputed(
     Handle<> valueHandle,
     // TODO could be HermesValue
     Handle<> receiver) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -1304,7 +1292,6 @@ CallResult<bool> JSProxy::deleteNamed(
     Handle<JSObject> selfHandle,
     Runtime &runtime,
     SymbolID name) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -1340,7 +1327,6 @@ CallResult<bool> JSProxy::deleteComputed(
     Handle<JSObject> selfHandle,
     Runtime &runtime,
     Handle<> nameValHandle) {
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -1418,9 +1404,7 @@ CallResult<PseudoHandle<JSArray>> filterKeys(
   }
   lv.result = std::move(*resultRes);
   uint32_t resultIndex = 0;
-  GCScopeMarkerRAII marker{runtime};
   for (uint32_t i = 0; i < len; ++i) {
-    marker.flush();
     SmallHermesValue elem = keys->at(runtime, i);
     if (elem.isSymbol() ? !okFlags.getIncludeSymbols()
                         : !okFlags.getIncludeNonSymbols()) {
@@ -1471,7 +1455,6 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
     PinnedValue<> value;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope gcScope{runtime};
   ScopedNativeDepthTracker depthTracker(runtime);
   if (LLVM_UNLIKELY(depthTracker.overflowed())) {
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
@@ -1592,11 +1575,9 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   // 15. Let targetNonconfigurableKeys be a new empty List.
   llvh::SmallSetVector<uint32_t, 8> nonConfigurable;
   // 16. For each element key of targetKeys, do
-  GCScopeMarkerRAII marker{runtime};
   for (uint32_t i = 0, len = JSArray::getLength(*lv.targetKeys, runtime);
        i < len;
        ++i) {
-    marker.flush();
     //   a. Let desc be ? target.[[GetOwnProperty]](key).
     ComputedPropertyDescriptor desc;
     lv.value = lv.targetKeys->at(runtime, i).unboxToHV(runtime);

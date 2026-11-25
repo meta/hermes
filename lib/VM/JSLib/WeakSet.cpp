@@ -78,7 +78,6 @@ HermesValue createWeakSetConstructor(Runtime &runtime) {
 
 CallResult<HermesValue> weakSetConstructor(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   if (LLVM_UNLIKELY(!args.isConstructorCall())) {
     return runtime.raiseTypeError("WeakSet must be called as a constructor");
@@ -136,9 +135,7 @@ CallResult<HermesValue> weakSetConstructor(void *, Runtime &runtime) {
   }
   auto iteratorRecord = *iterRes;
 
-  auto marker = gcScope.createMarker();
   for (;;) {
-    gcScope.flushToMarker(marker);
     CallResult<PseudoHandle<JSObject>> nextRes =
         iteratorStep(runtime, iteratorRecord);
     if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {

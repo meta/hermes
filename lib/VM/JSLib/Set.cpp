@@ -219,7 +219,6 @@ setFromSetFastPath(Runtime &runtime, Handle<JSSet> target, Handle<JSSet> src) {
 
 CallResult<HermesValue> setConstructor(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
   if (LLVM_UNLIKELY(!args.isConstructorCall())) {
     return runtime.raiseTypeError("Constructor Set requires 'new'");
   }
@@ -300,8 +299,6 @@ CallResult<HermesValue> setConstructor(void *, Runtime &runtime) {
                     runtime.arrayPrototypeValues.getHermesValue().getRaw())) {
       for (JSArray::size_type i = 0; i < JSArray::getLength(arr.get(), runtime);
            i++) {
-        GCScopeMarkerRAII marker{runtime};
-
         // Add each element to the set.
         auto element = arr.get()->at(runtime, i);
         if (LLVM_LIKELY(!element.isEmpty())) {
@@ -354,12 +351,10 @@ CallResult<HermesValue> setConstructor(void *, Runtime &runtime) {
   auto iteratorRecord = *iterRes;
 
   // Iterate the array and add every element.
-  auto marker = gcScope.createMarker();
 
   // Check the length of the array after every iteration,
   // to allow for the fact that the length could be modified during iteration.
   for (;;) {
-    gcScope.flushToMarker(marker);
     CallResult<PseudoHandle<JSObject>> nextRes =
         iteratorStep(runtime, iteratorRecord);
     if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
@@ -676,7 +671,6 @@ CallResult<HermesValue> setPrototypeDifference(void *, Runtime &runtime) {
     auto keysIteratorRecord = *keysIterRes;
     // c. Repeat, while next is not DONE
     for (;;) {
-      GCScopeMarkerRAII marker{runtime};
       // i. Set next to ?IteratorStepValue(keysIters)
       auto stepValRes = iteratorStepValue(runtime, keysIteratorRecord, &lv.tmp);
       if (LLVM_UNLIKELY(stepValRes == ExecutionStatus::EXCEPTION)) {
@@ -840,7 +834,6 @@ CallResult<HermesValue> setPrototypeIntersection(void *, Runtime &runtime) {
     auto keysIterRecord = *keysIterRes;
     // c. Repeat while next is not DONE
     for (;;) {
-      GCScopeMarkerRAII marker{runtime};
       // i. Set next to ?IteratorStepValue(keysIter)
       auto stepValRes = iteratorStepValue(runtime, keysIterRecord, &lv.tmp);
       if (LLVM_UNLIKELY(stepValRes == ExecutionStatus::EXCEPTION)) {
@@ -941,7 +934,6 @@ CallResult<HermesValue> setPrototypeIsDisjointFrom(void *, Runtime &runtime) {
     //   iii. If e is not EMPTY, then
     JSSet::IteratorContext iterCtx = selfHandle->newIterator(runtime);
     while (selfHandle->advanceIterator(runtime, iterCtx)) {
-      GCScopeMarkerRAII marker{runtime};
       // 1. Let inOther be ToBoolean(?Call(otherRec.[[Has]],
       //    otherRec.[[SetObject]], e))
       auto hasRes = Callable::executeCall1(
@@ -973,7 +965,6 @@ CallResult<HermesValue> setPrototypeIsDisjointFrom(void *, Runtime &runtime) {
     // b. Let next be NOT-STARTED
     // c. Repeat, while next is not DONE,
     for (;;) {
-      GCScopeMarkerRAII marker{runtime};
       // i. Set next to ?IteratorStepValue(keysIter)
       auto stepValRes = iteratorStepValue(runtime, keysIterRecord, &lv.tmp);
       if (LLVM_UNLIKELY(stepValRes == ExecutionStatus::EXCEPTION)) {
@@ -1040,7 +1031,6 @@ CallResult<HermesValue> setPrototypeIsSubsetOf(void *, Runtime &runtime) {
   //   c. If e is not EMPTY, then
   JSSet::IteratorContext iterCtx = selfHandle->newIterator(runtime);
   while (selfHandle->advanceIterator(runtime, iterCtx)) {
-    GCScopeMarkerRAII marker{runtime};
     // i. Let inOther be ToBoolean(?Call(otherRec.[[Has]],
     //    otherRec.[[SetObject]], e))
     auto hasRes = Callable::executeCall1(
@@ -1125,7 +1115,6 @@ CallResult<HermesValue> setPrototypeIsSupersetOf(void *, Runtime &runtime) {
   // 6. Let next be NON-STARTED
   // 7. Repeat, while next is not DONE
   for (;;) {
-    GCScopeMarkerRAII marker{runtime};
     // a. Set next to ?IteratorStepValue(keysIter)
     auto stepValRes = iteratorStepValue(runtime, keysIterRecord, &lv.tmp);
     if (LLVM_UNLIKELY(stepValRes == ExecutionStatus::EXCEPTION)) {
@@ -1245,7 +1234,6 @@ CallResult<HermesValue> setPrototypeSymmetricDifference(
   // 6. Let next be NON-STARTED
   // 7. Repeat, while next is not DONE,
   for (;;) {
-    GCScopeMarkerRAII marker{runtime};
     // a. Set next to ?IteratorStepValue(keysIter)
     auto stepValRes = iteratorStepValue(runtime, keysIterRecord, &lv.tmp);
     if (LLVM_UNLIKELY(stepValRes == ExecutionStatus::EXCEPTION)) {
@@ -1375,7 +1363,6 @@ CallResult<HermesValue> setPrototypeUnion(void *, Runtime &runtime) {
   // 6. Let next be NOT-STARTED
   // 7. Repeat, while next is not DONE,
   for (;;) {
-    GCScopeMarkerRAII marker{runtime};
     // a. Set next to ?IteratorStepValue(keysIter)
     auto stepValRes = iteratorStepValue(runtime, keysIterRecord, &lv.tmp);
     if (LLVM_UNLIKELY(stepValRes == ExecutionStatus::EXCEPTION)) {

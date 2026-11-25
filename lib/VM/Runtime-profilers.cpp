@@ -168,10 +168,7 @@ void Runtime::dumpJSFunctionStats(ProfileType type) {
     llvm_unreachable("Function stack corrupted");
   }
   llvh::outs() << (opcodes ? "==Opcode Profile==\n" : " ==Time Profile==\n");
-  GCScope gcScope{this};
   for (const auto &kv : funcTimeSpent) {
-    gcScope.clearAllHandles();
-
     // Format of each line:
     //   [Stack trace (function ID/name separated by semicolon)] [timeSpent]
     bool isFirst = true;

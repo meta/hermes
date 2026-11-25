@@ -38,7 +38,6 @@ static napi_status createErrorWithCode(
     PinnedValue<SymbolID> codeSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-  GCScope gcScope(runtime);
 
   // Get the message string from the napi_value.
   auto *msgPhv = reinterpret_cast<PinnedHermesValue *>(msg);
@@ -120,11 +119,6 @@ static napi_status throwErrorWithMessage(
     PinnedValue<SymbolID> codeSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-
-  // GCScope is needed for internal Handle allocations by
-  // JSError::create, recordStackTrace, setMessage, getSymbolID,
-  // and defineOwnProperty.
-  GCScope gcScope(runtime);
 
   // Create the message string and root it immediately (before
   // JSError::create, which is a GC safepoint).
@@ -428,7 +422,6 @@ napi_status NAPI_CDECL napi_fatal_exception(napi_env env, napi_value err) {
   std::string msg = "Fatal N-API exception: ";
   if (hv.isObject() && vmisa<JSError>(hv)) {
     // Use JSError::toString to get the "name: message" representation.
-    GCScope gcScope(env->runtime);
     struct : public Locals {
       PinnedValue<JSObject> obj;
     } lv;

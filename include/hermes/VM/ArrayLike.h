@@ -46,12 +46,9 @@ ExecutionStatus createListFromArrayLike_RJS(
     Runtime &runtime,
     uint64_t length,
     const ElementCB &elementCB) {
-  GCScope gcScope(runtime);
   Handle<ArrayImpl> elemArray = Handle<ArrayImpl>::dyn_vmcast(arrayLikeHandle);
-  auto marker = gcScope.createMarker();
   if (LLVM_LIKELY(elemArray)) {
     for (uint64_t elemIdx = 0; elemIdx < length; ++elemIdx) {
-      gcScope.flushToMarker(marker);
       // Fast path: we already have an array, so try and bypass the getComputed
       // checks and the handle loads & stores. Directly call ArrayImpl::at,
       // and only call getComputed if the element is empty.
@@ -81,7 +78,6 @@ ExecutionStatus createListFromArrayLike_RJS(
   } else {
     // Not an array. Use this slow path.
     for (uint64_t elemIdx = 0; elemIdx < length; ++elemIdx) {
-      gcScope.flushToMarker(marker);
       CallResult<PseudoHandle<>> propRes =
           getIndexed_RJS(runtime, arrayLikeHandle, elemIdx);
       if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {

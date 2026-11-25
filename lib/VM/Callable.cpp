@@ -225,8 +225,6 @@ ExecutionStatus Callable::defineNameLengthAndPrototype(
   pf.writable = 0;
   pf.configurable = 1;
 
-  GCScope scope{runtime, "defineNameLengthAndPrototype"};
-
   struct : public Locals {
     PinnedValue<> length;
     PinnedValue<StringPrimitive> name;
@@ -942,7 +940,6 @@ CallResult<PseudoHandle<>> BoundFunction::_callImpl(
 
 HermesValue BoundFunction::_jitCallImpl(Runtime *runtime, JSObject *self) {
   auto res = [&] {
-    GCScopeMarkerRAII marker{*runtime};
     return _boundCall(vmcast<BoundFunction>(self), *runtime);
   }();
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
@@ -1048,14 +1045,6 @@ CallResult<PseudoHandle<>> NativeJSFunction::_nativeCall(
 CallResult<PseudoHandle<>> NativeJSFunction::_callImpl(
     Handle<Callable> selfHandle,
     Runtime &runtime) {
-  // SHLJS code needs to run in the context of an existing GCScope:
-  // - When it is invoked from the interpreter, it uses the interpreter's
-  // GCScope.
-  // - When invoked directly from native as root, the caller must ensure a
-  // GCScope.
-  // - When invoked from an unknown context using this virtual call, we need
-  // a GCScope to ensure safety.
-  GCScope gcScope{runtime};
   return _nativeCall(vmcast<NativeJSFunction>(selfHandle.get()), runtime);
 }
 
@@ -1230,7 +1219,6 @@ HermesValue NativeFunction::_jitCallImpl(Runtime *rt, JSObject *self) {
             StackFrameLayout::DebugEnvironment &&
         StackFrameLayout::CalleeExtraRegistersAtStart == 1);
 
-    GCScopeMarkerRAII marker{runtime};
     auto *nfSelf = vmcast<NativeFunction>(self);
     return nfSelf->functionPtr_(nfSelf->context_, runtime);
   }();
@@ -1443,9 +1431,6 @@ void JSFunction::addLocationToSnapshot(
 CallResult<HermesValue> JSFunction::_jittedCall(
     JITCompiledFunctionPtr functionPtr,
     Runtime &runtime) {
-  // We should not need a GCScope here because all calls to _jittedCall
-  // originate either in the interpreter, NativeJSFunctions, or other JIT code.
-  // Deep recursion purely between these 3 should not produce excess handles.
   return _callWrapper<HermesValue>(functionPtr, runtime, [](uint64_t) {});
 }
 
@@ -1455,7 +1440,6 @@ CallResult<PseudoHandle<>> JSFunction::_callImpl(
   auto *self = vmcast<JSFunction>(selfHandle.get());
 
   if (auto *jitPtr = self->getCodeBlock()->getJITCompiled()) {
-    GCScope scope{runtime};
     return _callWrapper<PseudoHandle<>>(jitPtr, runtime, [](uint64_t) {});
   }
 

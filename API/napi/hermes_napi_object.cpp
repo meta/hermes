@@ -41,9 +41,6 @@ napi_status NAPI_CDECL napi_set_property(
   auto valHandle = hermes::vm::Handle<>(
       reinterpret_cast<hermes::vm::PinnedHermesValue *>(value));
 
-  // A GCScope is needed because putComputed_RJS internally allocates
-  // temporary handles (MutableHandle, etc.).
-  hermes::vm::GCScope gcScope(env->runtime);
   auto putRes = hermes::vm::JSObject::putComputed_RJS(
       objHandle, env->runtime, keyHandle, valHandle);
   if (LLVM_UNLIKELY(putRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -70,7 +67,6 @@ napi_status NAPI_CDECL napi_get_property(
   auto keyHandle = hermes::vm::Handle<>(
       reinterpret_cast<hermes::vm::PinnedHermesValue *>(key));
 
-  hermes::vm::GCScope gcScope(env->runtime);
   auto getRes =
       hermes::vm::JSObject::getComputed_RJS(objHandle, env->runtime, keyHandle);
   if (LLVM_UNLIKELY(getRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -98,7 +94,6 @@ napi_status NAPI_CDECL napi_has_property(
   auto keyHandle = hermes::vm::Handle<>(
       reinterpret_cast<hermes::vm::PinnedHermesValue *>(key));
 
-  hermes::vm::GCScope gcScope(env->runtime);
   auto hasRes =
       hermes::vm::JSObject::hasComputed(objHandle, env->runtime, keyHandle);
   if (LLVM_UNLIKELY(hasRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -125,7 +120,6 @@ napi_status NAPI_CDECL napi_delete_property(
   auto keyHandle = hermes::vm::Handle<>(
       reinterpret_cast<hermes::vm::PinnedHermesValue *>(key));
 
-  hermes::vm::GCScope gcScope(env->runtime);
   auto delRes =
       hermes::vm::JSObject::deleteComputed(objHandle, env->runtime, keyHandle);
   if (LLVM_UNLIKELY(delRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -159,8 +153,6 @@ napi_status NAPI_CDECL napi_set_named_property(
   auto objHandle = hermes::vm::Handle<hermes::vm::JSObject>::vmcast(objPhv);
   auto valHandle = hermes::vm::Handle<>(
       reinterpret_cast<hermes::vm::PinnedHermesValue *>(value));
-
-  hermes::vm::GCScope gcScope(env->runtime);
 
   struct : public hermes::vm::Locals {
     hermes::vm::PinnedValue<hermes::vm::SymbolID> sym;
@@ -199,8 +191,6 @@ napi_status NAPI_CDECL napi_get_named_property(
 
   auto objHandle = hermes::vm::Handle<hermes::vm::JSObject>::vmcast(objPhv);
 
-  hermes::vm::GCScope gcScope(env->runtime);
-
   struct : public hermes::vm::Locals {
     hermes::vm::PinnedValue<hermes::vm::SymbolID> sym;
   } lv;
@@ -238,8 +228,6 @@ napi_status NAPI_CDECL napi_has_named_property(
       env, objPhv != nullptr && objPhv->isObject(), napi_object_expected);
 
   auto objHandle = hermes::vm::Handle<hermes::vm::JSObject>::vmcast(objPhv);
-
-  hermes::vm::GCScope gcScope(env->runtime);
 
   struct : public hermes::vm::Locals {
     hermes::vm::PinnedValue<hermes::vm::SymbolID> sym;
@@ -286,7 +274,6 @@ napi_status NAPI_CDECL napi_set_element(
 
   // Convert the uint32_t index to a HermesValue number for use as a
   // computed property key.
-  hermes::vm::GCScope gcScope(env->runtime);
   struct : public hermes::vm::Locals {
     hermes::vm::PinnedValue<> idx;
   } lv;
@@ -315,7 +302,6 @@ napi_status NAPI_CDECL napi_get_element(
 
   auto objHandle = hermes::vm::Handle<hermes::vm::JSObject>::vmcast(objPhv);
 
-  hermes::vm::GCScope gcScope(env->runtime);
   struct : public hermes::vm::Locals {
     hermes::vm::PinnedValue<> idx;
   } lv;
@@ -345,7 +331,6 @@ napi_status NAPI_CDECL napi_has_element(
 
   auto objHandle = hermes::vm::Handle<hermes::vm::JSObject>::vmcast(objPhv);
 
-  hermes::vm::GCScope gcScope(env->runtime);
   struct : public hermes::vm::Locals {
     hermes::vm::PinnedValue<> idx;
   } lv;
@@ -374,7 +359,6 @@ napi_status NAPI_CDECL napi_delete_element(
 
   auto objHandle = hermes::vm::Handle<hermes::vm::JSObject>::vmcast(objPhv);
 
-  hermes::vm::GCScope gcScope(env->runtime);
   struct : public hermes::vm::Locals {
     hermes::vm::PinnedValue<> idx;
   } lv;
@@ -441,7 +425,6 @@ napi_status NAPI_CDECL napi_get_all_property_names(
       (key_filter &
        (napi_key_writable | napi_key_enumerable | napi_key_configurable)) != 0;
 
-  hermes::vm::GCScope gcScope(env->runtime);
   struct : public hermes::vm::Locals {
     hermes::vm::PinnedValue<hermes::vm::JSArray> resultArray;
     hermes::vm::PinnedValue<hermes::vm::JSObject> curObj;
@@ -471,12 +454,9 @@ napi_status NAPI_CDECL napi_get_all_property_names(
   bool needDedup = false;
 
   lv.curObj = hermes::vm::vmcast<hermes::vm::JSObject>(*objPhv);
-  auto marker = gcScope.createMarker();
 
   // Walk the object (and optionally its prototype chain).
   for (;;) {
-    gcScope.flushToMarker(marker);
-
     auto keysRes = hermes::vm::JSObject::getOwnPropertyKeys(
         lv.curObj, env->runtime, okFlags);
     if (LLVM_UNLIKELY(keysRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -487,9 +467,7 @@ napi_status NAPI_CDECL napi_get_all_property_names(
     uint32_t len =
         hermes::vm::JSArray::getLength(lv.keysArray.get(), env->runtime);
 
-    auto innerMarker = gcScope.createMarker();
     for (uint32_t i = 0; i < len; ++i) {
-      gcScope.flushToMarker(innerMarker);
       hermes::vm::HermesValue elem =
           lv.keysArray->at(env->runtime, i).unboxToHV(env->runtime);
 
@@ -642,7 +620,6 @@ napi_status NAPI_CDECL napi_has_own_property(
 
   // Use getOwnComputedDescriptor to check if the property exists on
   // the object itself (no prototype chain traversal).
-  hermes::vm::GCScope gcScope(env->runtime);
   hermes::vm::ComputedPropertyDescriptor desc;
   auto hasRes = hermes::vm::JSObject::getOwnComputedDescriptor(
       objHandle, env->runtime, keyHandle, desc);
@@ -668,7 +645,6 @@ napi_get_prototype(napi_env env, napi_value object, napi_value *result) {
   // Use getPrototypeOf which is the proxy-aware version.
   // It returns a null JSObject pointer (not a null JS value) if
   // there is no prototype.
-  hermes::vm::GCScope gcScope(env->runtime);
   auto protoRes = hermes::vm::JSObject::getPrototypeOf(
       hermes::vm::createPseudoHandle(*objHandle), env->runtime);
   if (LLVM_UNLIKELY(protoRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -694,7 +670,7 @@ napi_get_prototype(napi_env env, napi_value object, napi_value *result) {
 /// Helper: create a NativeFunction wrapping a napi_callback for use as
 /// a method, getter, or setter in napi_define_properties and
 /// napi_define_class. The callback bundle is stored in the env's deque
-/// for lifetime management. Requires an active GCScope.
+/// for lifetime management.
 napi_status createNapiNativeFunction(
     napi_env env,
     napi_callback cb,
@@ -778,14 +754,10 @@ napi_status NAPI_CDECL napi_define_properties(
     PinnedValue<SymbolID> propSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
-  GCScope gcScope(runtime);
-  auto marker = gcScope.createMarker();
 
   auto objHandle = Handle<JSObject>::vmcast(objPhv);
 
   for (size_t i = 0; i < property_count; ++i) {
-    gcScope.flushToMarker(marker);
-
     const napi_property_descriptor *p = &properties[i];
 
     // Resolve the property key. Either utf8name (C string) or name
@@ -928,7 +900,6 @@ napi_status NAPI_CDECL napi_object_freeze(napi_env env, napi_value object) {
 
   using namespace hermes::vm;
   Runtime &runtime = env->runtime;
-  GCScope gcScope(runtime);
 
   auto objHandle = Handle<JSObject>::vmcast(objPhv);
   auto status = JSObject::freeze(objHandle, runtime);
@@ -948,7 +919,6 @@ napi_status NAPI_CDECL napi_object_seal(napi_env env, napi_value object) {
 
   using namespace hermes::vm;
   Runtime &runtime = env->runtime;
-  GCScope gcScope(runtime);
 
   auto objHandle = Handle<JSObject>::vmcast(objPhv);
   auto status = JSObject::seal(objHandle, runtime);

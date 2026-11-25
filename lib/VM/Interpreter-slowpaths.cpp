@@ -69,7 +69,6 @@ ExecutionStatus Interpreter::caseCreateClass(
     Runtime &runtime,
     PinnedHermesValue *frameRegs) {
   const Inst *ip = runtime.getCurrentIP();
-  GCScopeMarkerRAII mark{runtime};
   struct : public Locals {
     PinnedValue<Domain> domain;
   } lv;
@@ -201,8 +200,6 @@ ExecutionStatus Interpreter::caseDirectEval(
     *result = *evalText;
     return ExecutionStatus::RETURNED;
   }
-
-  GCScopeMarkerRAII gcMarker{runtime};
 
   auto cr = vm::directEval(
       runtime,
@@ -354,7 +351,6 @@ ExecutionStatus Interpreter::caseIteratorBegin(
       }
     }
   }
-  GCScopeMarkerRAII marker{runtime};
   struct : public Locals {
     UncheckedIteratorRecordStorage iterStorage;
   } lv;
@@ -403,7 +399,6 @@ ExecutionStatus Interpreter::caseIteratorNext(
       }
     }
     // Slow path, just run the full getComputedPropertyValue_RJS path.
-    GCScopeMarkerRAII marker{runtime};
     Handle<> idxHandle{&O2REG(IteratorNext)};
     CallResult<PseudoHandle<>> valueRes =
         JSObject::getComputed_RJS(arr, runtime, idxHandle);
@@ -424,7 +419,6 @@ ExecutionStatus Interpreter::caseIteratorNext(
     return runtime.raiseTypeError("'next' method on iterator must be callable");
   }
 
-  GCScopeMarkerRAII marker{runtime};
   struct : public Locals {
     PinnedValue<JSObject> resultObj;
   } lv;
@@ -617,8 +611,6 @@ PseudoHandle<JSRegExp> Interpreter::createRegExp(
     SymbolID patternID,
     SymbolID flagsID,
     uint32_t regexpID) {
-  GCScopeMarkerRAII marker{runtime};
-
   struct : public Locals {
     PinnedValue<JSRegExp> re;
     PinnedValue<StringPrimitive> pattern;
@@ -978,7 +970,6 @@ CallResult<HermesValue> Interpreter::createThisImpl(
       lv.newTargetPrototype = runtime.objectPrototype;
     }
   } else {
-    GCScopeMarkerRAII marker{runtime};
     auto newTargetProtoRes = JSObject::getNamed_RJS(
         lv.newTarget,
         runtime,
@@ -1055,7 +1046,6 @@ ExecutionStatus Interpreter::declareGlobalVarImpl(
     Runtime &runtime,
     CodeBlock *curCodeBlock,
     const Inst *ip) {
-  GCScopeMarkerRAII mark{runtime};
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.configurable = 0;
   // Do not overwrite existing globals with undefined.

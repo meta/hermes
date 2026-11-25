@@ -44,9 +44,6 @@ napi_status NAPI_CDECL napi_type_tag_object(
         env, !existing || !existing->hasTypeTag, napi_invalid_arg);
   }
 
-  Runtime &runtime = env->runtime;
-  GCScope gcScope(runtime);
-
   auto objHandle = Handle<JSObject>::vmcast(phv);
 
   NapiObjectData *napiData = nullptr;

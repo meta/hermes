@@ -107,7 +107,6 @@ TEST_F(NapiModuleLoadTest, LoadTestAddon) {
 
   // Verify the "hello" property is set to "world".
   {
-    vm::GCScope gcScope(*rt_);
     struct : public vm::Locals {
       vm::PinnedValue<vm::JSObject> obj;
     } lv;

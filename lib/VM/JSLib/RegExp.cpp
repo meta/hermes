@@ -783,8 +783,7 @@ static CallResult<PseudoHandle<JSObject>> buildGroupsObject(
   //
   // Calling defineNewOwnProperty inside HiddenClass::forEachPropertyWhile is
   // safe: it only touches groupsObj's class chain (independent from
-  // lv.clazz), and forEachPropertyWhile flushes the GCScope after each
-  // callback so handle counts stay bounded.
+  // lv.clazz).
   lv.groupsObj =
       JSObject::create(runtime, Runtime::makeNullHandle<JSObject>()).get();
   ExecutionStatus status = ExecutionStatus::RETURNED;
@@ -968,8 +967,6 @@ static CallResult<bool> regExpBuiltinExecMatch(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  GCScope gcScope{runtime};
-
   // Let length be the number of code units in S.
   const uint32_t length = S->getStringLength();
 
@@ -1080,8 +1077,6 @@ ExecutionStatus directRegExpExec(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  GCScope gcScope{runtime};
-
   RegExpMatch match;
   auto matchRes = regExpBuiltinExecMatch(regexp, runtime, S, match);
   if (LLVM_UNLIKELY(matchRes == ExecutionStatus::EXCEPTION))
@@ -1130,9 +1125,7 @@ ExecutionStatus directRegExpExec(
 
   // Set capture groups (including the initial full match)
   size_t idx = 0;
-  auto marker = gcScope.createMarker();
   for (const auto &mg : match) {
-    gcScope.flushToMarker(marker);
     if (!mg) {
       // Match groups that did not match anything become undefined.
       if (LLVM_UNLIKELY(
@@ -1776,7 +1769,6 @@ CallResult<HermesValue> regExpPrototypeSymbolMatchAll(
     void *,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   struct : public Locals {
     PinnedValue<StringPrimitive> S;
@@ -2029,7 +2021,6 @@ CallResult<HermesValue> regExpPrototypeSymbolMatch(void *, Runtime &runtime) {
   LocalsRAII lraii(runtime, &lv);
 
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   // 1. Let rx be the this value.
   Handle<JSObject> rx = args.dyncastThis<JSObject>();
@@ -2090,10 +2081,8 @@ CallResult<HermesValue> regExpPrototypeSymbolMatch(void *, Runtime &runtime) {
   const bool fast = hasBuiltinExec(runtime, rx);
 
   // g. Repeat,
-  auto marker = gcScope.createMarker();
   RegExpMatch match;
   while (true) {
-    gcScope.flushToMarker(marker);
     // i. Let result be RegExpExec(rx, S).
     // ii. ReturnIfAbrupt(result).
     auto matchedRes =
@@ -2169,7 +2158,6 @@ CallResult<HermesValue> regExpPrototypeSymbolSearch(void *, Runtime &runtime) {
   LocalsRAII lraii(runtime, &lv);
 
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   // 1. Let rx be the this value.
   // 2. If Type(rx) is not Object, throw a TypeError exception.
@@ -2407,7 +2395,6 @@ static ExecutionStatus replaceBuiltinMatch(
   lv.captures.castAndSetHermesValue<ArrayStorageSmall>(*capturesRes);
   MutableHandle<ArrayStorageSmall> captures{lv.captures};
   for (uint32_t n = 1; n <= nCaptures; ++n) {
-    GCScopeMarkerRAII marker{runtime};
     if (!match[n]) {
       lv.capN = HermesValue::encodeUndefinedValue();
     } else {
@@ -2472,7 +2459,6 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
   LocalsRAII lraii(runtime, &lv);
 
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   // 1. Let rx be the this value.
   // 2. If Type(rx) is not Object, throw a TypeError exception.
@@ -2558,7 +2544,6 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
   // 13. Repeat, while done is false
   auto stringView = StringPrimitive::createStringView(runtime, lv.S);
   while (true) {
-    GCScopeMarkerRAII marker{runtime};
     bool emptyMatch = false;
     // a. Let result be RegExpExec(rx, S).
     // b. ReturnIfAbrupt(result).
@@ -2630,7 +2615,6 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
   if (fast) {
     lv.groupNames = Handle<JSRegExp>::vmcast(rx)->getGroupNameMappings(runtime);
     for (size_t i = 0, e = fastMatches.size(); i < e; i += fastMatchStride) {
-      GCScopeMarkerRAII marker1{runtime};
       if (LLVM_UNLIKELY(
               replaceBuiltinMatch(
                   runtime,
@@ -2647,7 +2631,6 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
     }
   } else {
     for (uint32_t i = 0, size = resultsHandle->size(); i < size; ++i) {
-      GCScopeMarkerRAII marker1{runtime};
       lv.result = vmcast<JSObject>(resultsHandle->at(i).getObject(runtime));
       // a. Let nCaptures be ToLength(Get(result, "length")).
       // b. ReturnIfAbrupt(nCaptures).
@@ -2719,7 +2702,6 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
       MutableHandle<ArrayStorageSmall> capturesHandle{lv.capturesHandle};
       // l. Repeat while n ≤ nCaptures
       while (n <= nCaptures) {
-        GCScopeMarkerRAII marker2{runtime};
         // i. Let capN be Get(result, ToString(n)).
         // ii. ReturnIfAbrupt(capN).
         propRes = getIndexed_RJS(runtime, lv.result, n);
@@ -2793,7 +2775,6 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
 // TODO(T35212035): make this ES6 compliant once we support species constructor.
 CallResult<HermesValue> regExpPrototypeSymbolSplit(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  GCScope gcScope{runtime};
 
   struct : public Locals {
     PinnedValue<StringPrimitive> S;
@@ -2924,13 +2905,9 @@ CallResult<HermesValue> regExpPrototypeSymbolSplit(void *, Runtime &runtime) {
   // Place to attempt the start of the next match.
   uint32_t q = p;
 
-  auto marker = gcScope.createMarker();
-
   // 19. Repeat, while q < size
   // Main loop: continue while we have space to find another match.
   while (q < size) {
-    gcScope.flushToMarker(marker);
-
     // a. Perform ? Set(splitter, "lastIndex", q, true).
     // b. Let z be ? RegExpExec(splitter, S).
     // c. If z is null, set q to AdvanceStringIndex(S, q, unicodeMatching).
@@ -3013,7 +2990,6 @@ CallResult<HermesValue> regExpPrototypeSymbolSplit(void *, Runtime &runtime) {
       // 9. Repeat, while i <= numberOfCaptures.
       // Add all the capture groups to A. Start at i=1 to skip the full match.
       for (uint32_t i = 1, m = match.size(); i < m; ++i) {
-        GCScopeMarkerRAII captureMarker{runtime};
         // a. Let nextCapture be ? Get(z, ! ToString(i)).
         const auto &range = match[i];
         // b. Perform ! CreateDataPropertyOrThrow(A, ! ToString(lengthA),
