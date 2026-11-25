@@ -10,7 +10,7 @@ from stats import Metric
 
 def _assertNotIn(d, *keys):
     for key in keys:
-        assert key not in d, "Dictionary already contains '{}'" % key
+        assert key not in d, "Dictionary already contains '{}'".format(key)
 
 
 def _pct(num, denom):
@@ -119,15 +119,26 @@ def updateRuntimeStats(stats):
 
     INDIVIDUAL_ROOTS = [
         "Registers",
-        "RuntimeModules",
+        "Locals",
+        "SHLocals",
         "CharStrings",
         "IdentifierTable",
-        "GCScopes",
     ]
 
-    # We predict that several of the phases will make trivial contributions.  If
-    # that becomes false, we can expand them out into individual roots.
-    OTHER_ROOTS = ["RuntimeInstanceVars", "Prototypes", "DebugEnvironment", "Custom"]
+    # Every other root section the runtime reported (one MarkRoots_<Section>Time
+    # per entry of include/hermes/VM/RootSections.def) is summed as "other". We
+    # predict that they make trivial contributions; if that becomes false, move
+    # them to INDIVIDUAL_ROOTS.
+    prefix, suffix = "MarkRoots_", "Time"
+    OTHER_ROOTS = [
+        name
+        for name in (
+            k[len(prefix) : -len(suffix)]
+            for k in stats
+            if k.startswith(prefix) and k.endswith(suffix)
+        )
+        if name not in INDIVIDUAL_ROOTS
+    ]
 
     _assertNotIn(stats, *(key(root) + "Pct" for root in INDIVIDUAL_ROOTS))
     _assertNotIn(stats, "MarkRoots_otherTime", "MarkRoots_otherTimePct")
