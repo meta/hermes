@@ -2651,7 +2651,6 @@ CallResult<HermesValue> arrayPrototypeSlice(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   struct : Locals {
     PinnedValue<JSObject> O;
-    PinnedValue<> lenProp;
     PinnedValue<> k;
     PinnedValue<JSArray> A;
     PinnedValue<JSObject> descObj;
@@ -2667,13 +2666,11 @@ CallResult<HermesValue> arrayPrototypeSlice(void *, Runtime &runtime) {
   }
   lv.O.castAndSetHermesValue<JSObject>(*objRes);
 
-  auto propRes = JSObject::getNamed_RJS(
-      lv.O, runtime, Predefined::getSymbolID(Predefined::length));
-  if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  lv.lenProp = std::move(*propRes);
-  auto lenRes = toLengthU64(runtime, lv.lenProp);
+  // 2. Let len be ? LengthOfArrayLike(O).
+  // jsArr is O if it is a JSArray, and null otherwise.
+  auto jsArr = vmisa<JSArray>(*lv.O) ? Handle<JSArray>::vmcast(&lv.O)
+                                     : Runtime::makeNullHandle<JSArray>();
+  auto lenRes = lengthOfArrayLike(runtime, lv.O, jsArr);
   if (LLVM_UNLIKELY(lenRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -2712,6 +2709,48 @@ CallResult<HermesValue> arrayPrototypeSlice(void *, Runtime &runtime) {
   if (LLVM_UNLIKELY(count32 != count)) {
     return runtime.raiseRangeError("invalid array length");
   }
+
+  // Fast path for arrays that pass arrayFastPathCheck(): all elements of O
+  // are plain data properties stored at [0, len) of its indexed storage, and
+  // no object on its prototype chain has index-like properties. Then reading
+  // an element cannot run user code and a hole reads as absent, so [k, fin)
+  // can be copied directly from the storage, holes included. This must be
+  // checked after the ToIntegerOrInfinity() calls above, since they may run
+  // user code that modifies O. The copied values may share BoxedDoubles with
+  // O, which is fine because BoxedDoubles are immutable.
+  // Like the slow path, this does not implement ArraySpeciesCreate. If that
+  // is ever implemented, this path must also check that it would create a
+  // plain Array.
+  if (jsArr &&
+      arrayFastPathCheck(
+          runtime,
+          jsArr,
+          Runtime::makeNullHandle<HiddenClass>(),
+          static_cast<uint32_t>(len))) {
+    auto arrRes = JSArray::create(runtime, count32, 0);
+    if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    lv.A = std::move(*arrRes);
+    // An empty result has no storage to copy into.
+    if (count32 == 0)
+      return lv.A.getHermesValue();
+    // A is freshly created with the default class, so length is writable.
+    // May allocate, so encode before NoAllocScope.
+    auto newLen = SmallHermesValue::encodeNumberValue(count32, runtime);
+    NoAllocScope noAlloc{runtime};
+    // Read the storages only now, since the allocations above may move them.
+    auto *srcStorage = jsArr->getIndexedStorageNullable(runtime);
+    auto *destStorage = lv.A->getIndexedStorageNullable(runtime);
+    assert(srcStorage && destStorage && "storage must not be null");
+    uint32_t from = static_cast<uint32_t>(k);
+    destStorage->appendWithinCapacity(
+        runtime, srcStorage, from, from + count32);
+    lv.A->setElemCountUnsafe(count32);
+    JSArray::putLengthUnsafe(lv.A.get(), runtime, newLen);
+    return lv.A.getHermesValue();
+  }
+
   auto arrRes = JSArray::create(runtime, count, count);
   if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -2724,7 +2763,6 @@ CallResult<HermesValue> arrayPrototypeSlice(void *, Runtime &runtime) {
   auto marker = gcScope.createMarker();
 
   // Copy the elements between the actual start and end indices into A.
-  // TODO: Implement a fast path for actual arrays.
   while (k < fin) {
     lv.k = HermesValue::encodeTrustedNumberValue(k);
     ComputedPropertyDescWithSymStorage desc{lv.tmpPropNameStorage};

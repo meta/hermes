@@ -185,6 +185,64 @@ TEST_F(ArrayStorageTest, AppendExactCapacityTest) {
   EXPECT_EQ(4, lv.fastDstStorage->at(3).getNumber(runtime));
 }
 
+/// Append a sub-range of one storage to another with appendWithinCapacity. The
+/// destination is long-lived, so the copied pointer to a young object needs a
+/// write barrier to be updated when the GC moves the object.
+TEST_F(ArrayStorageTest, AppendRangeWithinCapacityTest) {
+  using StorageType = ArrayStorageSmall;
+  using HVType = SmallHermesValue;
+
+  struct : Locals {
+    PinnedValue<StorageType> src;
+    PinnedValue<StorageType> dst;
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  // src = [0, empty, obj, 3, 4].
+  lv.src.castAndSetHermesValue<StorageType>(*StorageType::create(runtime, 5));
+  lv.obj = JSObject::create(runtime);
+  auto v0 = HVType::encodeNumberValue(0, runtime);
+  lv.src->pushWithinCapacity(runtime, v0);
+  lv.src->pushWithinCapacity(runtime, HVType::encodeEmptyValue());
+  auto vObj = HVType::encodeObjectValue(lv.obj.get(), runtime);
+  lv.src->pushWithinCapacity(runtime, vObj);
+  auto v3 = HVType::encodeNumberValue(3, runtime);
+  lv.src->pushWithinCapacity(runtime, v3);
+  auto v4 = HVType::encodeNumberValue(4, runtime);
+  lv.src->pushWithinCapacity(runtime, v4);
+
+  // dst = [9], with capacity for 4 elements.
+  lv.dst.castAndSetHermesValue<StorageType>(
+      *StorageType::createLongLived(runtime, 4));
+  auto v9 = HVType::encodeNumberValue(9, runtime);
+  lv.dst->pushWithinCapacity(runtime, v9);
+
+  // An empty range appends nothing.
+  lv.dst->appendWithinCapacity(runtime, lv.src.get(), 2, 2);
+  EXPECT_EQ(1u, lv.dst->size());
+
+  // Append [1, 4).
+  lv.dst->appendWithinCapacity(runtime, lv.src.get(), 1, 4);
+  ASSERT_EQ(4u, lv.dst->size());
+
+  // Move the object.
+  runtime.collect("test");
+
+  EXPECT_EQ(9, lv.dst->at(0).getNumber(runtime));
+  EXPECT_TRUE(lv.dst->at(1).isEmpty());
+  EXPECT_EQ(lv.obj.get(), lv.dst->at(2).getObject(runtime));
+  EXPECT_EQ(3, lv.dst->at(3).getNumber(runtime));
+
+  // The source is unchanged.
+  ASSERT_EQ(5u, lv.src->size());
+  EXPECT_EQ(0, lv.src->at(0).getNumber(runtime));
+  EXPECT_TRUE(lv.src->at(1).isEmpty());
+  EXPECT_EQ(lv.obj.get(), lv.src->at(2).getObject(runtime));
+  EXPECT_EQ(3, lv.src->at(3).getNumber(runtime));
+  EXPECT_EQ(4, lv.src->at(4).getNumber(runtime));
+}
+
 // ArrayStorage trimming is disabled for now. In the future, we may consider
 // re-enabling it only for specific ArrayStorages (e.g. property storage).
 TEST_F(ArrayStorageTest, DISABLED_AllowTrimming) {

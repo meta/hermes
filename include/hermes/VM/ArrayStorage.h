@@ -265,12 +265,25 @@ class ArrayStorageBase final : public VariableSizeRuntimeCell,
       Runtime &runtime,
       ArrayStorageBase *other,
       size_type fromIndex = 0) {
-    size_t sz = size(), otherSz = other->size();
-    assert(fromIndex <= otherSz && "fromIndex out of range");
-    size_t copyLen = otherSz - fromIndex;
+    appendWithinCapacity(runtime, other, fromIndex, other->size());
+  }
+
+  /// Append the elements of the given ArrayStorage \p other in the range
+  /// [\p fromIndex, \p toIndex) to this ArrayStorage, where we know that there
+  /// is no need to allocate additional capacity.
+  void appendWithinCapacity(
+      Runtime &runtime,
+      ArrayStorageBase *other,
+      size_type fromIndex,
+      size_type toIndex) {
+    size_t sz = size();
+    assert(
+        fromIndex <= toIndex && toIndex <= other->size() &&
+        "range out of bounds");
+    size_t copyLen = toIndex - fromIndex;
     assert(sz + copyLen <= capacity() && "Insufficient capacity");
     auto *fromStart = other->data() + fromIndex;
-    auto *fromEnd = other->data() + otherSz;
+    auto *fromEnd = other->data() + toIndex;
     GCHVType::uninitialized_copy(
         fromStart, fromEnd, data() + sz, this, runtime.getHeap());
     size_.store(sz + copyLen, std::memory_order_release);
