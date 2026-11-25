@@ -198,7 +198,7 @@ class ArrayStorageBase final : public VariableSizeRuntimeCell,
 
   /// Append the given element to the end, where we know that there is no need
   /// to allocate additional capacity. This is more efficient than push_back,
-  /// since the caller does not need to allocate a handle for the ArrayStorage,
+  /// since the caller does not need to pin the ArrayStorage,
   /// check for exceptions, or write back the resulting pointer in case it
   /// moves.
   void pushWithinCapacity(Runtime &runtime, HVType value) {
@@ -258,9 +258,8 @@ class ArrayStorageBase final : public VariableSizeRuntimeCell,
   /// Append the contents of the given ArrayStorage \p other starting at
   /// index \p fromIndex to this ArrayStorage, where we know that there is no
   /// need to allocate additional capacity. This is more efficient than
-  /// append, since the caller does not need to allocate a handle for the
-  /// ArrayStorage, check for exceptions, or write back the resulting pointer
-  /// in case it moves.
+  /// append, since the caller does not need to pin the ArrayStorage, check
+  /// for exceptions, or write back the resulting pointer in case it moves.
   void appendWithinCapacity(
       Runtime &runtime,
       ArrayStorageBase *other,

@@ -426,17 +426,6 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   /// Potentially move the heap if handle sanitization is on.
   void potentiallyMoveHeap();
 
-  using HandleRootOwner::makeHandle;
-  using HandleRootOwner::makeMutableHandle;
-
-  /// Convenience function to create a Handle from a GCPointer.
-  template <class T>
-  inline Handle<T> makeHandle(const GCPointer<T> &p);
-
-  /// Convenience function to create a MutableHandle from a GCPointer.
-  template <class T>
-  MutableHandle<T> makeMutableHandle(const GCPointer<T> &p);
-
   /// \return the \c StringPrimitive of a predefined string.
   StringPrimitive *getPredefinedString(Predefined::Str predefined);
   StringPrimitive *getPredefinedString(Predefined::Sym predefined);
@@ -1355,8 +1344,6 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   /// bit values, typically 1 as test and 0 as control.
   experiments::VMExperimentFlags vmExperimentFlags_{experiments::Default};
 
-  friend class GCScope;
-  friend class HandleBase;
   friend class Interpreter;
   friend class RuntimeModule;
   friend class MarkRootsPhaseTimer;
@@ -1788,8 +1775,8 @@ static_assert(
     "XorPtr must be trivial");
 
 /// Base for a stack allocated container for HermesValues, which are tracked by
-/// the GC. This allows us to reference GC managed values without incurring the
-/// dynamic allocation overhead of GCScope.
+/// the GC. This allows us to reference GC managed values without any dynamic
+/// allocation.
 struct Locals {
   /// Number of trailing values that need to be marked.
   uint32_t numLocals;
@@ -2304,16 +2291,6 @@ inline void Runtime::ignoreAllocationFailure(ExecutionStatus status) {
 inline void Runtime::ttiReached() {
   // Currently, only the heap_ behavior can change at TTI.
   getHeap().ttiReached();
-}
-
-template <class T>
-inline Handle<T> Runtime::makeHandle(const GCPointer<T> &p) {
-  return Handle<T>(*this, p.get(*this));
-}
-
-template <class T>
-inline MutableHandle<T> Runtime::makeMutableHandle(const GCPointer<T> &p) {
-  return MutableHandle<T>(*this, p.get(*this));
 }
 
 inline StringPrimitive *Runtime::getPredefinedString(

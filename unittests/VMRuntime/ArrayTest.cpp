@@ -23,7 +23,6 @@ TEST_F(ArrayTest, CppAPITest) {
     PinnedValue<> val;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  // We allocate a lot of handles in row.
 
   auto arrayRes = JSArray::create(runtime, 1, 0);
   ASSERT_FALSE(isException(arrayRes));

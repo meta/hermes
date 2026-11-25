@@ -661,8 +661,6 @@ objectDefinePropertiesInternal(Runtime &runtime, Handle<> obj, Handle<> props) {
   }
   lv.propNames = std::move(*cr);
 
-  // This function may create an unbounded number of GC handles.
-
   // Iterate through every identifier, get the property descriptor
   // object, and store it in a list, according to Step 5.  What the
   // spec describes is a pair is represented in NewProps, which has

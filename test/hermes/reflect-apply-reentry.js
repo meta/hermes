@@ -10,9 +10,7 @@
 // RUN: %shermes -exec %s | %FileCheck --match-full-lines %s
 
 // Re-entry through native frames only: every level is Reflect.apply bound to
-// a native iteration method, whose callback is the next level. The handles
-// that Reflect.apply allocates must not pile up in the shared GCScope (Debug
-// builds assert on too many handles in one scope).
+// a native iteration method, whose callback is the next level.
 
 print('reflect apply reentry');
 // CHECK-LABEL: reflect apply reentry

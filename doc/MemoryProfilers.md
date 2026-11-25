@@ -215,12 +215,14 @@ some things that can retain objects:
 The most important ones are:
 
 * `(Registers)`: all local variables on the JS stack
+* `(Locals)`: values pinned in `Locals` structs by native code inside Hermes
+(the native-code analogue of `(Registers)`)
+* `(SHLocals)`: values held in locals by Static Hermes compiled code
 * `(IdentifierTable)`: a table of strings used as object properties and symbol
 descriptions
-* `(GCScopes)`: the equivalent of the `(Registers)` group for native code inside
-the Hermes engine. These hold onto JS values currently in use by native code
-* `(Prototypes)`: lists of prototypes and constructors of system objects like
-`Function` and array iterators
+* `(RuntimeFields)`: objects referenced directly by fields of the runtime, such
+as the prototypes and constructors of system objects like `Function` and array
+iterators
 * `(Custom)`: these are any roots created by native code outside of Hermes. In
 the case of any embedder using JSI (such as React Native), this corresponds to
 the `jsi::Value`s being used

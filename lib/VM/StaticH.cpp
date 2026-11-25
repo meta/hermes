@@ -781,20 +781,6 @@ static inline void putById_RJS(
     auto *obj = vmcast<JSObject>(*target);
 
     // #ifdef HERMESVM_PROFILER_BB
-#if 0
-    {
-      auto shvHandle = runtime.makeHandle(shv.toHV(runtime));
-      auto cacheHCPtr = vmcast_or_null<HiddenClass>(static_cast<GCCell *>(
-          cacheEntry->clazz.get(runtime, runtime.getHeap())));
-      CAPTURE_IP(runtime.recordHiddenClass(
-          curCodeBlock, ip, ID(idVal), obj->getClass(runtime), cacheHCPtr));
-      // shv/obj may be invalidated by recordHiddenClass
-      if (shv.isPointer())
-        shv.unsafeUpdatePointer(
-            static_cast<GCCell *>(shvHandle->getPointer()), runtime);
-      obj = vmcast<JSObject>(*target);
-    }
-#endif
     CompressedPointer clazzPtr{obj->getClassGCPtr()};
     // If we have a cache hit, reuse the cached offset and immediately
     // return the property.

@@ -21,7 +21,6 @@ set(source_files
   FastArray.cpp
   GCBase.cpp
   OrderedHashMap.cpp
-  HandleRootOwner.cpp
   HeapSnapshot.cpp
   HermesValue.cpp
   HiddenClass.cpp

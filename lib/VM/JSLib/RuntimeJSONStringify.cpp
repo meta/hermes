@@ -52,8 +52,8 @@ class JSONStringifyer {
     /// `value_` for recursions.
     PinnedValue<PropStorage> stackValue;
 
-    /// A temporary handle, to avoid creating new handles when a temporary one
-    /// is needed.
+    /// A temporary handle, to avoid needing extra pinned slots when a
+    /// temporary one is needed.
     /// Note: this should be used with care because it can be shared among
     /// functions.
     PinnedValue<> tmpHandle;
@@ -62,7 +62,7 @@ class JSONStringifyer {
     PinnedValue<> operationStrValue;
 
     /// The holder argument passed to operationStr.
-    /// We define a member variable here to avoid creating a new handle
+    /// We define a member variable here to avoid needing an extra pinned slot
     /// each time we are calling operationStr.
     PinnedValue<JSObject> operationStrHolder;
   } lv_;

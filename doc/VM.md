@@ -115,19 +115,15 @@ they are moved if a collection occurs in between two successive accesses.
 So, to ensure correctness in the VM,
 use the handles instead of passing raw `HermesValue` between functions.
 
-A `GCScope` is used to keep track of all the current `HermesValue` handles.
-Any `GCScope` must be constructed on the stack,
-whence it tracks any scoped handles that are used until it falls out of scope.
-The `GCScope` allocates space in chunks,
-and when it is destroyed (falls out of scope) it frees any chunks it allocated.
-The `GCScope` is used to internally generate `PinnedHermesValue`s,
-which are then stored in `Handle<>` and `Handle<T>`.
+Values are rooted by storing them in `PinnedValue<T>` fields of a stack
+allocated `Locals` struct, which the garbage collector marks as roots.
+A `Handle<T>` is a view of such a `PinnedHermesValue`.
 
 We also provide `PseudoHandle<T>` classes which are explicitly *not* handles.
 These are used to be explicit about storage of raw pointers and `HermesValue`.
 `PseudoHandle` should be used as an argument in place of a raw pointer to
 functions which may want to turn that argument into a `Handle`,
-but in which it's not necessary to *always* incur the cost of handle allocation.
+but in which it's not necessary to *always* incur the cost of pinning the value.
 `PseudoHandle` also does not have a copy constructor,
 and moving out of one invalidates it.
 This prevents the reuse of `PseudoHandle` after an allocating function call.

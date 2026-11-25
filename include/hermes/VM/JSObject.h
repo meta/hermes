@@ -567,10 +567,10 @@ class JSObject : public GCCell {
       JSObject *parent,
       PropOpFlags opFlags = PropOpFlags());
 
-  /// This is the proxy-aware version of getParent.  It has to
-  /// allocate handles, so it's neither as simple or efficient as
-  /// getParent, but it's needed.  If selfHandle has no parent, this
-  /// will return a null JSObject (not a null value).
+  /// This is the proxy-aware version of getParent.  It may run proxy
+  /// traps, so it's neither as simple or efficient as getParent, but
+  /// it's needed.  If selfHandle has no parent, this will return a null
+  /// JSObject (not a null value).
   static CallResult<PseudoHandle<JSObject>> getPrototypeOf(
       PseudoHandle<JSObject> selfHandle,
       Runtime &runtime);

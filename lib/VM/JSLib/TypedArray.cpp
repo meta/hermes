@@ -1788,7 +1788,7 @@ CallResult<HermesValue> typedArrayPrototypeMapFilter(
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
-  // Can't use a vector since this could store an unbounded number of handles.
+  // Can't use a vector since this could store an unbounded number of values.
   auto arrRes = JSArray::create(runtime, len, 0);
   if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -1897,34 +1897,31 @@ CallResult<HermesValue> typedArrayPrototypeJoin(void *, Runtime &runtime) {
   lv.strings = std::move(*arrRes);
 
   // Call toString on all the elements of the array.
-  {
-    // Make sure to drop the Handle early, it's not needed outside of the loop.
-    for (decltype(len) i = 0; i < len; ++i) {
-      lv.elem =
-          JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
+  for (decltype(len) i = 0; i < len; ++i) {
+    lv.elem =
+        JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
 
-      if (LLVM_UNLIKELY(lv.elem->isUndefined())) {
-        lv.elem = HermesValue::encodeStringValue(
-            runtime.getPredefinedString(Predefined::emptyString));
-      } else {
-        auto res2 = toString_RJS(runtime, lv.elem);
-        if (LLVM_UNLIKELY(res2 == ExecutionStatus::EXCEPTION)) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        lv.elem = std::move(*res2);
-      }
-      auto stringPtr = vmcast<StringPrimitive>(lv.elem.getHermesValue());
-      size.add(stringPtr->getStringLength());
-      allASCII &= stringPtr->isASCII();
-      if (LLVM_UNLIKELY(
-              JSArray::setElementAt(
-                  lv.strings,
-                  runtime,
-                  i,
-                  Handle<StringPrimitive>::vmcast(&lv.elem)) ==
-              ExecutionStatus::EXCEPTION))
+    if (LLVM_UNLIKELY(lv.elem->isUndefined())) {
+      lv.elem = HermesValue::encodeStringValue(
+          runtime.getPredefinedString(Predefined::emptyString));
+    } else {
+      auto res2 = toString_RJS(runtime, lv.elem);
+      if (LLVM_UNLIKELY(res2 == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
+      }
+      lv.elem = std::move(*res2);
     }
+    auto stringPtr = vmcast<StringPrimitive>(lv.elem.getHermesValue());
+    size.add(stringPtr->getStringLength());
+    allASCII &= stringPtr->isASCII();
+    if (LLVM_UNLIKELY(
+            JSArray::setElementAt(
+                lv.strings,
+                runtime,
+                i,
+                Handle<StringPrimitive>::vmcast(&lv.elem)) ==
+            ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
   }
 
   // Allocate the complete result.

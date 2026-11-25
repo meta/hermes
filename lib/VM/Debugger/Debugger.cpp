@@ -585,9 +585,6 @@ auto Debugger::getCallFrameInfo(const CodeBlock *codeBlock, uint32_t ipOffset)
   if (!codeBlock) {
     frameInfo.functionName = "(native)";
   } else {
-    // The caller doesn't expect that this function is allocating new handles,
-    // so make sure we aren't.
-
     struct : public Locals {
       PinnedValue<StringPrimitive> nameStr;
     } lv;

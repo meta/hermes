@@ -614,9 +614,7 @@ delete Array.prototype[1];
 
 // Re-entry through native frames only: every level is a forEach bound to a
 // one-element holey array, so every level takes the generic lookup (a
-// prototype getter or a Proxy prototype) while the outer levels wait. The
-// handles of the outer lookups must not pile up in the shared GCScope (Debug
-// builds assert on too many handles in one scope).
+// prototype getter or a Proxy prototype) while the outer levels wait.
 var getterCalls = 0;
 Object.defineProperty(Array.prototype, 0, {
   get: function () {

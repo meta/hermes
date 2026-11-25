@@ -104,7 +104,6 @@ void DummyRuntime::markRoots(RootAcceptorWithNames &acceptor, bool) {
   // DummyRuntime doesn't care what root section it is, but it needs one for
   // snapshot tests.
   acceptor.beginRootSection(RootAcceptor::Section::Custom);
-  markGCScopes(acceptor);
   for (Locals *locals = vmLocals; locals; locals = locals->prev)
     for (size_t i = 0, e = locals->numLocals; i < e; ++i)
       acceptor.acceptNullable(locals->locals()[i]);

@@ -32,43 +32,6 @@ inline PseudoHandle<T> PseudoHandle<T>::dyn_vmcast(PseudoHandle<U> &&other) {
   return result;
 }
 
-/// Allocate a new handle in the current GCScope
-inline HandleBase::HandleBase(HandleRootOwner &runtime, HermesValue value)
-    : handle_(runtime.newPinnedHermesValue(value)) {
-#ifndef NDEBUG
-  gcScope_ = runtime.getTopGCScope();
-  ++gcScope_->numActiveHandles_;
-#endif
-}
-
-#ifndef NDEBUG
-inline HandleBase::HandleBase(const HandleBase &sc) : handle_(sc.handle_) {
-  gcScope_ = sc.gcScope_;
-  if (gcScope_) {
-    ++gcScope_->numActiveHandles_;
-  }
-}
-#endif
-
-#ifndef NDEBUG
-inline HandleBase::~HandleBase() {
-  if (gcScope_) {
-    --gcScope_->numActiveHandles_;
-  }
-}
-#endif
-
-#ifndef NDEBUG
-inline HandleBase &HandleBase::operator=(const HandleBase &other) {
-  if (gcScope_)
-    --gcScope_->numActiveHandles_;
-  if ((gcScope_ = other.gcScope_) != nullptr)
-    ++gcScope_->numActiveHandles_;
-  handle_ = other.handle_;
-  return *this;
-}
-#endif
-
 template <typename T>
 template <typename U>
 inline Handle<T> Handle<T>::dyn_vmcast(const Handle<U> &other) {

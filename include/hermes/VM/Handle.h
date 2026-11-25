@@ -20,8 +20,6 @@ namespace hermes {
 namespace vm {
 
 // Forward declarations.
-class GCScope;
-class HandleRootOwner;
 template <typename T = HermesValue>
 class Handle;
 template <typename T = HermesValue>
@@ -60,17 +58,20 @@ struct HermesValueCast<T, false> {
 /// This class is used in performance-sensitive context in situations where we
 /// want to encode in the function signature that allocations may be performed,
 /// potentially moving the object, but we don't want to incur the cost of
-/// always allocating a handle. The callee will allocate a handle internally if
-/// it needs to.
+/// always rooting the value. The callee will pin it internally if it needs to.
 ///
 /// For example:
 /// \code
 ///   bool checkFlag(PseudoHandle<Foo> foo, Runtime &runtime) {
 ///     if (foo->cheapCheck())
 ///       return true;
-///     auto fooHandle = runtime.makeHandle(std::move(foo));
-///     return expensiveCheck(fooHandle, runtime);
-///  }
+///     struct : public Locals {
+///       PinnedValue<Foo> foo;
+///     } lv;
+///     LocalsRAII lraii(runtime, &lv);
+///     lv.foo = std::move(foo);
+///     return expensiveCheck(lv.foo, runtime);
+///   }
 /// \endcode
 template <typename T = HermesValue>
 class PseudoHandle {
@@ -318,82 +319,49 @@ class PinnedValue<SmallHermesValue> : private PinnedHermesValue {
   }
 };
 
-/// A HermesValue in the current GCScope which is trackable by the GC and will
-/// be correctly marked and updated if objects are moved. The value is valid
-/// while the owning GCScope object is alive.
+/// A view of a PinnedHermesValue, which is trackable by the GC and will be
+/// correctly marked and updated if objects are moved. The value is valid while
+/// the viewed location is alive.
 /// This is a very lightweight class: copies are very cheap (just copying a
-/// register); construction is also relatively cheap (in the common case a
-/// comparison and increment).
+/// register).
 /// This is the base object factoring out common code from the type-specific
 /// versions.
 class HandleBase {
   template <typename U>
   friend class MutableHandle;
-#ifndef NDEBUG
-  /// In debug mode we store the GCScope that created us so we can update its
-  /// active handle count in our destructor.
-  GCScope *gcScope_;
-#endif
-
   /// Pointer to the location where the actual value is stored. That location
   /// is automatically updated by the garbage collector if necessary.
   PinnedHermesValue *handle_;
 
  protected:
-#ifndef NDEBUG
-  HandleBase &operator=(const HandleBase &other);
-#else
   HandleBase &operator=(const HandleBase &other) = default;
-#endif
 
   PinnedHermesValue *&handleRef() {
 #ifdef HERMES_SLOW_DEBUG
-    assert(!handle_->isInvalid() && "Reading from flushed handle");
+    assert(
+        !handle_->isInvalid() &&
+        "Reading an invalid HermesValue through a handle");
 #endif
     return handle_;
   }
   const PinnedHermesValue *handleRef() const {
 #ifdef HERMES_SLOW_DEBUG
-    assert(!handle_->isInvalid() && "Reading from flushed handle");
+    assert(
+        !handle_->isInvalid() &&
+        "Reading an invalid HermesValue through a handle");
 #endif
     return handle_;
   }
 
  public:
-  /// Allocate a new handle in the current GCScope
-  explicit HandleBase(
-      HandleRootOwner &runtime,
-      HermesValue value = HermesValue::encodeUndefinedValue());
-
-  /// Create a Handle aliasing a non-movable HermesValue without
-  /// allocating a handle.
+  /// Create a Handle aliasing a non-movable HermesValue.
   explicit HandleBase(const PinnedHermesValue *valueAddr)
-      : handle_(const_cast<PinnedHermesValue *>(valueAddr)) {
-#ifndef NDEBUG
-    gcScope_ = nullptr;
-#endif
-  }
+      : handle_(const_cast<PinnedHermesValue *>(valueAddr)) {}
 
   /// Copy constructor.
-#ifndef NDEBUG
-  HandleBase(const HandleBase &sc);
-#else
   HandleBase(const HandleBase &sc) = default;
-#endif
 
-#ifndef NDEBUG
-  /// Move constructor.
-  HandleBase(HandleBase &&sc) : handle_(sc.handle_) {
-    gcScope_ = sc.gcScope_;
-    sc.gcScope_ = nullptr;
-  }
-#endif
-
-#ifndef NDEBUG
-  ~HandleBase();
-#else
   ~HandleBase() = default;
-#endif
 
   const PinnedHermesValue *operator->() {
     return handleRef();
@@ -416,48 +384,29 @@ class HandleBase {
   }
 } HERMES_ATTRIBUTE_WARN_UNUSED_VARIABLES;
 
-#ifdef NDEBUG
 static_assert(
     std::is_trivially_copyable<HandleBase>::value &&
         sizeof(HandleBase) == sizeof(void *),
     "Handle must fit in a register and be trivially copyable");
-#endif
 
-/// A HermesValue in the current GCScope which is trackable by the GC and will
-/// be correctly marked and updated if objects are moved. The value is valid
-/// while the owning GCScope object is alive.
+/// A view of a PinnedHermesValue, which is trackable by the GC and will be
+/// correctly marked and updated if objects are moved. The value is valid while
+/// the viewed location is alive.
 /// This is a very lightweight class: copies are very cheap (just copying a
-/// register); construction is also relatively cheap (in the common case a
-/// comparison and increment).
+/// register).
 template <typename T>
 class Handle : public HandleBase {
  protected:
-  /// Create a Handle aliasing a non-movable HermesValue without
-  /// allocating a handle.
+  /// Create a Handle aliasing a non-movable HermesValue.
   explicit Handle(const PinnedHermesValue *valueAddr, bool)
       : HandleBase(const_cast<PinnedHermesValue *>(valueAddr)) {}
 
   explicit Handle(const HandleBase &hb, bool) : HandleBase(hb) {}
 
-  explicit Handle(HandleRootOwner &runtime, HermesValue hermesValue, bool)
-      : HandleBase(runtime, hermesValue) {}
-
  public:
   using value_type = typename HermesValueTraits<T>::value_type;
 
- protected:
-  friend class HandleRootOwner;
-  friend class Runtime;
-
-  /// Allocate a new handle in the current GCScope
-  explicit Handle(HandleRootOwner &runtime, value_type value)
-      : HandleBase(runtime, HermesValueTraits<T>::encode(value)) {};
-  explicit Handle(GCScope *inScope, value_type value)
-      : HandleBase(inScope, HermesValueTraits<T>::encode(value)) {};
-
- public:
-  /// Create a Handle aliasing a non-movable HermesValue without
-  /// allocating a handle.
+  /// Create a Handle aliasing a non-movable HermesValue.
   explicit Handle(const PinnedHermesValue *valueAddr)
       : HandleBase(const_cast<PinnedHermesValue *>(valueAddr)) {
     static_assert(
@@ -491,14 +440,7 @@ class Handle : public HandleBase {
     return *this;
   }
 
-#ifndef NDEBUG
-  Handle<T> &operator=(const Handle<T> &other) {
-    HandleBase::operator=(other);
-    return *this;
-  }
-#else
   Handle<T> &operator=(const Handle<T> &other) = default;
-#endif
 
   value_type get() const {
     return HermesValueTraits<T>::decode(getHermesValue());
@@ -522,13 +464,6 @@ class Handle : public HandleBase {
 
   bool operator==(const Handle &value) const {
     return get() == value.get();
-  }
-
-  /// Allocate a Handle and initialize it with a HermesValue.
-  /// Assert that value has the correct type.
-  static Handle<T> vmcast(HandleRootOwner &runtime, HermesValue hermesValue) {
-    HermesValueCast<T>::assertValid(hermesValue);
-    return Handle<T>(runtime, hermesValue, true);
   }
 
   /// Create a Handle from aliasing a pinned HermesValue and assert that the
@@ -578,12 +513,10 @@ class Handle : public HandleBase {
   }
 } HERMES_ATTRIBUTE_WARN_UNUSED_VARIABLES;
 
-#ifdef NDEBUG
 static_assert(
     std::is_trivially_copyable<Handle<>>::value &&
         sizeof(Handle<>) == sizeof(void *),
     "Handle must fit in a register and be trivially copyable");
-#endif
 
 /// Extend Handle to allow mutability. The vast majority of users must not
 /// be able to modify the handle, but for those few that do, we need to be as
@@ -596,12 +529,6 @@ class MutableHandle : public Handle<T> {
 
  public:
   using value_type = typename Handle<T>::value_type;
-
-  /// Allocate a new handle in the current GCScope
-  explicit MutableHandle(
-      HandleRootOwner &runtime,
-      value_type value = HermesValueTraits<T>::defaultValue())
-      : Handle<T>(runtime, value) {}
 
   /// Construct a new Handle by aliasing an existing PinnedValue of the same
   /// type.
@@ -674,11 +601,11 @@ class MutableHandle : public Handle<T> {
     // debug builds, in an effort to catch reads on this MutableHandle before a
     // write has been issued. But, this would be incorect for a couple of
     // reasons. First, writing to a MutableHandle triggers a check to make sure
-    // the handle doesn't currently contain invalid, to guard against using
-    // flushed handles. Second, this would prevent this method from being useful
-    // in certain situations in the interpreter. An output-only register may be
-    // aliased to an input register, so we could inadvertently clobber an input
-    // register before we've read it if we used this method on it.
+    // the handle doesn't currently contain invalid. Second, this would prevent
+    // this method from being useful in certain situations in the interpreter.
+    // An output-only register may be aliased to an input register, so we could
+    // inadvertently clobber an input register before we've read it if we used
+    // this method on it.
     return MutableHandle<T>(valueAddr, true);
   }
 

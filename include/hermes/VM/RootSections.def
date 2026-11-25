@@ -21,7 +21,6 @@ ROOT_SECTION(Jobs)
 // We don't need DebugEnvironment anymore, but keep it for MobileLab.
 ROOT_SECTION(DebugEnvironment)
 ROOT_SECTION(IdentifierTable)
-ROOT_SECTION(GCScopes)
 ROOT_SECTION(WeakRefs)
 ROOT_SECTION(WeakRefSlots)
 ROOT_SECTION(SymbolRegistry)

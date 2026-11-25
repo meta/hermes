@@ -5,7 +5,7 @@ description: >
   Use when writing, modifying, or reviewing C++ runtime VM code that uses
   internal Hermes VM APIs (as opposed to code using JSI). This includes working
   with GC-managed types (HermesValue, Handle, PinnedValue, JSObject,
-  StringPrimitive, etc.), Locals, GCScope, PseudoHandle, CallResult, or any
+  StringPrimitive, etc.), Locals, PseudoHandle, CallResult, or any
   function with _RJS suffix. Typically in lib/VM/, include/hermes/VM/,
   API/hermes/, or API/napi/.
 ---
@@ -25,15 +25,19 @@ GC.
 GC safepoint.** `PseudoHandle<T>` is *not* a root — it is just as dangerous as
 a raw pointer across a safepoint. The same applies to bare `SymbolID` values
 extracted from a non-uniqued source (e.g., the `SymbolID` pulled out of the
-`Handle<SymbolID>` returned by `getSymbolHandleFromPrimitive` for a
-freshly-allocated `StringPrimitive`): once nothing roots it, the lookup-table
-slot is reclaimed by `freeUnmarkedSymbols` during sweep. Pin via
-`PinnedValue<SymbolID>`.
+slot filled by `getSymbolFromPrimitive` for a freshly-allocated
+`StringPrimitive`): once nothing roots it, the lookup-table slot is reclaimed
+by `freeUnmarkedSymbols` during sweep. Pin via `PinnedValue<SymbolID>`.
 
 ## Rooting local values: use Locals + PinnedValue (required for new code)
 
-All new code must use `Locals` + `PinnedValue<T>`. Do not introduce new
-`GCScope` instances or `makeHandle()` calls.
+All code uses `Locals` + `PinnedValue<T>`. `GCScope`, `makeHandle()`,
+`makeMutableHandle()` and the `Handle<>`/`MutableHandle<>` constructors that
+allocated a slot no longer exist. `Handle<T>` is only a view of a pinned slot.
+One `Locals` per function, declared at function scope (a lambda may have its
+own; this is production code guidance, a block-scoped Locals inside a test
+macro expansion is fine); put it after cheap fast-path returns, or in an
+out-of-line `NOINLINE` slow helper, so hot paths do not pay for it.
 
 ```cpp
 struct : public Locals {
@@ -55,8 +59,19 @@ LocalsRAII lraii(runtime, &lv);
 
 ### Passing to functions
 
-`PinnedValue<T>` implicitly converts to `Handle<T>`. Pass directly to functions
-that accept `Handle<T>`.
+`PinnedValue<T>` implicitly converts to `Handle<T>` and to `MutableHandle<T>`.
+Pass directly to functions that accept them. Where an overload is ambiguous
+or for `vmcast`/`dyn_vmcast`, wrap it: `Handle<T>(lv.x)` or
+`Handle<T>::vmcast(&lv.x)`. `PinnedValue` has no `operator bool`; use `*lv.x`.
+
+### Functions that produce a GC value
+
+A function must never return a `Handle<T>` that points into its own `Locals`.
+Return `CallResult<PseudoHandle<T>>` (or `PseudoHandle<T>` if it cannot fail)
+and let the caller pin it immediately (`lv.x = std::move(*res);`), or take a
+`MutableHandle<T> out` parameter that the caller points at a `PinnedValue` in
+its own `Locals`. If `out` may alias an input handle, write it only at the end
+of each path.
 
 ## Error handling with CallResult
 
@@ -71,23 +86,17 @@ lv.obj = std::move(*result);
 
 ## When Handle usage is fine (do not flag)
 
-Not every use of `Handle<>` needs to be converted to `PinnedValue`. The rule
-"use Locals, not GCScope" applies to **creating new rooted values** — allocating
-new `PinnedHermesValue` slots via `makeHandle()` or `Handle<>` constructors.
+`Handle<>` is a view of an existing rooted slot. The following are fine:
 
-The following are **not** allocating new handles and do not need conversion:
-
-- **`vmcast<>(handle)`** — casts an existing handle to a different type. It does
-  not take `Runtime &` and does not allocate a GCScope slot. The result points
-  to the same `PinnedHermesValue` as the input.
+- **`vmcast<>(handle)`** — casts an existing handle to a different type. The
+  result points to the same `PinnedHermesValue` as the input.
 - **`args.getArgHandle(n)`** — returns a handle pointing into the register
-  stack, which is already a root. No new allocation.
-- **Passing or receiving a `Handle<>` parameter** — the handle was allocated by
-  the caller; the callee is just using it.
+  stack, which is already a root.
+- **Passing or receiving a `Handle<>` parameter** — the caller owns the slot.
+- **`Handle<T>{runtime.someRoot}` / `Handle<>(&pinnedHV)`** — views of a
+  runtime field or an already pinned value.
 
-Only flag handle usage when a **new** `PinnedHermesValue` slot is being
-allocated (via `makeHandle()`, `makeMutableHandle()`, or `Handle<>`/
-`MutableHandle<>` constructors that take `Runtime &`).
+A `Handle` must never outlive the slot it views.
 
 ## Checklist for writing / reviewing GC-safe code
 
@@ -101,31 +110,25 @@ allocated (via `makeHandle()`, `makeMutableHandle()`, or `Handle<>`/
    a raw pointer from a pinned location (e.g., a `PinnedHermesValue *` such as
    a `napi_value`). The pinned slot stays GC-safe, but the local raw pointer
    does not. Re-deref `*pinned` at each use site, or pin via `PinnedValue<T>`.
-2. **Use Locals, not GCScope.** New code must not introduce `GCScope` or
-   `makeHandle()`. Declare a `struct : public Locals` with `PinnedValue` fields
-   and a `LocalsRAII`.
+2. **Root with Locals.** Declare a `struct : public Locals` with `PinnedValue`
+   fields and a `LocalsRAII`. `GCScope` and `makeHandle()` do not exist.
 3. **Check every CallResult.** Never dereference a `CallResult` without first
    checking `== ExecutionStatus::EXCEPTION`.
 4. **Never return Handle from local roots.** Do not return `Handle<T>` pointing
-   into a `PinnedValue` or `GCScope` that is about to be destroyed. Return
-   `CallResult<PseudoHandle<T>>` or `CallResult<HermesValue>` instead.
+   into a `PinnedValue` that is about to be destroyed. Return
+   `CallResult<PseudoHandle<T>>`, `CallResult<HermesValue>`, or write into a
+   caller-supplied `MutableHandle<T>`.
 5. **Null prototype checks.** When traversing prototype chains, check for null
    before calling `castAndSetHermesValue`.
 6. **Loops are safe with Locals.** `PinnedValue` fields are reused each
-   iteration — no unbounded growth. If a `GCScope` is still needed for legacy
-   APIs that return `Handle`, use `GCScopeMarkerRAII` or `flushToMarker`.
-7. **Handles allocate in the topmost GCScope.** `makeHandle()`,
-   `makeMutableHandle()`, `Handle<>` and `MutableHandle<>` constructors, and
-   calls to functions that take `Runtime &`/`PointerBase &` and return
-   `Handle<>`, all allocate a slot in the topmost `GCScope`. Functions that
-   create or receive handles without returning them need their own `GCScope` or
-   `GCScopeMarkerRAII` (preferred for one or two handles). Functions like
-   `vmcast<>` that do not take `Runtime &` just cast existing handles without
-   allocating.
-8. **`flushToMarker` invalidates handles allocated after the marker.** Any
-   value extracted from such a Handle (raw pointer, bare `SymbolID`) is
-   unrooted after the flush. Pin into a `PinnedValue` *before* the flush if
-   the value is needed later.
+   iteration — no unbounded growth.
+7. **Native backend (`StaticH.cpp`, `StaticHUnit.cpp`): never call
+   `_sh_throw_current` while a `LocalsRAII` is in scope.** It `longjmp`s,
+   skipping destructors, and the catch side restores only `shLocals`, so
+   `runtime.vmLocals` would be left dangling. Record the failure in a `bool`,
+   end the block, then throw.
+8. **A `PseudoHandle` or raw pointer extracted from a pinned slot is stale
+   after the next safepoint.** Re-read the slot, or pin the new value.
 
 ## Debugging tips
 

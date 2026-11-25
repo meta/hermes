@@ -338,8 +338,7 @@ SymbolID RuntimeModule::mapStringMayAllocate(
   // StringPrimitive when it is first required.
   SymbolID id;
   if (flags_.persistent) {
-    // Registering a lazy identifier does not allocate, so we do not need a
-    // GC scope.
+    // Registering a lazy identifier does not allocate.
     id = runtime_.getIdentifierTable().registerLazyIdentifier(
         runtime_, str, hash);
   } else {

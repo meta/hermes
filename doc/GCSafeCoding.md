@@ -61,8 +61,6 @@ the GC heap, in locations the GC is explicitly told about. Roots include:
 
 - The **register stack** — the VM's operand stack used by the bytecode interpreter.
 - **Locals** — stack-allocated `PinnedValue<>` fields registered via `LocalsRAII`.
-- **GCScope chains** — dynamically allocated `PinnedHermesValue` slots managed by
-  `GCScope` (legacy).
 - **Runtime fields** — `PinnedHermesValue` fields inside the `Runtime` object
   itself, such as well-known prototypes (`arrayPrototype`, `objectPrototype`, etc.).
 
@@ -102,7 +100,7 @@ the GC as a root.
 
 Note that declaring something as `PinnedHermesValue` does not *magically* register
 it as a root. The declaration is a semantic marker: if a value is stored outside
-the GC heap and is registered with the GC as a root (through `Locals`, `GCScope`, or
+the GC heap and is registered with the GC as a root (through `Locals` or
 `Runtime` fields), it should be typed as `PinnedHermesValue` to indicate its
 "root-ness".
 
@@ -151,9 +149,6 @@ Common patterns with `PseudoHandle`:
 ```cpp
 // Storing into a PinnedValue (moves and invalidates the PseudoHandle):
 lv.obj = std::move(*result);
-
-// Converting to a Handle (allocates in GCScope — legacy):
-auto handle = runtime.makeHandle(std::move(pseudoHandle));
 ```
 
 
@@ -177,91 +172,12 @@ Most functions that can trigger GC return `CallResult<PseudoHandle<T>>` or
 value, and must store the value into a root before the next GC safepoint.
 
 
-## GCScope (legacy)
+## Locals and PinnedValue\<T\>
 
-`GCScope` is a RAII-based variable-sized container of `PinnedHermesValue`. GCScopes
-are always instantiated in a stack-like manner. They keep themselves in a singly
-linked list — the root of this list is known to the GC. The GC crawls all GCScopes
-during garbage collection, making all `PinnedHermesValue` stored there roots.
+**All code must use `Locals` + `PinnedValue<T>` for rooting local GC values.**
+`GCScope` and `makeHandle()` no longer exist.
 
-A GCScope is an efficient dynamic container — it dynamically allocates new
-`PinnedHermesValue` slots internally and returns instances of `Handle<>` or
-`MutableHandle<>`. However, to prevent unlimited growth, it is configured with a
-fixed limit (48 by default in debug builds). This limit can be changed per scope.
-
-The typical usage pattern is to declare a GCScope at function entry, allocate values
-inside it as needed (keeping the handles). The GCScope is destroyed automatically
-when the function exits.
-
-**IMPORTANT:** Values allocated in a GCScope must not be used after the scope is
-destroyed. This mistake is rare but it happens — typically by attempting to return a
-`Handle<>` that was allocated in a `GCScope` that is about to be destroyed.
-
-### Implicit GCScope allocation
-
-`runtime.makeHandle()` and `runtime.makeMutableHandle()`, as well as the
-`Handle<>` and `MutableHandle<>` constructors, implicitly allocate a slot in the
-topmost (i.e. most recently created) `GCScope`. This means:
-
-- If a function creates `Handle<>` or `MutableHandle<>` values (and does not
-  return them to the caller), it likely needs its own `GCScope`, or at the very
-  least a `GCScopeMarkerRAII` to free the slots when they are no longer needed.
-  A `GCScopeMarkerRAII` is preferred when only one or two handles are allocated.
-- If a function calls APIs that *return* a `Handle<>`, those handles are also
-  allocated in the topmost `GCScope`, so the same logic applies. Note that this
-  only applies to functions that take `Runtime &` or `PointerBase &` — those are
-  the ones that can access the GCScope and allocate new slots. Functions like
-  `vmcast<>` that do not take these parameters simply cast an existing handle
-  without allocating a new one.
-
-Without a local `GCScope` or `GCScopeMarkerRAII`, handles accumulate in the
-caller's `GCScope`, which can cause it to exceed its slot limit.
-
-
-## The problem with loops and GCScopeMarkerRAII (legacy)
-
-A common problem when using GCScope is allocating handles in a loop, causing
-potentially unbounded growth of rooted `PinnedHermesValue` slots. This is why
-GCScope has a limit on the maximum number of handles.
-
-One solution is to create a GCScope in the loop body. This works, but is
-heavyweight — a GCScope preallocates space for 16 handles and must register and
-deregister itself from the linked list every iteration.
-
-`GCScopeMarkerRAII` is a lightweight alternative. It saves the state of a GCScope on
-creation and frees all subsequently allocated handles on destruction. A typical
-pattern is to place it at the top of the loop body:
-
-```cpp
-GCScope gcScope(runtime);
-// ...
-for (...) {
-  GCScopeMarkerRAII marker(gcScope);
-  // Handles allocated here are freed at end of each iteration.
-}
-```
-
-Or, more efficiently, create the marker outside the loop and call `flush()`
-explicitly:
-
-```cpp
-GCScope gcScope(runtime);
-// ...
-auto marker = gcScope.createMarker();
-for (...) {
-  gcScope.flushToMarker(marker);
-  // ...
-}
-```
-
-
-## Locals and PinnedValue\<T\> (preferred API)
-
-**All new code must use `Locals` + `PinnedValue<T>` instead of `GCScope` +
-`makeHandle()` for rooting local GC values.** Do not introduce new `GCScope`
-instances or `makeHandle()` calls. Existing code is being migrated incrementally.
-
-`Locals` with `PinnedValue<T>` is the preferred way to create rooted storage for
+`Locals` with `PinnedValue<T>` is the way to create rooted storage for
 local GC values. `Handle<T>` remains the standard type for passing GC values between
 functions — `PinnedValue<T>` implicitly converts to `Handle<T>`, so the two work
 together naturally.
@@ -284,15 +200,6 @@ struct : public Locals {
 } lv;
 LocalsRAII lraii(runtime, &lv);
 ```
-
-### Why Locals is better than GCScope
-
-| GCScope + Handle | Locals + PinnedValue |
-|---|---|
-| Dynamically allocates `PinnedHermesValue` slots | Fields are part of the struct — no dynamic allocation |
-| `Handle<T>` is a pointer to a `PinnedHermesValue` — one level of indirection | `PinnedValue<T>` *is* the `PinnedHermesValue` — direct access |
-| Easy to accidentally allocate handles in a loop, requiring `GCScopeMarkerRAII` | Fixed set of fields — loops cannot cause unbounded growth |
-| 48-handle limit per scope (debug assertion) | No limit — number of fields is determined at compile time |
 
 ### Assignment patterns
 
@@ -405,33 +312,8 @@ CallResult<HermesValue> arrayConstructor(void *, Runtime &runtime) {
 ### Locals and loops
 
 Locals solves the loop problem inherently — the `PinnedValue` fields are a fixed
-set, so you simply reuse them each iteration without needing `GCScopeMarkerRAII`.
-
-However, some existing code uses a `GCScope` + `GCScopeMarkerRAII` alongside
-`Locals` for functions that call APIs returning `Handle<>` (which require a
-`GCScope`). In such cases, the `Locals` hold the long-lived values, while the
-`GCScope` manages short-lived temporaries created by those API calls:
-
-```cpp
-struct : Locals {
-  PinnedValue<JSObject> O;
-  PinnedValue<> elem;
-  PinnedValue<StringPrimitive> sep;
-} lv;
-LocalsRAII lraii(runtime, &lv);
-
-GCScope gcScope(runtime);
-// ...
-auto marker = gcScope.createMarker();
-for (uint32_t i = 0; i < len; gcScope.flushToMarker(marker), ++i) {
-  // Temporary handles created inside the loop are flushed each iteration.
-  // Long-lived values stored in lv.* persist across iterations.
-  auto strRes = toString_RJS(runtime, lv.elem);
-  if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION))
-    return ExecutionStatus::EXCEPTION;
-  lv.sep = std::move(*strRes);
-}
-```
+set, so you simply reuse them each iteration. Long-lived values stored in `lv.*`
+persist across iterations.
 
 
 ## Common mistakes
@@ -480,16 +362,9 @@ the time — the GC only moves objects during compaction, which is rare. Enable
 `HERMESVM_SANITIZE_HANDLES` (enabled by default in ASAN builds) to catch these
 bugs deterministically by moving the heap after every allocation.
 
-### Returning a Handle from a destroyed GCScope or Locals
+### Returning a Handle from a destroyed Locals
 
 ```cpp
-// WRONG — the Handle points into the destroyed GCScope:
-Handle<JSObject> createThing(Runtime &runtime) {
-  GCScope gcScope(runtime);
-  auto handle = runtime.makeHandle(JSObject::create(runtime));
-  return handle;  // gcScope destroyed here — handle dangles!
-}
-
 // WRONG — returning a Handle from a PinnedValue that is about to be destroyed:
 Handle<JSObject> createThing(Runtime &runtime) {
   struct : public Locals {

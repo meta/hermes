@@ -55,6 +55,7 @@ set(RTSources
   ObjectModelTest.cpp
   OperationsTest.cpp
   OrderedHashMapTest.cpp
+  PinnedValueTest.cpp
   PredefinedStringsTest.cpp
   PropertyCacheTest.cpp
   ProfileGeneratorTest.cpp

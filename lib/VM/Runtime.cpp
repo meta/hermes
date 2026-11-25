@@ -718,13 +718,6 @@ void Runtime::markRoots(RootAcceptorWithNames &acceptor, bool markLongLived) {
   }
 
   {
-    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::GCScopes);
-    acceptor.beginRootSection(RootAcceptor::Section::GCScopes);
-    markGCScopes(acceptor);
-    acceptor.endRootSection();
-  }
-
-  {
     MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::SymbolRegistry);
     acceptor.beginRootSection(RootAcceptor::Section::SymbolRegistry);
     symbolRegistry_.markRoots(acceptor);
@@ -1242,9 +1235,8 @@ CallResult<HermesValue> Runtime::runBytecode(
             *this, lv.domain->getCJSEntryModuleID()));
   } else {
     // Create a JSFunction which will reference count the runtime module.
-    // Note that its handle gets registered in the scope, so we don't need to
-    // save it. Also note that environment will often be null here, except if
-    // this is local eval.
+    // The call frame below roots it. Note that environment will often be null
+    // here, except if this is local eval.
     auto func = JSFunction::create(
         *this,
         lv.domain,
@@ -1692,8 +1684,6 @@ std::unique_ptr<Buffer> Runtime::generateSpecialRuntimeBytecode() {
 }
 
 void Runtime::initPredefinedStrings() {
-  assert(!getTopGCScope() && "There shouldn't be any handles allocated yet");
-
   auto buffer = predefStringAndSymbolChars;
   auto propLengths = predefPropertyLengths;
   auto strLengths = predefStringLengths;
@@ -1743,10 +1733,6 @@ void Runtime::initPredefinedStrings() {
 
     offset += symLengths[idx];
   }
-
-  assert(
-      !getTopGCScope() &&
-      "There shouldn't be any handles allocated during initializing the predefined strings");
 }
 
 void Runtime::initCharacterStrings() {
