@@ -304,11 +304,9 @@ CallResult<HermesValue> copyDataPropertiesSlowPath_RJS(
           lv.nextKeyHandle,
           DefinePropertyFlags::getDefaultNewPropertyFlags(),
           lv.propValueHandle);
-      if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
+      if (LLVM_UNLIKELY(crb == ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
-      assert(
-          crb != ExecutionStatus::EXCEPTION && *crb &&
-          "CreateDataProperty failed");
+      assert(*crb && "CreateDataProperty failed");
     }
   }
   return target.getHermesValue();
