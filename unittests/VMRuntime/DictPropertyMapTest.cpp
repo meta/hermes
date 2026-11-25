@@ -18,6 +18,11 @@ namespace {
 using DictPropertyMapTest = LargeHeapRuntimeTestFixture;
 
 TEST_F(DictPropertyMapTest, SmokeTest) {
+  struct : public Locals {
+    PinnedValue<DictPropertyMap> mapSlot;
+    PinnedValue<DictPropertyMap> saveMapSlot;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto id1 = SymbolID::unsafeCreate(1);
   auto id2 = SymbolID::unsafeCreate(2);
   auto id3 = SymbolID::unsafeCreate(3);
@@ -27,11 +32,13 @@ TEST_F(DictPropertyMapTest, SmokeTest) {
 
   auto res = DictPropertyMap::create(runtime, 2);
   ASSERT_FALSE(isException(res));
-  MutableHandle<DictPropertyMap> map{runtime, res->get()};
+  lv.mapSlot = res->get();
+  MutableHandle<DictPropertyMap> map{lv.mapSlot};
   // We need to use another MutableHandle here. If it's a raw pointer, when
   // handlesan is ON, even if the map is reallocated, since collection happens
   // before the creation of new map, it will be reallocated at the same address.
-  MutableHandle<DictPropertyMap> saveMap{runtime, res->get()};
+  lv.saveMapSlot = res->get();
+  MutableHandle<DictPropertyMap> saveMap{lv.saveMapSlot};
 
   // Try to find a property in the empty map.
   ASSERT_FALSE(DictPropertyMap::find(map.get(), id1));

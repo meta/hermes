@@ -26,6 +26,12 @@ using WeakValueMapTest = LargeHeapRuntimeTestFixture;
 using testhelpers::DummyObject;
 
 TEST_F(WeakValueMapTest, SmokeTest) {
+  struct : public Locals {
+    PinnedValue<JSNumber> h1Slot;
+    PinnedValue<JSNumber> h2Slot;
+    PinnedValue<JSNumber> h3Slot;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   runtime.collect("test");
 
   // Since the lifetime of the runtime is longer than the lifetime of the map,
@@ -39,9 +45,9 @@ TEST_F(WeakValueMapTest, SmokeTest) {
         .get();
   };
 
-  MutableHandle<JSNumber> h1{runtime};
-  MutableHandle<JSNumber> h2{runtime};
-  MutableHandle<JSNumber> h3{runtime};
+  MutableHandle<JSNumber> h1{lv.h1Slot};
+  MutableHandle<JSNumber> h2{lv.h2Slot};
+  MutableHandle<JSNumber> h3{lv.h3Slot};
 
   auto marker = gcScope.createMarker();
 

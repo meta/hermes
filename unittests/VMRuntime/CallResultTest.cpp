@@ -58,8 +58,13 @@ TEST(CallResultTest, PointerTest) {
 using CallResultRuntimeTest = RuntimeTestFixture;
 
 TEST_F(CallResultRuntimeTest, HandleTest) {
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   PseudoHandle<JSObject> pseudo = JSObject::create(runtime);
-  Handle<JSObject> handle = runtime.makeHandle(std::move(pseudo));
+  lv.obj = std::move(pseudo);
+  Handle<JSObject> handle = lv.obj;
   CallResult<Handle<JSObject>> cr(handle);
   EXPECT_EQ(ExecutionStatus::RETURNED, cr.getStatus());
   EXPECT_TRUE(strictEqualityTest(

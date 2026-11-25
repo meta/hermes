@@ -34,20 +34,27 @@ using SymbolIDRuntimeTest = RuntimeTestFixture;
 // This test runs too slow when handlesan is ON.
 #if HERMESVM_SANITIZE_HANDLES == 0
 TEST_F(SymbolIDRuntimeTest, WriteBarrier) {
+  struct : public Locals {
+    PinnedValue<JSArray> arraySlot;
+    PinnedValue<JSArray> otherArraySlot;
+    PinnedValue<SymbolID> symbolSlot;
+    PinnedValue<StringPrimitive> strSlot;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // Hades adds a write barrier for symbols. Make sure it correctly captures
   // mutations.
   auto arrayResult = JSArray::create(runtime, 100, 100);
   ASSERT_FALSE(isException(arrayResult));
-  MutableHandle<JSArray> array{runtime};
+  MutableHandle<JSArray> array{lv.arraySlot};
   array = std::move(*arrayResult);
 
   auto otherArrayResult = JSArray::create(runtime, 100, 100);
   ASSERT_FALSE(isException(otherArrayResult));
-  MutableHandle<JSArray> otherArray{runtime};
+  MutableHandle<JSArray> otherArray{lv.otherArraySlot};
   otherArray = std::move(*otherArrayResult);
 
-  MutableHandle<SymbolID> symbol{runtime};
-  MutableHandle<StringPrimitive> str{runtime};
+  MutableHandle<SymbolID> symbol{lv.symbolSlot};
+  MutableHandle<StringPrimitive> str{lv.strSlot};
   for (JSArray::size_type i = 0; i < 100; i++) {
     GCScopeMarkerRAII marker{runtime};
     std::string iAsStr = std::to_string(i);
@@ -213,16 +220,16 @@ TEST_F(SymbolIDRuntimeTest, SymbolAllocDuringGC) {
   auto strRes = StringPrimitive::create(
       runtime, ASCIIRef{asciiStr.c_str(), asciiStr.length()});
   ASSERT_FALSE(isException(strRes));
-  MutableHandle<StringPrimitive> str{runtime};
-  str = vmcast<StringPrimitive>(*strRes);
-  (void)str;
-
   struct : Locals {
     /// Array holding all the strong symbols.
     PinnedValue<ArrayStorage> strongSymbols;
     PinnedValue<SymbolID> curSym;
+    PinnedValue<StringPrimitive> strSlot;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  MutableHandle<StringPrimitive> str{lv.strSlot};
+  str = vmcast<StringPrimitive>(*strRes);
+  (void)str;
   lv.strongSymbols.castAndSetHermesValue<ArrayStorage>(
       *ArrayStorage::create(runtime, 4));
   MutableHandle<ArrayStorage> strongSymbols(lv.strongSymbols);

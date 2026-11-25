@@ -141,6 +141,10 @@ std::shared_ptr<SamplingProfileTree::Node> SamplingProfileTree::makeNode(
 using SamplingHeapProfilerTest = RuntimeTestFixture;
 
 TEST_F(SamplingHeapProfilerTest, Basic) {
+  struct : public Locals {
+    PinnedValue<JSArray> arrayToHold;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   // Use a fixed seed so the samples are deterministic.
@@ -165,9 +169,9 @@ foo();
   CallResult<HermesValue> res = runtime.run(source, "file:///fake.js", flags);
   ASSERT_FALSE(isException(res));
   // Hold onto this array so it isn't collected when the profile is finished.
-  auto arrayToHold = runtime.makeHandle<JSArray>(*res);
+  lv.arrayToHold.castAndSetHermesValue<JSArray>(*res);
   // Make sure it's the correct array.
-  ASSERT_EQ(JSArray::getLength(*arrayToHold, runtime), 500);
+  ASSERT_EQ(JSArray::getLength(*lv.arrayToHold, runtime), 500);
 
   JSONObject *root = TAKE_PROFILE(runtime, jsonFactory);
   ASSERT_TRUE(root != nullptr);

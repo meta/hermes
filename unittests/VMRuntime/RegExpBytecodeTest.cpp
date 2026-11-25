@@ -63,42 +63,50 @@ JSRegExp *regExpAt(Runtime &runtime, Handle<JSArray> arr, uint32_t index) {
   return vmcast<JSRegExp>(arr->at(runtime, index).unboxToHV(runtime));
 }
 
-/// Run \p code in a new module and \return its completion value, which
-/// must be an array.
-Handle<JSArray> runForArray(Runtime &runtime, const char *code) {
+/// Run \p code in a new module and write its completion value, which must
+/// be an array, to \p out.
+void runForArray(
+    Runtime &runtime,
+    const char *code,
+    MutableHandle<JSArray> out) {
   CallResult<HermesValue> res =
       runtime.run(code, "test.js", hbc::CompileFlags{});
   EXPECT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
-  return runtime.makeHandle(vmcast<JSArray>(*res));
+  out.set(vmcast<JSArray>(*res));
 }
 
-/// Run \p code in a new module, compiled with \p flags, and \return its
-/// completion value, which must be a function.
-Handle<JSFunction> runForFunction(
+/// Run \p code in a new module, compiled with \p flags, and write its
+/// completion value, which must be a function, to \p out.
+void runForFunction(
     Runtime &runtime,
     const char *code,
+    MutableHandle<JSFunction> out,
     const hbc::CompileFlags &flags = hbc::CompileFlags{}) {
   CallResult<HermesValue> res = runtime.run(code, "test.js", flags);
   EXPECT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
-  return runtime.makeHandle(vmcast<JSFunction>(*res));
+  out.set(vmcast<JSFunction>(*res));
 }
 
-/// Call \p fn with no arguments and \return its result, which must be a
-/// JSRegExp.
-Handle<JSRegExp> callForRegExp(Runtime &runtime, Handle<JSFunction> fn) {
+/// Call \p fn with no arguments and write its result, which must be a
+/// JSRegExp, to \p out.
+void callForRegExp(
+    Runtime &runtime,
+    Handle<JSFunction> fn,
+    MutableHandle<JSRegExp> out) {
   CallResult<PseudoHandle<>> res =
       Callable::executeCall0(fn, runtime, Runtime::getUndefinedValue());
   EXPECT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
-  return runtime.makeHandle(vmcast<JSRegExp>(res->get()));
+  out.set(vmcast<JSRegExp>(res->get()));
 }
 
 /// \return whether \p re matches the ASCII string \p str, searching from 0.
 bool matches(Runtime &runtime, Handle<JSRegExp> re, const char *str) {
-  CallResult<RegExpMatch> m = JSRegExp::search(
-      re,
-      runtime,
-      runtime.makeHandle(StringPrimitive::createNoThrow(runtime, str)),
-      0);
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.str = StringPrimitive::createNoThrow(runtime, str);
+  CallResult<RegExpMatch> m = JSRegExp::search(re, runtime, lv.str, 0);
   EXPECT_NE(ExecutionStatus::EXCEPTION, m.getStatus());
   return !m->empty();
 }
@@ -108,8 +116,12 @@ bool matches(Runtime &runtime, Handle<JSRegExp> re, const char *str) {
 void runFactory(
     Runtime &runtime,
     std::shared_ptr<hbc::BCProvider> provider,
-    MutableHandle<JSFunction> &mk,
-    MutableHandle<JSFunction> &fill) {
+    MutableHandle<JSFunction> mk,
+    MutableHandle<JSFunction> fill) {
+  struct : public Locals {
+    PinnedValue<JSArray> arr;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   RuntimeModuleFlags rmFlags;
   rmFlags.persistent = false;
   CallResult<HermesValue> res = runtime.runBytecode(
@@ -118,9 +130,9 @@ void runFactory(
       "test.js",
       Runtime::makeNullHandle<Environment>());
   ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
-  Handle<JSArray> arr = runtime.makeHandle(vmcast<JSArray>(*res));
-  mk = vmcast<JSFunction>(arr->at(runtime, 0).unboxToHV(runtime));
-  fill = vmcast<JSFunction>(arr->at(runtime, 1).unboxToHV(runtime));
+  lv.arr = vmcast<JSArray>(*res);
+  mk.set(vmcast<JSFunction>(lv.arr->at(runtime, 0).unboxToHV(runtime)));
+  fill.set(vmcast<JSFunction>(lv.arr->at(runtime, 1).unboxToHV(runtime)));
 }
 
 /// The source run by runFactory.
@@ -177,7 +189,6 @@ void driveAsyncMajor(Runtime &runtime, int iterations, Work work) {
   for (int i = 0; i < iterations; ++i) {
     if (i % 64 == 0)
       runtime.getHeap().collectWithOptions("test", async);
-    GCScopeMarkerRAII marker{runtime};
     work();
     std::this_thread::yield();
   }
@@ -213,10 +224,14 @@ TEST(RegExpBytecodeObjectTest, CreateCopiesBytes) {
 }
 
 TEST_F(RegExpBytecodeTest, DynamicRegExpsAreExclusive) {
-  Handle<JSArray> arr =
-      runForArray(runtime, "[new RegExp('abc', 'g'), new RegExp('abc', 'g')]");
-  JSRegExp *r0 = regExpAt(runtime, arr, 0);
-  JSRegExp *r1 = regExpAt(runtime, arr, 1);
+  struct : public Locals {
+    PinnedValue<JSArray> arr;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  runForArray(
+      runtime, "[new RegExp('abc', 'g'), new RegExp('abc', 'g')]", lv.arr);
+  JSRegExp *r0 = regExpAt(runtime, lv.arr, 0);
+  JSRegExp *r1 = regExpAt(runtime, lv.arr, 1);
   EXPECT_NE(r0->getBytecode().data(), r1->getBytecode().data());
   EXPECT_TRUE(r0->getBytecode().equals(r1->getBytecode()));
   EXPECT_EQ(
@@ -242,12 +257,17 @@ TEST_F(RegExpBytecodeTest, SplitDoesNotClearStickyOfItsArgument) {
 }
 
 TEST_F(RegExpBytecodeTest, LiteralIsSharedAcrossEvaluations) {
-  Handle<JSArray> arr = runForArray(
+  struct : public Locals {
+    PinnedValue<JSArray> arr;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  runForArray(
       runtime,
       "(function () { function f() { return /a(b)c/g; }"
-      " return [f(), f()]; })()");
-  JSRegExp *r0 = regExpAt(runtime, arr, 0);
-  JSRegExp *r1 = regExpAt(runtime, arr, 1);
+      " return [f(), f()]; })()",
+      lv.arr);
+  JSRegExp *r0 = regExpAt(runtime, lv.arr, 0);
+  JSRegExp *r1 = regExpAt(runtime, lv.arr, 1);
   EXPECT_NE(r0, r1);
   EXPECT_EQ(r0->getBytecode().data(), r1->getBytecode().data());
   EXPECT_EQ(
@@ -257,41 +277,62 @@ TEST_F(RegExpBytecodeTest, LiteralIsSharedAcrossEvaluations) {
 }
 
 TEST_F(RegExpBytecodeTest, LiteralCachesArePerModule) {
+  struct : public Locals {
+    PinnedValue<JSFunction> one;
+    PinnedValue<JSFunction> two;
+    PinnedValue<JSRegExp> r1;
+    PinnedValue<JSRegExp> r2;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   // Each module's only literal has regexp ID 0.
-  Handle<JSFunction> one =
-      runForFunction(runtime, "(function () { return /one/; })");
-  Handle<JSFunction> two =
-      runForFunction(runtime, "(function () { return /two/; })");
-  Handle<JSRegExp> r1 = callForRegExp(runtime, one);
-  Handle<JSRegExp> r2 = callForRegExp(runtime, two);
-  EXPECT_NE(r1->getBytecode().data(), r2->getBytecode().data());
-  EXPECT_TRUE(matches(runtime, r1, "one"));
-  EXPECT_FALSE(matches(runtime, r1, "two"));
-  EXPECT_TRUE(matches(runtime, r2, "two"));
-  EXPECT_FALSE(matches(runtime, r2, "one"));
+  runForFunction(runtime, "(function () { return /one/; })", lv.one);
+  runForFunction(runtime, "(function () { return /two/; })", lv.two);
+  callForRegExp(runtime, lv.one, lv.r1);
+  callForRegExp(runtime, lv.two, lv.r2);
+  EXPECT_NE(lv.r1->getBytecode().data(), lv.r2->getBytecode().data());
+  EXPECT_TRUE(matches(runtime, lv.r1, "one"));
+  EXPECT_FALSE(matches(runtime, lv.r1, "two"));
+  EXPECT_TRUE(matches(runtime, lv.r2, "two"));
+  EXPECT_FALSE(matches(runtime, lv.r2, "one"));
 }
 
 TEST_F(RegExpBytecodeTest, LazilyCompiledLiteralGrowsTheCache) {
+  struct : public Locals {
+    PinnedValue<JSFunction> f;
+    PinnedValue<JSRegExp> r0;
+    PinnedValue<JSRegExp> r1;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   hbc::CompileFlags flags;
   flags.lazy = true;
   flags.preemptiveFileCompilationThreshold = 0;
   flags.preemptiveFunctionCompilationThreshold = 0;
-  Handle<JSFunction> f = runForFunction(
+  runForFunction(
       runtime,
       "(function () { return function () { return /lazy(re)/g; }; })()",
+      lv.f,
       flags);
-  RuntimeModule *rm = f->getRuntimeModule();
+  RuntimeModule *rm = lv.f->getRuntimeModule();
   // Precondition: the literal is not in the table until its function is
   // compiled, so its ID is past the table size at module load.
   ASSERT_EQ(0u, rm->getBytecode()->getRegExpTable().size());
-  Handle<JSRegExp> r0 = callForRegExp(runtime, f);
+  callForRegExp(runtime, lv.f, lv.r0);
   ASSERT_EQ(1u, rm->getBytecode()->getRegExpTable().size());
-  Handle<JSRegExp> r1 = callForRegExp(runtime, f);
-  EXPECT_EQ(r0->getBytecode().data(), r1->getBytecode().data());
-  EXPECT_TRUE(matches(runtime, r1, "xlazyre"));
+  callForRegExp(runtime, lv.f, lv.r1);
+  EXPECT_EQ(lv.r0->getBytecode().data(), lv.r1->getBytecode().data());
+  EXPECT_TRUE(matches(runtime, lv.r1, "xlazyre"));
 }
 
 TEST_F(RegExpBytecodeTest, LazyCompilesKeepGrowingTheCache) {
+  struct : public Locals {
+    PinnedValue<JSArray> arr;
+    PinnedValue<JSFunction> f1;
+    PinnedValue<JSFunction> f2;
+    PinnedValue<JSRegExp> a0;
+    PinnedValue<JSRegExp> b0;
+    PinnedValue<JSRegExp> b1;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   hbc::CompileFlags flags;
   flags.lazy = true;
   flags.preemptiveFileCompilationThreshold = 0;
@@ -302,75 +343,83 @@ TEST_F(RegExpBytecodeTest, LazyCompilesKeepGrowingTheCache) {
       "test.js",
       flags);
   ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
-  Handle<JSArray> arr = runtime.makeHandle(vmcast<JSArray>(*res));
-  Handle<JSFunction> f1 = runtime.makeHandle(
-      vmcast<JSFunction>(arr->at(runtime, 0).unboxToHV(runtime)));
-  Handle<JSFunction> f2 = runtime.makeHandle(
-      vmcast<JSFunction>(arr->at(runtime, 1).unboxToHV(runtime)));
-  RuntimeModule *rm = f1->getRuntimeModule();
+  lv.arr = vmcast<JSArray>(*res);
+  lv.f1 = vmcast<JSFunction>(lv.arr->at(runtime, 0).unboxToHV(runtime));
+  lv.f2 = vmcast<JSFunction>(lv.arr->at(runtime, 1).unboxToHV(runtime));
+  RuntimeModule *rm = lv.f1->getRuntimeModule();
 
   ASSERT_EQ(0u, rm->getBytecode()->getRegExpTable().size());
-  Handle<JSRegExp> a0 = callForRegExp(runtime, f1);
+  callForRegExp(runtime, lv.f1, lv.a0);
   ASSERT_EQ(1u, rm->getBytecode()->getRegExpTable().size());
   // Compiling the second function grows the table, and so the cache, again.
-  Handle<JSRegExp> b0 = callForRegExp(runtime, f2);
+  callForRegExp(runtime, lv.f2, lv.b0);
   ASSERT_EQ(2u, rm->getBytecode()->getRegExpTable().size());
-  Handle<JSRegExp> b1 = callForRegExp(runtime, f2);
-  EXPECT_EQ(b0->getBytecode().data(), b1->getBytecode().data());
-  EXPECT_NE(a0->getBytecode().data(), b0->getBytecode().data());
-  EXPECT_TRUE(matches(runtime, b1, "xsecondre"));
-  EXPECT_FALSE(matches(runtime, b1, "xfirstre"));
+  callForRegExp(runtime, lv.f2, lv.b1);
+  EXPECT_EQ(lv.b0->getBytecode().data(), lv.b1->getBytecode().data());
+  EXPECT_NE(lv.a0->getBytecode().data(), lv.b0->getBytecode().data());
+  EXPECT_TRUE(matches(runtime, lv.b1, "xsecondre"));
+  EXPECT_FALSE(matches(runtime, lv.b1, "xfirstre"));
 }
 
 TEST_F(RegExpBytecodeTest, FastCopySharesOnlyCachedBytecode) {
-  Handle<JSArray> arr =
-      runForArray(runtime, "[/a(b)c/g, new RegExp('a(b)c', 'g')]");
-  Handle<JSRegExp> lit = runtime.makeHandle(regExpAt(runtime, arr, 0));
-  Handle<JSRegExp> dyn = runtime.makeHandle(regExpAt(runtime, arr, 1));
+  struct : public Locals {
+    PinnedValue<JSArray> arr;
+    PinnedValue<JSRegExp> lit;
+    PinnedValue<JSRegExp> dyn;
+    PinnedValue<StringPrimitive> flags;
+    PinnedValue<JSRegExp> litSame;
+    PinnedValue<JSRegExp> litOther;
+    PinnedValue<JSRegExp> dynSame;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  runForArray(runtime, "[/a(b)c/g, new RegExp('a(b)c', 'g')]", lv.arr);
+  lv.lit = regExpAt(runtime, lv.arr, 0);
+  lv.dyn = regExpAt(runtime, lv.arr, 1);
   ASSERT_EQ(
-      RegExpBytecode::Ownership::Cached, lit->getBytecodeEntry()->ownership());
+      RegExpBytecode::Ownership::Cached,
+      lv.lit->getBytecodeEntry()->ownership());
   ASSERT_EQ(
       RegExpBytecode::Ownership::Exclusive,
-      dyn->getBytecodeEntry()->ownership());
+      lv.dyn->getBytecodeEntry()->ownership());
 
-  // The fast copy used by matchAll and split.
-  auto copy = [&](Handle<JSRegExp> other, const char *flags) {
-    Handle<JSRegExp> self = runtime.makeHandle(JSRegExp::create(runtime));
+  // The fast copy used by matchAll and split, written to \p self.
+  auto copy = [&](Handle<JSRegExp> other,
+                  const char *flags,
+                  MutableHandle<JSRegExp> self) {
+    self = JSRegExp::create(runtime);
+    lv.flags = StringPrimitive::createNoThrow(runtime, flags);
     EXPECT_EQ(
         ExecutionStatus::RETURNED,
-        JSRegExp::initialize(
-            self,
-            runtime,
-            other,
-            runtime.makeHandle(
-                StringPrimitive::createNoThrow(runtime, flags))));
-    return self;
+        JSRegExp::initialize(self, runtime, other, lv.flags));
   };
 
-  Handle<JSRegExp> litSame = copy(lit, "g");
-  EXPECT_EQ(lit->getBytecode().data(), litSame->getBytecode().data());
+  copy(lv.lit, "g", lv.litSame);
+  EXPECT_EQ(lv.lit->getBytecode().data(), lv.litSame->getBytecode().data());
 
-  Handle<JSRegExp> litOther = copy(lit, "gy");
-  EXPECT_NE(lit->getBytecode().data(), litOther->getBytecode().data());
+  copy(lv.lit, "gy", lv.litOther);
+  EXPECT_NE(lv.lit->getBytecode().data(), lv.litOther->getBytecode().data());
   EXPECT_EQ(
       RegExpBytecode::Ownership::Exclusive,
-      litOther->getBytecodeEntry()->ownership());
-  EXPECT_TRUE(JSRegExp::getSyntaxFlags(*litOther).sticky);
+      lv.litOther->getBytecodeEntry()->ownership());
+  EXPECT_TRUE(JSRegExp::getSyntaxFlags(*lv.litOther).sticky);
 
-  Handle<JSRegExp> dynSame = copy(dyn, "g");
-  EXPECT_NE(dyn->getBytecode().data(), dynSame->getBytecode().data());
-  EXPECT_TRUE(dyn->getBytecode().equals(dynSame->getBytecode()));
+  copy(lv.dyn, "g", lv.dynSame);
+  EXPECT_NE(lv.dyn->getBytecode().data(), lv.dynSame->getBytecode().data());
+  EXPECT_TRUE(lv.dyn->getBytecode().equals(lv.dynSame->getBytecode()));
   EXPECT_EQ(
       RegExpBytecode::Ownership::Exclusive,
-      dynSame->getBytecodeEntry()->ownership());
+      lv.dynSame->getBytecodeEntry()->ownership());
 }
 
 TEST_F(RegExpBytecodeTest, LiteralOutlivesItsModule) {
   // runtime.run() would load the module as persistent, and the runtime
   // would keep its storage. Instead, run from an owning buffer, held only
   // by the provider, with persistent = false.
+  struct : public Locals {
+    PinnedValue<JSRegExp> re;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   std::weak_ptr<hbc::BCProvider> weakProvider;
-  MutableHandle<JSRegExp> re{runtime};
   {
     std::vector<uint8_t> bc =
         bytecodeForSource("(function () { return /a(b)c/g; })()");
@@ -390,16 +439,23 @@ TEST_F(RegExpBytecodeTest, LiteralOutlivesItsModule) {
         "test.js",
         Runtime::makeNullHandle<Environment>());
     ASSERT_FALSE(isException(res));
-    re = runtime.makeHandle(vmcast<JSRegExp>(*res));
+    lv.re = vmcast<JSRegExp>(*res);
   }
   for (int i = 0; i < 3 && !weakProvider.expired(); ++i)
     runtime.collect("test");
   // Precondition: the module and its storage are gone.
   ASSERT_TRUE(weakProvider.expired());
-  EXPECT_TRUE(matches(runtime, re, "xabcx"));
+  EXPECT_TRUE(matches(runtime, lv.re, "xabcx"));
 }
 
 TEST_F(RegExpBytecodeTest, SHUnitSharesPrecompiledBytecode) {
+  struct : public Locals {
+    PinnedValue<SymbolID> pattern;
+    PinnedValue<SymbolID> flags;
+    PinnedValue<JSRegExp> r0;
+    PinnedValue<JSRegExp> r1;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   auto compiled = CompiledRegExp::tryCompile("a(b)c", "g");
   ASSERT_TRUE(compiled.hasValue());
   llvh::ArrayRef<uint8_t> bc = compiled->getBytecode();
@@ -412,14 +468,15 @@ TEST_F(RegExpBytecodeTest, SHUnitSharesPrecompiledBytecode) {
   unit.num_regexps = 1;
   unit.runtime_ext = new SHUnitExt{unit.num_regexps};
 
-  auto symbol = [&](const char *str) {
+  // Each symbol stays rooted in \p out for the rest of the test.
+  auto symbol = [&](const char *str, MutableHandle<SymbolID> out) {
     CallResult<Handle<SymbolID>> sym =
-        getSymbolHandleForTest(runtime, createASCIIRef(str));
+        getSymbolHandleForTest(runtime, createASCIIRef(str), out);
     EXPECT_NE(ExecutionStatus::EXCEPTION, sym.getStatus());
     return sym->get().unsafeGetRaw();
   };
-  const SHSymbolID pattern = symbol("a(b)c");
-  const SHSymbolID flags = symbol("g");
+  const SHSymbolID pattern = symbol("a(b)c", lv.pattern);
+  const SHSymbolID flags = symbol("g", lv.flags);
 
   const size_t sizeBefore = sh_unit_additional_memory_size(&unit);
   // Must count the SHUnitExt object itself plus the cache slot sized at
@@ -427,83 +484,95 @@ TEST_F(RegExpBytecodeTest, SHUnitSharesPrecompiledBytecode) {
   EXPECT_GE(
       sizeBefore,
       sizeof(SHUnitExt) + sizeof(llvh::IntrusiveRefCntPtr<RegExpBytecode>));
-  auto create = [&]() {
+  auto create = [&](MutableHandle<JSRegExp> out) {
     SHLegacyValue v =
         _sh_ljs_create_regexp(getSHRuntime(runtime), &unit, pattern, flags, 0);
-    return runtime.makeHandle(vmcast<JSRegExp>(HermesValue::fromRaw(v.raw)));
+    out.set(vmcast<JSRegExp>(HermesValue::fromRaw(v.raw)));
   };
-  Handle<JSRegExp> r0 = create();
-  Handle<JSRegExp> r1 = create();
-  EXPECT_EQ(r0->getBytecode().data(), r1->getBytecode().data());
-  EXPECT_TRUE(bc.equals(r0->getBytecode()));
+  create(lv.r0);
+  create(lv.r1);
+  EXPECT_EQ(lv.r0->getBytecode().data(), lv.r1->getBytecode().data());
+  EXPECT_TRUE(bc.equals(lv.r0->getBytecode()));
   EXPECT_EQ(
-      RegExpBytecode::Ownership::Cached, r0->getBytecodeEntry()->ownership());
+      RegExpBytecode::Ownership::Cached,
+      lv.r0->getBytecodeEntry()->ownership());
   // The vector was sized when the unit was attached; only the entry is
   // new.
   EXPECT_EQ(
-      sizeBefore + r0->getBytecodeEntry()->mallocSize(),
+      sizeBefore + lv.r0->getBytecodeEntry()->mallocSize(),
       sh_unit_additional_memory_size(&unit));
-  EXPECT_TRUE(matches(runtime, r1, "xabc"));
+  EXPECT_TRUE(matches(runtime, lv.r1, "xabc"));
 
   // The regexps keep the entry alive after the unit's cache is gone.
   delete unit.runtime_ext;
-  EXPECT_TRUE(matches(runtime, r0, "abc"));
+  EXPECT_TRUE(matches(runtime, lv.r0, "abc"));
 }
 
 TEST_F(RegExpBytecodeTest, ConcurrentReleaseWhileAcquiring) {
+  struct : public Locals {
+    PinnedValue<JSFunction> mk;
+    PinnedValue<JSFunction> fill;
+    PinnedValue<JSArray> arr;
+    PinnedValue<JSRegExp> re;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   // This gtest has no GTEST_SKIP: without the Hades background thread
   // there is nothing to exercise, so return.
   if (!kConcurrentGC)
     return;
   std::weak_ptr<hbc::BCProvider> weak;
-  MutableHandle<JSFunction> mk{runtime}, fill{runtime};
-  runFactory(runtime, factoryProvider(weak), mk, fill);
+  runFactory(runtime, factoryProvider(weak), lv.mk, lv.fill);
 
   CallResult<PseudoHandle<>> filled = Callable::executeCall1(
-      fill,
+      lv.fill,
       runtime,
       Runtime::getUndefinedValue(),
       HermesValue::encodeTrustedNumberValue(256));
   ASSERT_NE(ExecutionStatus::EXCEPTION, filled.getStatus());
-  MutableHandle<JSArray> arr{runtime, vmcast<JSArray>(filled->get())};
-  ASSERT_TRUE(promoteAll(runtime, arr));
+  lv.arr = vmcast<JSArray>(filled->get());
+  ASSERT_TRUE(promoteAll(runtime, lv.arr));
 
   // Drop the promoted regexps; their old-gen sweep releases the shared
   // entry while the mutator keeps acquiring it.
-  arr = nullptr;
-  driveAsyncMajor(runtime, 4096, [&]() { callForRegExp(runtime, mk); });
-  EXPECT_TRUE(matches(runtime, callForRegExp(runtime, mk), "con"));
+  lv.arr = nullptr;
+  driveAsyncMajor(
+      runtime, 4096, [&]() { callForRegExp(runtime, lv.mk, lv.re); });
+  callForRegExp(runtime, lv.mk, lv.re);
+  EXPECT_TRUE(matches(runtime, lv.re, "con"));
 }
 
 TEST_F(RegExpBytecodeTest, ConcurrentReleaseAfterModuleDeath) {
+  struct : public Locals {
+    PinnedValue<JSArray> arr;
+    PinnedValue<JSFunction> mk;
+    PinnedValue<JSFunction> fill;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   // This gtest has no GTEST_SKIP: without the Hades background thread
   // there is nothing to exercise, so return.
   if (!kConcurrentGC)
     return;
   std::weak_ptr<hbc::BCProvider> weak;
-  MutableHandle<JSArray> arr{runtime};
   {
-    // Handles live until their GCScope ends, not their C++ scope. This
-    // scope frees the factory's handles; arr belongs to the fixture's.
-    GCScope factoryScope{runtime};
-    MutableHandle<JSFunction> mk{runtime}, fill{runtime};
-    runFactory(runtime, factoryProvider(weak), mk, fill);
+    runFactory(runtime, factoryProvider(weak), lv.mk, lv.fill);
     CallResult<PseudoHandle<>> filled = Callable::executeCall1(
-        fill,
+        lv.fill,
         runtime,
         Runtime::getUndefinedValue(),
         HermesValue::encodeTrustedNumberValue(256));
     ASSERT_NE(ExecutionStatus::EXCEPTION, filled.getStatus());
-    arr = vmcast<JSArray>(filled->get());
+    lv.arr = vmcast<JSArray>(filled->get());
     // Release the factory: a callable function keeps its Domain alive.
+    lv.mk = nullptr;
+    lv.fill = nullptr;
   }
-  ASSERT_TRUE(promoteAll(runtime, arr));
+  ASSERT_TRUE(promoteAll(runtime, lv.arr));
   for (int i = 0; i < 3 && !weak.expired(); ++i)
     runtime.collect("test");
   // Precondition: the module is gone; only the regexps hold the entry.
   ASSERT_TRUE(weak.expired());
 
-  arr = nullptr;
+  lv.arr = nullptr;
   driveAsyncMajor(runtime, 4096, [&]() {
     // Unrelated allocation keeps the mutator busy.
     JSObject::create(runtime);

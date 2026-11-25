@@ -22,7 +22,11 @@ using Base64UtilTest = RuntimeTestFixture;
     uint64_t expectedLength = ((original.size() + 2) / 3) * 4;              \
     EXPECT_LE(expectedLength, std::numeric_limits<uint32_t>::max());        \
     hermes::SafeUInt32 outputLength{static_cast<uint32_t>(expectedLength)}; \
-    MutableHandle<StringPrimitive> storage{runtime};                        \
+    struct : public Locals {                                                \
+      PinnedValue<StringPrimitive> storageSlot;                             \
+    } storageLv;                                                            \
+    LocalsRAII storageLraii(runtime, &storageLv);                           \
+    MutableHandle<StringPrimitive> storage{storageLv.storageSlot};          \
     CallResult<StringBuilder> builder = StringBuilder::createStringBuilder( \
         runtime, storage, outputLength, true);                              \
     EXPECT_NE(builder, ExecutionStatus::EXCEPTION);                         \
@@ -53,7 +57,11 @@ using Base64UtilTest = RuntimeTestFixture;
     hermes::OptValue<uint32_t> expectedLength =                             \
         base64DecodeOutputLength(original);                                 \
     EXPECT_TRUE(expectedLength.hasValue());                                 \
-    MutableHandle<StringPrimitive> storage{runtime};                        \
+    struct : public Locals {                                                \
+      PinnedValue<StringPrimitive> storageSlot;                             \
+    } storageLv;                                                            \
+    LocalsRAII storageLraii(runtime, &storageLv);                           \
+    MutableHandle<StringPrimitive> storage{storageLv.storageSlot};          \
     CallResult<StringBuilder> builder = StringBuilder::createStringBuilder( \
         runtime, storage, hermes::SafeUInt32(*expectedLength), false);      \
     EXPECT_NE(builder, ExecutionStatus::EXCEPTION);                         \
@@ -109,9 +117,13 @@ TEST_F(Base64UtilTest, EncodePaddingNotNeeded) {
 }
 
 TEST_F(Base64UtilTest, EncodeInvalid) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> storageSlot;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // Just a long enough buffer. All calls in this function are expected to fail.
   hermes::SafeUInt32 outputLength{20};
-  MutableHandle<StringPrimitive> storage{runtime};
+  MutableHandle<StringPrimitive> storage{lv.storageSlot};
   CallResult<StringBuilder> builder =
       StringBuilder::createStringBuilder(runtime, storage, outputLength, true);
   EXPECT_NE(builder, ExecutionStatus::EXCEPTION);
@@ -148,9 +160,13 @@ TEST_F(Base64UtilTest, DecodeWithWhitespace) {
 }
 
 TEST_F(Base64UtilTest, DecodeInvalid) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> storageSlot;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // Just a long enough buffer. All calls in this function are expected to fail.
   hermes::SafeUInt32 outputLength{50};
-  MutableHandle<StringPrimitive> storage{runtime};
+  MutableHandle<StringPrimitive> storage{lv.storageSlot};
   CallResult<StringBuilder> builder =
       StringBuilder::createStringBuilder(runtime, storage, outputLength, false);
 

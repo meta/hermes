@@ -20,6 +20,7 @@ using ArrayTest = RuntimeTestFixture;
 TEST_F(ArrayTest, CppAPITest) {
   struct : Locals {
     PinnedValue<JSArray> array;
+    PinnedValue<> val;
   } lv;
   LocalsRAII lraii{runtime, &lv};
   // We allocate a lot of handles in row.
@@ -36,50 +37,45 @@ TEST_F(ArrayTest, CppAPITest) {
 
   // Call haveOwnIndexed() and getOwnIndexed() on a element not in the array.
   ComputedPropertyDescriptor desc;
+  lv.val = 100.0_hd;
   ASSERT_FALSE(*lv.array->getOwnComputedPrimitiveDescriptor(
-      lv.array,
-      runtime,
-      runtime.makeHandle(100.0_hd),
-      JSObject::IgnoreProxy::No,
-      desc));
-  EXPECT_CALLRESULT_UNDEFINED(lv.array->getComputed_RJS(
-      lv.array, runtime, runtime.makeHandle(100.0_hd)));
+      lv.array, runtime, lv.val, JSObject::IgnoreProxy::No, desc));
+  lv.val = 100.0_hd;
+  EXPECT_CALLRESULT_UNDEFINED(
+      lv.array->getComputed_RJS(lv.array, runtime, lv.val));
 
 // Obtain the value a couple of different ways and check its value.
-#define EXPECT_INDEX_VALUE(value, array, index)                               \
-  EXPECT_EQ(value, array->at(runtime, index).unboxToHV(runtime));             \
-  ASSERT_TRUE(*array->getOwnComputedDescriptor(                               \
-      array,                                                                  \
-      runtime,                                                                \
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(index)),       \
-      desc));                                                                 \
-  EXPECT_CALLRESULT_VALUE(                                                    \
-      value,                                                                  \
-      JSArray::getComputedPropertyValue_RJS(                                  \
-          array,                                                              \
-          runtime,                                                            \
-          array,                                                              \
-          desc,                                                               \
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(index)))); \
-  EXPECT_CALLRESULT_VALUE(                                                    \
-      value,                                                                  \
-      array->getComputed_RJS(                                                 \
-          array,                                                              \
-          runtime,                                                            \
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(index))));
+#define EXPECT_INDEX_VALUE(value, array, index)                           \
+  {                                                                       \
+    struct : Locals {                                                     \
+      PinnedValue<> idx;                                                  \
+    } mlv;                                                                \
+    LocalsRAII mlraii{runtime, &mlv};                                     \
+    mlv.idx = HermesValue::encodeTrustedNumberValue(index);               \
+    EXPECT_EQ(value, array->at(runtime, index).unboxToHV(runtime));       \
+    ASSERT_TRUE(                                                          \
+        *array->getOwnComputedDescriptor(array, runtime, mlv.idx, desc)); \
+    EXPECT_CALLRESULT_VALUE(                                              \
+        value,                                                            \
+        JSArray::getComputedPropertyValue_RJS(                            \
+            array, runtime, array, desc, mlv.idx));                       \
+    EXPECT_CALLRESULT_VALUE(                                              \
+        value, array->getComputed_RJS(array, runtime, mlv.idx));          \
+  }
 
   // array[100] = 50. This will case a reallocation.
+  lv.val = 50.0_hd;
   ASSERT_NE(
-      JSArray::setElementAt(
-          lv.array, runtime, 100, runtime.makeHandle(50.0_hd)),
+      JSArray::setElementAt(lv.array, runtime, 100, lv.val),
       ExecutionStatus::EXCEPTION);
   // Length must be 101.
   ASSERT_EQ(101u, lv.array->getEndIndex());
   EXPECT_INDEX_VALUE(50.0_hd, lv.array, 100);
 
   // array[90] = 40. This will cause a reallocation.
+  lv.val = 40.0_hd;
   ASSERT_NE(
-      JSArray::setElementAt(lv.array, runtime, 90, runtime.makeHandle(40.0_hd)),
+      JSArray::setElementAt(lv.array, runtime, 90, lv.val),
       ExecutionStatus::EXCEPTION);
   // Length must still be 101.
   ASSERT_EQ(101u, lv.array->getEndIndex());
@@ -87,9 +83,9 @@ TEST_F(ArrayTest, CppAPITest) {
   EXPECT_INDEX_VALUE(50.0_hd, lv.array, 100);
 
   // array[105] = 60. This will case a reallocation.
+  lv.val = 60.0_hd;
   ASSERT_NE(
-      JSArray::setElementAt(
-          lv.array, runtime, 105, runtime.makeHandle(60.0_hd)),
+      JSArray::setElementAt(lv.array, runtime, 105, lv.val),
       ExecutionStatus::EXCEPTION);
   ASSERT_EQ(106u, lv.array->getEndIndex());
   EXPECT_INDEX_VALUE(40.0_hd, lv.array, 90);
@@ -97,9 +93,9 @@ TEST_F(ArrayTest, CppAPITest) {
   EXPECT_INDEX_VALUE(60.0_hd, lv.array, 105);
 
   // array[106] = 70. This will not case a reallocation.
+  lv.val = 70.0_hd;
   ASSERT_NE(
-      JSArray::setElementAt(
-          lv.array, runtime, 106, runtime.makeHandle(70.0_hd)),
+      JSArray::setElementAt(lv.array, runtime, 106, lv.val),
       ExecutionStatus::EXCEPTION);
   ASSERT_EQ(107u, lv.array->getEndIndex());
   EXPECT_INDEX_VALUE(40.0_hd, lv.array, 90);
@@ -108,9 +104,9 @@ TEST_F(ArrayTest, CppAPITest) {
   EXPECT_INDEX_VALUE(70.0_hd, lv.array, 106);
 
   // array[100] = 51. We are updating an element in-place.
+  lv.val = 51.0_hd;
   ASSERT_NE(
-      JSArray::setElementAt(
-          lv.array, runtime, 100, runtime.makeHandle(51.0_hd)),
+      JSArray::setElementAt(lv.array, runtime, 100, lv.val),
       ExecutionStatus::EXCEPTION);
   ASSERT_EQ(107u, lv.array->getEndIndex());
   EXPECT_INDEX_VALUE(40.0_hd, lv.array, 90);
@@ -124,14 +120,12 @@ TEST_F(ArrayTest, CppAPITest) {
   EXPECT_INDEX_VALUE(40.0_hd, lv.array, 90);
   EXPECT_INDEX_VALUE(51.0_hd, lv.array, 100);
   EXPECT_INDEX_VALUE(60.0_hd, lv.array, 105);
+  lv.val = 106.0_hd;
   ASSERT_FALSE(*lv.array->getOwnComputedPrimitiveDescriptor(
-      lv.array,
-      runtime,
-      runtime.makeHandle(106.0_hd),
-      JSObject::IgnoreProxy::No,
-      desc));
-  EXPECT_CALLRESULT_UNDEFINED(lv.array->getComputed_RJS(
-      lv.array, runtime, runtime.makeHandle(106.0_hd)));
+      lv.array, runtime, lv.val, JSObject::IgnoreProxy::No, desc));
+  lv.val = 106.0_hd;
+  EXPECT_CALLRESULT_UNDEFINED(
+      lv.array->getComputed_RJS(lv.array, runtime, lv.val));
 
   // Increase to 107 again.
   JSArray::setStorageEndIndex(lv.array, runtime, 107);
@@ -139,19 +133,17 @@ TEST_F(ArrayTest, CppAPITest) {
   EXPECT_INDEX_VALUE(40.0_hd, lv.array, 90);
   EXPECT_INDEX_VALUE(51.0_hd, lv.array, 100);
   EXPECT_INDEX_VALUE(60.0_hd, lv.array, 105);
+  lv.val = 106.0_hd;
   ASSERT_FALSE(*lv.array->getOwnComputedPrimitiveDescriptor(
-      lv.array,
-      runtime,
-      runtime.makeHandle(106.0_hd),
-      JSObject::IgnoreProxy::No,
-      desc));
-  EXPECT_CALLRESULT_UNDEFINED(lv.array->getComputed_RJS(
-      lv.array, runtime, runtime.makeHandle(106.0_hd)));
+      lv.array, runtime, lv.val, JSObject::IgnoreProxy::No, desc));
+  lv.val = 106.0_hd;
+  EXPECT_CALLRESULT_UNDEFINED(
+      lv.array->getComputed_RJS(lv.array, runtime, lv.val));
 
   // array[106] = 70 again.
+  lv.val = 70.0_hd;
   ASSERT_NE(
-      JSArray::setElementAt(
-          lv.array, runtime, 106, runtime.makeHandle(70.0_hd)),
+      JSArray::setElementAt(lv.array, runtime, 106, lv.val),
       ExecutionStatus::EXCEPTION);
   ASSERT_EQ(107u, lv.array->getEndIndex());
   EXPECT_INDEX_VALUE(40.0_hd, lv.array, 90);
@@ -165,6 +157,7 @@ TEST_F(ArrayTest, CppAPITest) {
 TEST_F(ArrayTest, TestLength) {
   struct : Locals {
     PinnedValue<JSArray> array;
+    PinnedValue<> val;
   } lv;
   LocalsRAII lraii{runtime, &lv};
   auto lengthID = Predefined::getSymbolID(Predefined::length);
@@ -178,16 +171,16 @@ TEST_F(ArrayTest, TestLength) {
       10.0, JSObject::getNamed_RJS(lv.array, runtime, lengthID));
 
   // Change it to 5.0.
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      lv.array, runtime, lengthID, runtime.makeHandle(5.0_hd)));
+  lv.val = 5.0_hd;
+  ASSERT_TRUE(*JSObject::putNamed_RJS(lv.array, runtime, lengthID, lv.val));
   ASSERT_EQ(5u, JSArray::getLength(lv.array.get(), runtime));
   EXPECT_CALLRESULT_DOUBLE(
       5.0, JSObject::getNamed_RJS(lv.array, runtime, lengthID));
 
   // Try setting it to an invalid value.
   {
-    auto res = JSObject::putNamed_RJS(
-        lv.array, runtime, lengthID, runtime.makeHandle(5.1_hd));
+    lv.val = 5.1_hd;
+    auto res = JSObject::putNamed_RJS(lv.array, runtime, lengthID, lv.val);
     ASSERT_TRUE(isException(res));
     runtime.clearThrownValue();
   }

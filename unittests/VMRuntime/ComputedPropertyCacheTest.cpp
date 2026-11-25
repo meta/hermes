@@ -41,34 +41,38 @@ class ComputedPropertyCacheTest : public RuntimeTestFixtureBase {
   ComputedPropertyCacheTest() : RuntimeTestFixtureBase(kCPCTestRTConfig) {}
 };
 
-/// \return the SymbolID of \p s; its handle stays in the current GCScope.
-SymbolID sym(Runtime &runtime, const char *s) {
-  auto res = getSymbolHandleForTest(runtime, createASCIIRef(s));
+/// Write the SymbolID of \p s to \p out. \return the SymbolID, which stays
+/// alive while \p out holds it.
+SymbolID sym(Runtime &runtime, const char *s, MutableHandle<SymbolID> out) {
+  auto res =
+      runtime.getIdentifierTable().getSymbolID(runtime, createASCIIRef(s));
   EXPECT_NE(res.getStatus(), ExecutionStatus::EXCEPTION);
-  return res->get();
+  out = *res;
+  return *out;
 }
 
-/// \return a handle to the uniqued string of \p id
-/// (runtime.getStringPrimFromSymbolID).
-Handle<> keyOf(Runtime &runtime, SymbolID id) {
-  return runtime.makeHandle(
-      HermesValue::encodeStringValue(runtime.getStringPrimFromSymbolID(id)));
+/// Write the uniqued string of \p id (runtime.getStringPrimFromSymbolID) to
+/// \p out. \return a handle viewing \p out.
+Handle<> keyOf(Runtime &runtime, SymbolID id, MutableHandle<> out) {
+  out = HermesValue::encodeStringValue(runtime.getStringPrimFromSymbolID(id));
+  return out;
 }
 
-/// \return a new object whose parent is \p parent, with the named
+/// Write to \p out a new object whose parent is \p parent, with the named
 /// properties added in order by JSObject::putNamed_RJS, each holding
-/// \p value.
+/// \p value. \return a handle viewing \p out.
 Handle<JSObject> makeObject(
     Runtime &runtime,
     Handle<JSObject> parent,
     std::initializer_list<SymbolID> names,
-    Handle<> value) {
-  Handle<JSObject> obj = runtime.makeHandle(JSObject::create(runtime, parent));
+    Handle<> value,
+    MutableHandle<JSObject> out) {
+  out = JSObject::create(runtime, parent);
   for (SymbolID name : names) {
-    auto res = JSObject::putNamed_RJS(obj, runtime, name, value);
+    auto res = JSObject::putNamed_RJS(out, runtime, name, value);
     EXPECT_NE(res.getStatus(), ExecutionStatus::EXCEPTION);
   }
-  return obj;
+  return out;
 }
 
 /// A WeakRootAcceptor whose acceptWeak(WeakRootBase &) applies \p fn to
@@ -113,9 +117,11 @@ Handle<JSObject> objProto(Runtime &runtime) {
   return Handle<JSObject>::vmcast(&runtime.objectPrototype);
 }
 
-/// Compile \p source, an expression evaluating to a function, and
-/// \return the function. Call it before planting anything.
-Handle<Callable> compileFn(Runtime &runtime, const char *source) {
+/// Compile \p source, an expression evaluating to a function, write the
+/// function to \p out and \return a handle viewing \p out, or a null handle
+/// on failure. Call it before planting anything.
+Handle<Callable>
+compileFn(Runtime &runtime, const char *source, MutableHandle<Callable> out) {
   hermes::hbc::CompileFlags flags;
   CallResult<HermesValue> res = runtime.run(source, "", flags);
   if (res == ExecutionStatus::EXCEPTION) {
@@ -126,7 +132,8 @@ Handle<Callable> compileFn(Runtime &runtime, const char *source) {
     ADD_FAILURE() << "not a function: " << source;
     return Runtime::makeNullHandle<Callable>();
   }
-  return runtime.makeHandle(vmcast<Callable>(*res));
+  out = vmcast<Callable>(*res);
+  return out;
 }
 
 /// \return the result of calling \p fn with this undefined and the
@@ -141,9 +148,11 @@ call2(Runtime &runtime, Handle<Callable> fn, HermesValue a0, HermesValue a1) {
   return res->get();
 }
 
-/// \return the object returned by calling \p fn with this undefined and
-/// no arguments.
-Handle<JSObject> call0Obj(Runtime &runtime, Handle<Callable> fn) {
+/// Write the object returned by calling \p fn with this undefined and no
+/// arguments to \p out. \return a handle viewing \p out, or a null handle on
+/// failure.
+Handle<JSObject>
+call0Obj(Runtime &runtime, Handle<Callable> fn, MutableHandle<JSObject> out) {
   auto res = Callable::executeCall0(fn, runtime, Runtime::getUndefinedValue());
   EXPECT_NE(res.getStatus(), ExecutionStatus::EXCEPTION);
   if (res == ExecutionStatus::EXCEPTION)
@@ -152,7 +161,8 @@ Handle<JSObject> call0Obj(Runtime &runtime, Handle<Callable> fn) {
     ADD_FAILURE() << "the function did not return an object";
     return Runtime::makeNullHandle<JSObject>();
   }
-  return runtime.makeHandle(vmcast<JSObject>(res->get()));
+  out = vmcast<JSObject>(res->get());
+  return out;
 }
 
 /// \return the value of \p obj[\p key] by JSObject::getComputed_RJS, or
@@ -227,7 +237,7 @@ bool sameClass(Handle<JSObject> a, Handle<JSObject> b) {
 
 /// A typed object and the slots of its two public properties.
 struct TypedObject {
-  /// The object, in the caller's GCScope.
+  /// The object, viewing the caller's slot.
   Handle<JSObject> obj;
   /// The slot of the first property.
   SlotIndex slotA;
@@ -237,16 +247,16 @@ struct TypedObject {
 
 /// \return an object with no parent whose class comes from
 /// HiddenClass::createForTypedObject, with the public properties \p a holding
-/// \p va and \p b holding \p vb. The handle is in the current GCScope.
+/// \p va and \p b holding \p vb. The object is written to \p out.
 TypedObject makeTypedObject(
     Runtime &runtime,
     SymbolID a,
     SymbolID b,
     Handle<JSObject> va,
-    Handle<JSObject> vb) {
+    Handle<JSObject> vb,
+    MutableHandle<JSObject> out) {
   struct : public Locals {
     PinnedValue<HiddenClass> clazz;
-    PinnedValue<JSObject> obj;
   } lv;
   LocalsRAII lraii{runtime, &lv};
   lv.clazz = HiddenClass::createForTypedObject(
@@ -255,33 +265,41 @@ TypedObject makeTypedObject(
       HiddenClass::addNewTypedPublicProperty(lv.clazz, runtime, a, true);
   SlotIndex slotB =
       HiddenClass::addNewTypedPublicProperty(lv.clazz, runtime, b, true);
-  lv.obj =
+  out =
       JSObject::create(runtime, Runtime::makeNullHandle<JSObject>(), lv.clazz);
   JSObject::setNamedSlotValueUnsafe(
-      *lv.obj,
-      runtime,
-      slotA,
-      SmallHermesValue::encodeObjectValue(*va, runtime));
+      *out, runtime, slotA, SmallHermesValue::encodeObjectValue(*va, runtime));
   JSObject::setNamedSlotValueUnsafe(
-      *lv.obj,
-      runtime,
-      slotB,
-      SmallHermesValue::encodeObjectValue(*vb, runtime));
-  return TypedObject{runtime.makeHandle(*lv.obj), slotA, slotB};
+      *out, runtime, slotB, SmallHermesValue::encodeObjectValue(*vb, runtime));
+  return TypedObject{out, slotA, slotB};
 }
 
 TEST_F(ComputedPropertyCacheTest, InsertLookup) {
-  GCScope scope{runtime, "InsertLookup", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
+    PinnedValue<SymbolID> x;
+    PinnedValue<SymbolID> y;
+    PinnedValue<JSObject> objC;
+    PinnedValue<JSObject> objR;
+    PinnedValue<HiddenClass> C;
+    PinnedValue<HiddenClass> R;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  SymbolID b = sym(runtime, "b");
-  SymbolID x = sym(runtime, "x");
-  SymbolID y = sym(runtime, "y");
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID b = sym(runtime, "b", lv.b);
+  SymbolID x = sym(runtime, "x", lv.x);
+  SymbolID y = sym(runtime, "y", lv.y);
   Handle<> undef = Runtime::getUndefinedValue();
-  Handle<JSObject> objC = makeObject(runtime, objProto(runtime), {x}, undef);
-  Handle<JSObject> objR = makeObject(runtime, objProto(runtime), {x, y}, undef);
-  Handle<HiddenClass> C = runtime.makeHandle(objC->getClass(runtime));
-  Handle<HiddenClass> R = runtime.makeHandle(objR->getClass(runtime));
+  Handle<JSObject> objC =
+      makeObject(runtime, objProto(runtime), {x}, undef, lv.objC);
+  Handle<JSObject> objR =
+      makeObject(runtime, objProto(runtime), {x, y}, undef, lv.objR);
+  lv.C = objC->getClass(runtime);
+  lv.R = objR->getClass(runtime);
+  Handle<HiddenClass> C = lv.C;
+  Handle<HiddenClass> R = lv.R;
 
   // No allocation from here on.
   cache.clear();
@@ -313,10 +331,15 @@ TEST_F(ComputedPropertyCacheTest, InsertLookup) {
 }
 
 TEST_F(ComputedPropertyCacheTest, TwoWays) {
-  GCScope scope{runtime, "TwoWays", 128};
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+    PinnedValue<HiddenClass> C;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  Handle<JSObject> obj = runtime.makeHandle(JSObject::create(runtime));
-  Handle<HiddenClass> C = runtime.makeHandle(obj->getClass(runtime));
+  lv.obj = JSObject::create(runtime);
+  lv.C = lv.obj->getClass(runtime);
+  Handle<HiddenClass> C = lv.C;
 
   // No allocation from here on, so the class's address, which is part of
   // the hash, stays put. The names are fabricated: the cache only compares
@@ -360,14 +383,23 @@ TEST_F(ComputedPropertyCacheTest, TwoWays) {
 }
 
 TEST_F(ComputedPropertyCacheTest, EmptyWay0) {
-  GCScope scope{runtime, "EmptyWay0", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> x;
+    PinnedValue<JSObject> objC;
+    PinnedValue<JSObject> objD;
+    PinnedValue<HiddenClass> C;
+    PinnedValue<HiddenClass> D;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID x = sym(runtime, "x");
+  SymbolID x = sym(runtime, "x", lv.x);
   Handle<> undef = Runtime::getUndefinedValue();
-  Handle<HiddenClass> C = runtime.makeHandle(
-      makeObject(runtime, objProto(runtime), {}, undef)->getClass(runtime));
-  Handle<HiddenClass> D = runtime.makeHandle(
-      makeObject(runtime, objProto(runtime), {x}, undef)->getClass(runtime));
+  lv.C = makeObject(runtime, objProto(runtime), {}, undef, lv.objC)
+             ->getClass(runtime);
+  lv.D = makeObject(runtime, objProto(runtime), {x}, undef, lv.objD)
+             ->getClass(runtime);
+  Handle<HiddenClass> C = lv.C;
+  Handle<HiddenClass> D = lv.D;
 
   // No allocation from here on; the names are fabricated, as in TwoWays.
   // Find a set that holds two keys of C and one of D.
@@ -431,22 +463,31 @@ TEST_F(ComputedPropertyCacheTest, EmptyWay0) {
 }
 
 TEST_F(ComputedPropertyCacheTest, Predicate) {
-  GCScope scope{runtime, "Predicate", 128};
-  Handle<JSObject> plain = runtime.makeHandle(JSObject::create(runtime));
+  struct : public Locals {
+    PinnedValue<JSObject> plain;
+    PinnedValue<JSObject> host;
+    PinnedValue<JSArray> arr;
+    PinnedValue<HiddenClass> lazy;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.plain = JSObject::create(runtime);
+  Handle<JSObject> plain = lv.plain;
 
   auto hostRes = HostObject::createWithoutPrototype(
       runtime, std::make_unique<TrivialHostObjectProxy>());
   ASSERT_NE(hostRes.getStatus(), ExecutionStatus::EXCEPTION);
-  Handle<JSObject> host = runtime.makeHandle(vmcast<JSObject>(*hostRes));
+  lv.host = vmcast<JSObject>(*hostRes);
+  Handle<JSObject> host = lv.host;
 
   auto arrRes = JSArray::create(runtime, 0, 0);
   ASSERT_NE(arrRes.getStatus(), ExecutionStatus::EXCEPTION);
-  Handle<JSArray> arr = runtime.makeHandle(std::move(*arrRes));
+  lv.arr = std::move(*arrRes);
+  Handle<JSArray> arr = lv.arr;
 
   ClassFlags lazyFlags{};
   lazyFlags.lazyObject = 1;
-  Handle<HiddenClass> lazy = runtime.makeHandle(
-      HiddenClass::createRoot(runtime, objProto(runtime), lazyFlags));
+  lv.lazy = HiddenClass::createRoot(runtime, objProto(runtime), lazyFlags);
+  Handle<HiddenClass> lazy = lv.lazy;
 
   EXPECT_TRUE(ComputedPropertyCache::isCacheable(plain->getClass(runtime)));
   EXPECT_FALSE(ComputedPropertyCache::isCacheable(host->getClass(runtime)));
@@ -455,17 +496,27 @@ TEST_F(ComputedPropertyCacheTest, Predicate) {
 }
 
 TEST_F(ComputedPropertyCacheTest, RecordSlot) {
-  GCScope scope{runtime, "RecordSlot", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<> keyA;
+    PinnedValue<JSObject> plain;
+    PinnedValue<JSArray> arr;
+    PinnedValue<> plainStr;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<JSObject> plain = runtime.makeHandle(JSObject::create(runtime));
+  SymbolID a = sym(runtime, "a", lv.a);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  lv.plain = JSObject::create(runtime);
+  Handle<JSObject> plain = lv.plain;
   auto arrRes = JSArray::create(runtime, 0, 0);
   ASSERT_NE(arrRes.getStatus(), ExecutionStatus::EXCEPTION);
-  Handle<JSArray> arr = runtime.makeHandle(std::move(*arrRes));
+  lv.arr = std::move(*arrRes);
+  Handle<JSArray> arr = lv.arr;
   auto strRes = StringPrimitive::create(runtime, createASCIIRef("a"));
   ASSERT_NE(strRes.getStatus(), ExecutionStatus::EXCEPTION);
-  Handle<> plainStr = runtime.makeHandle(*strRes);
+  lv.plainStr = *strRes;
+  Handle<> plainStr = lv.plainStr;
   ASSERT_FALSE(plainStr->getString()->isUniqued());
 
   // No allocation from here on.
@@ -550,21 +601,39 @@ TEST_F(ComputedPropertyCacheTest, RecordSlot) {
 }
 
 TEST_F(ComputedPropertyCacheTest, WeakRoots) {
-  GCScope scope{runtime, "WeakRoots", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> x;
+    PinnedValue<SymbolID> y;
+    PinnedValue<SymbolID> z;
+    PinnedValue<JSObject> obj1;
+    PinnedValue<JSObject> obj2;
+    PinnedValue<JSObject> obj3;
+    PinnedValue<JSObject> objR;
+    PinnedValue<HiddenClass> C1;
+    PinnedValue<HiddenClass> C2;
+    PinnedValue<HiddenClass> C3;
+    PinnedValue<HiddenClass> R;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  SymbolID x = sym(runtime, "x");
-  SymbolID y = sym(runtime, "y");
-  SymbolID z = sym(runtime, "z");
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID x = sym(runtime, "x", lv.x);
+  SymbolID y = sym(runtime, "y", lv.y);
+  SymbolID z = sym(runtime, "z", lv.z);
   Handle<> undef = Runtime::getUndefinedValue();
-  Handle<HiddenClass> C1 = runtime.makeHandle(
-      makeObject(runtime, objProto(runtime), {x}, undef)->getClass(runtime));
-  Handle<HiddenClass> C2 = runtime.makeHandle(
-      makeObject(runtime, objProto(runtime), {y}, undef)->getClass(runtime));
-  Handle<HiddenClass> C3 = runtime.makeHandle(
-      makeObject(runtime, objProto(runtime), {z}, undef)->getClass(runtime));
-  Handle<HiddenClass> R = runtime.makeHandle(
-      makeObject(runtime, objProto(runtime), {y, a}, undef)->getClass(runtime));
+  lv.C1 = makeObject(runtime, objProto(runtime), {x}, undef, lv.obj1)
+              ->getClass(runtime);
+  lv.C2 = makeObject(runtime, objProto(runtime), {y}, undef, lv.obj2)
+              ->getClass(runtime);
+  lv.C3 = makeObject(runtime, objProto(runtime), {z}, undef, lv.obj3)
+              ->getClass(runtime);
+  lv.R = makeObject(runtime, objProto(runtime), {y, a}, undef, lv.objR)
+             ->getClass(runtime);
+  Handle<HiddenClass> C1 = lv.C1;
+  Handle<HiddenClass> C2 = lv.C2;
+  Handle<HiddenClass> C3 = lv.C3;
+  Handle<HiddenClass> R = lv.R;
 
   // No allocation from here on.
   const CompressedPointer cp1 = CompressedPointer::encode(*C1, runtime);
@@ -636,31 +705,38 @@ std::string collectName(unsigned i) {
   return "cpcCollect" + std::to_string(i);
 }
 
+/// Fill the empty cache with entries whose classes and names nothing else
+/// keeps once this returns.
+void fillCollectEmpties(Runtime &runtime) {
+  struct : public Locals {
+    PinnedValue<SymbolID> names[kNumCollectNames];
+    PinnedValue<JSObject> objs[kNumCollectNames];
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
+  Handle<> undef = Runtime::getUndefinedValue();
+  for (unsigned i = 0; i < kNumCollectNames; ++i) {
+    sym(runtime, collectName(i).c_str(), lv.names[i]);
+    makeObject(runtime, objProto(runtime), {*lv.names[i]}, undef, lv.objs[i]);
+  }
+  // No allocation from here on to the end of the function.
+  for (unsigned i = 0; i < kNumCollectNames; ++i)
+    cache.insertSlot(
+        runtime, lv.objs[i]->getClass(runtime), *lv.names[i], 0, true);
+  EXPECT_EQ(cache.numEntries(), kNumCollectNames);
+}
+
 /// Empty the cache, fill it with entries whose classes and names nothing
 /// else keeps, collect, and expect the cache to be empty.
 void collectEmpties(Runtime &runtime) {
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
   cache.clear();
-  {
-    GCScope inner{runtime, "collectEmpties", 128};
-    Handle<> undef = Runtime::getUndefinedValue();
-    std::vector<SymbolID> names;
-    std::vector<Handle<JSObject>> objs;
-    for (unsigned i = 0; i < kNumCollectNames; ++i) {
-      names.push_back(sym(runtime, collectName(i).c_str()));
-      objs.push_back(makeObject(runtime, objProto(runtime), {names[i]}, undef));
-    }
-    // No allocation from here on to the end of the scope.
-    for (unsigned i = 0; i < kNumCollectNames; ++i)
-      cache.insertSlot(runtime, objs[i]->getClass(runtime), names[i], 0, true);
-    EXPECT_EQ(cache.numEntries(), kNumCollectNames);
-  }
+  fillCollectEmpties(runtime);
   runtime.collect("test");
   EXPECT_EQ(cache.numEntries(), 0u);
 }
 
 TEST_F(ComputedPropertyCacheTest, CollectEmpties) {
-  GCScope scope{runtime, "CollectEmpties", 128};
   collectEmpties(runtime);
 }
 
@@ -668,17 +744,32 @@ TEST_F(ComputedPropertyCacheTest, CollectEmpties) {
 // planted entry is followed only when writable. Fails without the put
 // fill, without the put fast path, and if writable is ignored.
 TEST_F(ComputedPropertyCacheTest, PutFillsAndHits) {
-  GCScope scope{runtime, "PutFillsAndHits", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
+    PinnedValue<> keyA;
+    PinnedValue<> keyB;
+    PinnedValue<JSObject> v1;
+    PinnedValue<JSObject> v2;
+    PinnedValue<JSObject> v3;
+    PinnedValue<JSObject> v4;
+    PinnedValue<JSObject> o;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  SymbolID b = sym(runtime, "b");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<> keyB = keyOf(runtime, b);
-  Handle<JSObject> v1 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> v2 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> v3 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> v4 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> o = makeObject(runtime, objProto(runtime), {a, b}, v1);
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID b = sym(runtime, "b", lv.b);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  Handle<> keyB = keyOf(runtime, b, lv.keyB);
+  lv.v1 = JSObject::create(runtime);
+  lv.v2 = JSObject::create(runtime);
+  lv.v3 = JSObject::create(runtime);
+  lv.v4 = JSObject::create(runtime);
+  Handle<JSObject> v1 = lv.v1;
+  Handle<JSObject> v2 = lv.v2;
+  Handle<JSObject> v3 = lv.v3;
+  Handle<JSObject> v4 = lv.v4;
+  Handle<JSObject> o = makeObject(runtime, objProto(runtime), {a, b}, v1, lv.o);
 
   cache.clear();
   EXPECT_TRUE(putComputed(runtime, o, keyA, v2));
@@ -719,20 +810,35 @@ TEST_F(ComputedPropertyCacheTest, PutFillsAndHits) {
 // object alone. Fails if the receiver test is removed from the put fast
 // path.
 TEST_F(ComputedPropertyCacheTest, PutReceiver) {
-  GCScope scope{runtime, "PutReceiver", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
+    PinnedValue<> keyA;
+    PinnedValue<> keyB;
+    PinnedValue<JSObject> v1;
+    PinnedValue<JSObject> v2;
+    PinnedValue<JSObject> v3;
+    PinnedValue<JSObject> o;
+    PinnedValue<JSObject> other;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  SymbolID b = sym(runtime, "b");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<> keyB = keyOf(runtime, b);
-  Handle<JSObject> v1 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> v2 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> v3 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> o = makeObject(runtime, objProto(runtime), {a, b}, v1);
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID b = sym(runtime, "b", lv.b);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  Handle<> keyB = keyOf(runtime, b, lv.keyB);
+  lv.v1 = JSObject::create(runtime);
+  lv.v2 = JSObject::create(runtime);
+  lv.v3 = JSObject::create(runtime);
+  Handle<JSObject> v1 = lv.v1;
+  Handle<JSObject> v2 = lv.v2;
+  Handle<JSObject> v3 = lv.v3;
+  Handle<JSObject> o = makeObject(runtime, objProto(runtime), {a, b}, v1, lv.o);
   ASSERT_NE(
       JSObject::putNamed_RJS(o, runtime, b, v2).getStatus(),
       ExecutionStatus::EXCEPTION);
-  Handle<JSObject> other = makeObject(runtime, objProto(runtime), {}, v1);
+  Handle<JSObject> other =
+      makeObject(runtime, objProto(runtime), {}, v1, lv.other);
 
   cache.clear();
   cache.insertSlot(runtime, o->getClass(runtime), a, 1, true);
@@ -750,19 +856,34 @@ TEST_F(ComputedPropertyCacheTest, PutReceiver) {
 // Fails if the uniqued test is removed from nameOfKey: getUniqueID
 // asserts.
 TEST_F(ComputedPropertyCacheTest, PutNonUniquedKey) {
-  GCScope scope{runtime, "PutNonUniquedKey", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
+    PinnedValue<> keyA;
+    PinnedValue<> keyB;
+    PinnedValue<JSObject> v1;
+    PinnedValue<JSObject> v2;
+    PinnedValue<JSObject> v3;
+    PinnedValue<JSObject> o;
+    PinnedValue<> plainA;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  SymbolID b = sym(runtime, "b");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<> keyB = keyOf(runtime, b);
-  Handle<JSObject> v1 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> v2 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> v3 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> o = makeObject(runtime, objProto(runtime), {a, b}, v1);
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID b = sym(runtime, "b", lv.b);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  Handle<> keyB = keyOf(runtime, b, lv.keyB);
+  lv.v1 = JSObject::create(runtime);
+  lv.v2 = JSObject::create(runtime);
+  lv.v3 = JSObject::create(runtime);
+  Handle<JSObject> v1 = lv.v1;
+  Handle<JSObject> v2 = lv.v2;
+  Handle<JSObject> v3 = lv.v3;
+  Handle<JSObject> o = makeObject(runtime, objProto(runtime), {a, b}, v1, lv.o);
   auto strRes = StringPrimitive::create(runtime, createASCIIRef("a"));
   ASSERT_NE(strRes.getStatus(), ExecutionStatus::EXCEPTION);
-  Handle<> plainA = runtime.makeHandle(*strRes);
+  lv.plainA = *strRes;
+  Handle<> plainA = lv.plainA;
 
   cache.clear();
   ASSERT_FALSE(plainA->getString()->isUniqued());
@@ -785,15 +906,27 @@ TEST_F(ComputedPropertyCacheTest, PutNonUniquedKey) {
 // fails as it does generically, with no entry and with a planted one
 // whose writable bit is clear. Fails if the put fast path ignores writable.
 TEST_F(ComputedPropertyCacheTest, TypedObjectPut) {
-  GCScope scope{runtime, "TypedObjectPut", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
+    PinnedValue<> keyA;
+    PinnedValue<JSObject> v1;
+    PinnedValue<JSObject> v2;
+    PinnedValue<JSObject> v3;
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  SymbolID b = sym(runtime, "b");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<JSObject> v1 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> v2 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> v3 = runtime.makeHandle(JSObject::create(runtime));
-  TypedObject typed = makeTypedObject(runtime, a, b, v1, v2);
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID b = sym(runtime, "b", lv.b);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  lv.v1 = JSObject::create(runtime);
+  lv.v2 = JSObject::create(runtime);
+  lv.v3 = JSObject::create(runtime);
+  Handle<JSObject> v1 = lv.v1;
+  Handle<JSObject> v2 = lv.v2;
+  Handle<JSObject> v3 = lv.v3;
+  TypedObject typed = makeTypedObject(runtime, a, b, v1, v2, lv.obj);
   Handle<JSObject> obj = typed.obj;
 
   cache.clear();
@@ -813,20 +946,30 @@ TEST_F(ComputedPropertyCacheTest, TypedObjectPut) {
 // writable bit is clear planted for it, a put fails and leaves the value.
 // Fails if the put fast path ignores writable.
 TEST_F(ComputedPropertyCacheTest, ReadOnlyPut) {
-  GCScope scope{runtime, "ReadOnlyPut", 128};
+  struct : public Locals {
+    PinnedValue<Callable> makeReadOnly;
+    PinnedValue<SymbolID> a;
+    PinnedValue<> keyA;
+    PinnedValue<JSObject> v3;
+    PinnedValue<JSObject> o;
+    PinnedValue<> orig;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
   Handle<Callable> makeReadOnly = compileFn(
       runtime,
       "(function() { var o = {a: {}, b: {}};"
-      " Object.defineProperty(o, 'a', {writable: false}); return o; })");
+      " Object.defineProperty(o, 'a', {writable: false}); return o; })",
+      lv.makeReadOnly);
   ASSERT_TRUE(makeReadOnly.get());
-  SymbolID a = sym(runtime, "a");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<JSObject> v3 = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> o = call0Obj(runtime, makeReadOnly);
+  SymbolID a = sym(runtime, "a", lv.a);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  lv.v3 = JSObject::create(runtime);
+  Handle<JSObject> v3 = lv.v3;
+  Handle<JSObject> o = call0Obj(runtime, makeReadOnly, lv.o);
   ASSERT_TRUE(o.get());
   ASSERT_TRUE(ComputedPropertyCache::isCacheable(o->getClass(runtime)));
-  MutableHandle<> orig{runtime};
+  MutableHandle<> orig{lv.orig};
 
   cache.clear();
   orig = getComputed(runtime, o, keyA);
@@ -845,20 +988,35 @@ TEST_F(ComputedPropertyCacheTest, ReadOnlyPut) {
 // follows it, and a planted entry is followed. Fails without the add fill,
 // and, planted, without the Add fast path.
 TEST_F(ComputedPropertyCacheTest, AddFillsAndHits) {
-  GCScope scope{runtime, "AddFillsAndHits", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
+    PinnedValue<> keyA;
+    PinnedValue<JSObject> v;
+    PinnedValue<JSObject> proto;
+    PinnedValue<JSObject> o1;
+    PinnedValue<JSObject> o2;
+    PinnedValue<JSObject> o3;
+    PinnedValue<JSObject> ob;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  SymbolID b = sym(runtime, "b");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<JSObject> v = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-  auto fresh = [&]() {
-    return runtime.makeHandle(JSObject::create(runtime, proto));
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID b = sym(runtime, "b", lv.b);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  lv.v = JSObject::create(runtime);
+  lv.proto = JSObject::create(runtime);
+  Handle<JSObject> v = lv.v;
+  Handle<JSObject> proto = lv.proto;
+  /// Write a new object whose parent is proto to \p out and \return it.
+  auto fresh = [&](MutableHandle<JSObject> out) -> Handle<JSObject> {
+    out = JSObject::create(runtime, proto);
+    return out;
   };
-  Handle<JSObject> o1 = fresh();
-  Handle<JSObject> o2 = fresh();
-  Handle<JSObject> o3 = fresh();
-  Handle<JSObject> ob = fresh();
+  Handle<JSObject> o1 = fresh(lv.o1);
+  Handle<JSObject> o2 = fresh(lv.o2);
+  Handle<JSObject> o3 = fresh(lv.o3);
+  Handle<JSObject> ob = fresh(lv.ob);
   ASSERT_NE(
       JSObject::putNamed_RJS(ob, runtime, b, v).getStatus(),
       ExecutionStatus::EXCEPTION);
@@ -896,18 +1054,33 @@ TEST_F(ComputedPropertyCacheTest, AddFillsAndHits) {
 // Fails if the receiver test is removed from the add fill's call site:
 // the property is then added to the object instead of the receiver.
 TEST_F(ComputedPropertyCacheTest, AddReceiver) {
-  GCScope scope{runtime, "AddReceiver", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
+    PinnedValue<> keyA;
+    PinnedValue<JSObject> v;
+    PinnedValue<JSObject> proto;
+    PinnedValue<JSObject> o;
+    PinnedValue<JSObject> other;
+    PinnedValue<HiddenClass> oStart;
+    PinnedValue<HiddenClass> otherStart;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  SymbolID b = sym(runtime, "b");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<JSObject> v = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> o = makeObject(runtime, proto, {}, v);
-  Handle<JSObject> other = makeObject(runtime, proto, {b}, v);
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID b = sym(runtime, "b", lv.b);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  lv.v = JSObject::create(runtime);
+  lv.proto = JSObject::create(runtime);
+  Handle<JSObject> v = lv.v;
+  Handle<JSObject> proto = lv.proto;
+  Handle<JSObject> o = makeObject(runtime, proto, {}, v, lv.o);
+  Handle<JSObject> other = makeObject(runtime, proto, {b}, v, lv.other);
   ASSERT_FALSE(sameClass(o, other));
-  Handle<HiddenClass> oStart = runtime.makeHandle(o->getClass(runtime));
-  Handle<HiddenClass> otherStart = runtime.makeHandle(other->getClass(runtime));
+  lv.oStart = o->getClass(runtime);
+  lv.otherStart = other->getClass(runtime);
+  Handle<HiddenClass> oStart = lv.oStart;
+  Handle<HiddenClass> otherStart = lv.otherStart;
 
   cache.clear();
   auto res = JSObject::putComputedWithReceiver_RJS(o, runtime, keyA, v, other);
@@ -930,17 +1103,31 @@ TEST_F(ComputedPropertyCacheTest, AddReceiver) {
 // exists. Fails if the add site passes cacheComputedAdd without the
 // isUniqued() test.
 TEST_F(ComputedPropertyCacheTest, ComputedAddNonUniquedKeyRecordsNothing) {
-  GCScope scope{runtime, "ComputedAddNonUniquedKeyRecordsNothing", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<> keyA;
+    PinnedValue<JSObject> v;
+    PinnedValue<JSObject> proto;
+    PinnedValue<JSObject> o;
+    PinnedValue<> plainA;
+    PinnedValue<HiddenClass> start;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<JSObject> v = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> o = runtime.makeHandle(JSObject::create(runtime, proto));
+  SymbolID a = sym(runtime, "a", lv.a);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  lv.v = JSObject::create(runtime);
+  lv.proto = JSObject::create(runtime);
+  Handle<JSObject> v = lv.v;
+  Handle<JSObject> proto = lv.proto;
+  lv.o = JSObject::create(runtime, proto);
+  Handle<JSObject> o = lv.o;
   auto strRes = StringPrimitive::create(runtime, createASCIIRef("a"));
   ASSERT_NE(strRes.getStatus(), ExecutionStatus::EXCEPTION);
-  Handle<> plainA = runtime.makeHandle(*strRes);
-  Handle<HiddenClass> start = runtime.makeHandle(o->getClass(runtime));
+  lv.plainA = *strRes;
+  Handle<> plainA = lv.plainA;
+  lv.start = o->getClass(runtime);
+  Handle<HiddenClass> start = lv.start;
   premark(runtime, proto);
 
   cache.clear();
@@ -960,22 +1147,36 @@ TEST_F(ComputedPropertyCacheTest, ComputedAddNonUniquedKeyRecordsNothing) {
 // allocates between the plant and the put, so this fails under every
 // collector if the epoch comparison is removed.
 TEST_F(ComputedPropertyCacheTest, StaleEpochNotFollowed) {
-  GCScope scope{runtime, "StaleEpochNotFollowed", 128};
+  struct : public Locals {
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
+    PinnedValue<> keyA;
+    PinnedValue<JSObject> v;
+    PinnedValue<JSObject> proto;
+    PinnedValue<JSObject> o4;
+    PinnedValue<JSObject> ob;
+    PinnedValue<JSObject> oa;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  SymbolID a = sym(runtime, "a");
-  SymbolID b = sym(runtime, "b");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<JSObject> v = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-  auto fresh = [&]() {
-    return runtime.makeHandle(JSObject::create(runtime, proto));
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID b = sym(runtime, "b", lv.b);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  lv.v = JSObject::create(runtime);
+  lv.proto = JSObject::create(runtime);
+  Handle<JSObject> v = lv.v;
+  Handle<JSObject> proto = lv.proto;
+  /// Write a new object whose parent is proto to \p out and \return it.
+  auto fresh = [&](MutableHandle<JSObject> out) -> Handle<JSObject> {
+    out = JSObject::create(runtime, proto);
+    return out;
   };
-  Handle<JSObject> o4 = fresh();
-  Handle<JSObject> ob = fresh();
+  Handle<JSObject> o4 = fresh(lv.o4);
+  Handle<JSObject> ob = fresh(lv.ob);
   ASSERT_NE(
       JSObject::putNamed_RJS(ob, runtime, b, v).getStatus(),
       ExecutionStatus::EXCEPTION);
-  Handle<JSObject> oa = fresh();
+  Handle<JSObject> oa = fresh(lv.oa);
   ASSERT_NE(
       JSObject::putNamed_RJS(oa, runtime, a, v).getStatus(),
       ExecutionStatus::EXCEPTION);
@@ -1001,37 +1202,45 @@ TEST_F(ComputedPropertyCacheTest, StaleEpochNotFollowed) {
 // the first out-of-line slot and each growth of the storage. Fails if the
 // hit stores to the wrong slot or skips the class update.
 TEST_F(ComputedPropertyCacheTest, AddAcrossStorage) {
-  GCScope scope{runtime, "AddAcrossStorage", 256};
-  ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
   constexpr unsigned kNumNames = 20;
-  std::vector<SymbolID> names;
-  std::vector<Handle<>> keys;
+  struct : public Locals {
+    PinnedValue<SymbolID> names[kNumNames];
+    PinnedValue<> keys[kNumNames];
+    PinnedValue<JSObject> v;
+    PinnedValue<JSObject> proto;
+    PinnedValue<JSObject> objA;
+    PinnedValue<JSObject> objB;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
   for (unsigned i = 0; i < kNumNames; ++i) {
     std::string s = "p" + std::to_string(i);
-    names.push_back(sym(runtime, s.c_str()));
-    keys.push_back(keyOf(runtime, names[i]));
+    keyOf(runtime, sym(runtime, s.c_str(), lv.names[i]), lv.keys[i]);
   }
-  Handle<JSObject> v = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> objA = runtime.makeHandle(JSObject::create(runtime, proto));
-  Handle<JSObject> objB = runtime.makeHandle(JSObject::create(runtime, proto));
+  lv.v = JSObject::create(runtime);
+  lv.proto = JSObject::create(runtime);
+  Handle<JSObject> v = lv.v;
+  Handle<JSObject> proto = lv.proto;
+  lv.objA = JSObject::create(runtime, proto);
+  lv.objB = JSObject::create(runtime, proto);
+  Handle<JSObject> objA = lv.objA;
+  Handle<JSObject> objB = lv.objB;
   premark(runtime, proto);
 
   cache.clear();
   for (unsigned i = 0; i < kNumNames; ++i) {
     SCOPED_TRACE(i);
-    GCScopeMarkerRAII marker{runtime};
-    EXPECT_TRUE(putComputed(runtime, objA, keys[i], v));
+    EXPECT_TRUE(putComputed(runtime, objA, lv.keys[i], v));
     // Nothing allocates between the fill, this lookup and the put on B.
     const ComputedPropertyCache::Entry *e =
-        cache.lookup(objB->getClassGCPtr(), names[i]);
+        cache.lookup(objB->getClassGCPtr(), *lv.names[i]);
     ASSERT_NE(e, nullptr);
     EXPECT_EQ(e->getKind(), ComputedPropertyCache::Kind::Add);
     EXPECT_TRUE(e->resultClazz == objA->getClassGCPtr());
     EXPECT_EQ(e->parentEpoch, runtime.getFullParentCacheEpoch());
-    EXPECT_TRUE(putComputed(runtime, objB, keys[i], v));
+    EXPECT_TRUE(putComputed(runtime, objB, lv.keys[i], v));
     EXPECT_TRUE(sameClass(objB, objA));
-    EXPECT_TRUE(getIs(runtime, objB, keys[i], v));
+    EXPECT_TRUE(getIs(runtime, objB, lv.keys[i], v));
   }
 }
 
@@ -1044,46 +1253,52 @@ TEST_F(ComputedPropertyCacheTest, AddAcrossStorage) {
 // the in-place store in addNewOwnPropertyInSlot, on its assertion that the
 // slot is the storage's size.
 TEST_F(ComputedPropertyCacheTest, AddLongStorage) {
-  GCScope scope{runtime, "AddLongStorage", 256};
-  ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
   // Storage for three out-of-line slots; the fourth out-of-line add grows it.
   constexpr unsigned kNumSlots = JSObject::DIRECT_PROPERTY_SLOTS + 3;
   constexpr unsigned kNumNames = kNumSlots + 1;
-  std::vector<SymbolID> names;
-  std::vector<Handle<>> keys;
-  std::vector<Handle<JSObject>> vals;
+  struct : public Locals {
+    PinnedValue<SymbolID> names[kNumNames];
+    PinnedValue<> keys[kNumNames];
+    PinnedValue<JSObject> vals[kNumNames];
+    PinnedValue<JSObject> proto;
+    PinnedValue<HiddenClass> root;
+    PinnedValue<JSObject> objA;
+    PinnedValue<JSObject> objB;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
   for (unsigned i = 0; i < kNumNames; ++i) {
     std::string s = "p" + std::to_string(i);
-    names.push_back(sym(runtime, s.c_str()));
-    keys.push_back(keyOf(runtime, names[i]));
-    vals.push_back(runtime.makeHandle(JSObject::create(runtime)));
+    keyOf(runtime, sym(runtime, s.c_str(), lv.names[i]), lv.keys[i]);
+    lv.vals[i] = JSObject::create(runtime);
   }
-  Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-  Handle<HiddenClass> root =
-      runtime.getHiddenClassForPrototype(*proto, runtime.classJSObject);
-  Handle<JSObject> objA = runtime.makeHandle(JSObject::create(runtime, proto));
-  Handle<JSObject> objB =
-      runtime.makeHandle(JSObject::create(runtime, proto, root, kNumSlots));
+  lv.proto = JSObject::create(runtime);
+  Handle<JSObject> proto = lv.proto;
+  lv.root = *runtime.getHiddenClassForPrototype(*proto, runtime.classJSObject);
+  Handle<HiddenClass> root = lv.root;
+  lv.objA = JSObject::create(runtime, proto);
+  lv.objB = JSObject::create(runtime, proto, root, kNumSlots);
+  Handle<JSObject> objA = lv.objA;
+  Handle<JSObject> objB = lv.objB;
   ASSERT_TRUE(sameClass(objA, objB));
   premark(runtime, proto);
 
   cache.clear();
   for (unsigned i = 0; i < kNumNames; ++i) {
     SCOPED_TRACE(i);
-    GCScopeMarkerRAII marker{runtime};
-    EXPECT_TRUE(putComputed(runtime, objA, keys[i], vals[i]));
+    EXPECT_TRUE(putComputed(runtime, objA, lv.keys[i], lv.vals[i]));
     // Nothing allocates between the fill, this lookup and the put on B.
     const ComputedPropertyCache::Entry *e =
-        cache.lookup(objB->getClassGCPtr(), names[i]);
+        cache.lookup(objB->getClassGCPtr(), *lv.names[i]);
     ASSERT_NE(e, nullptr);
     EXPECT_EQ(e->getKind(), ComputedPropertyCache::Kind::Add);
     EXPECT_EQ(e->slot, i);
     EXPECT_EQ(e->parentEpoch, runtime.getFullParentCacheEpoch());
-    EXPECT_TRUE(putComputed(runtime, objB, keys[i], vals[i]));
+    EXPECT_TRUE(putComputed(runtime, objB, lv.keys[i], lv.vals[i]));
     EXPECT_TRUE(sameClass(objB, objA));
     for (unsigned j = 0; j <= i; ++j) {
       SCOPED_TRACE(j);
-      EXPECT_TRUE(getIs(runtime, objB, keys[j], vals[j]));
+      EXPECT_TRUE(getIs(runtime, objB, lv.keys[j], lv.vals[j]));
     }
   }
 }
@@ -1094,33 +1309,66 @@ TEST_F(ComputedPropertyCacheTest, AddLongStorage) {
 // prototype. Asserts results only. Under Hades, where nothing moves, fails
 // if the epoch comparison is removed.
 TEST_F(ComputedPropertyCacheTest, AddEpoch) {
-  GCScope scope{runtime, "AddEpoch", 256};
+  struct : public Locals {
+    PinnedValue<Callable> defineSetter;
+    PinnedValue<Callable> defineReadOnly;
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> vName;
+    PinnedValue<> keyA;
+    PinnedValue<> keyV;
+    PinnedValue<JSObject> v;
+    PinnedValue<JSObject> proto1;
+    PinnedValue<JSObject> first1;
+    PinnedValue<JSObject> second1;
+    PinnedValue<JSObject> log1;
+    PinnedValue<JSObject> proto2;
+    PinnedValue<JSObject> first2;
+    PinnedValue<JSObject> second2;
+    PinnedValue<JSObject> third2;
+    PinnedValue<JSObject> proto3;
+    PinnedValue<JSObject> first3;
+    PinnedValue<JSObject> second3;
+    PinnedValue<JSObject> log3;
+    PinnedValue<JSObject> withSetter3;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
   Handle<Callable> defineSetter = compileFn(
       runtime,
       "(function(p, log) { Object.defineProperty(p, 'a',"
-      " {set: function(x) { log.v = x; }}); })");
+      " {set: function(x) { log.v = x; }}); })",
+      lv.defineSetter);
   Handle<Callable> defineReadOnly = compileFn(
       runtime,
       "(function(p) { Object.defineProperty(p, 'a',"
-      " {value: 1, writable: false}); })");
+      " {value: 1, writable: false}); })",
+      lv.defineReadOnly);
   ASSERT_TRUE(defineSetter.get() && defineReadOnly.get());
-  SymbolID a = sym(runtime, "a");
-  SymbolID vName = sym(runtime, "v");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<> keyV = keyOf(runtime, vName);
-  Handle<JSObject> v = runtime.makeHandle(JSObject::create(runtime));
-  /// \return a new object whose parent is \p parent.
-  auto child = [&](Handle<JSObject> parent) {
-    return runtime.makeHandle(JSObject::create(runtime, parent));
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID vName = sym(runtime, "v", lv.vName);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  Handle<> keyV = keyOf(runtime, vName, lv.keyV);
+  lv.v = JSObject::create(runtime);
+  Handle<JSObject> v = lv.v;
+  /// Write a new object to \p out and \return a handle viewing \p out.
+  auto newObj = [&](MutableHandle<JSObject> out) -> Handle<JSObject> {
+    out = JSObject::create(runtime);
+    return out;
+  };
+  /// Write a new object whose parent is \p parent to \p out and \return a
+  /// handle viewing \p out.
+  auto child = [&](Handle<JSObject> parent,
+                   MutableHandle<JSObject> out) -> Handle<JSObject> {
+    out = JSObject::create(runtime, parent);
+    return out;
   };
 
   {
     SCOPED_TRACE("setter on the prototype");
-    Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-    Handle<JSObject> first = child(proto);
-    Handle<JSObject> second = child(proto);
-    Handle<JSObject> log = runtime.makeHandle(JSObject::create(runtime));
+    Handle<JSObject> proto = newObj(lv.proto1);
+    Handle<JSObject> first = child(proto, lv.first1);
+    Handle<JSObject> second = child(proto, lv.second1);
+    Handle<JSObject> log = newObj(lv.log1);
     cache.clear();
     EXPECT_TRUE(putComputed(runtime, first, keyA, v));
     call2(runtime, defineSetter, proto.getHermesValue(), log.getHermesValue());
@@ -1130,10 +1378,10 @@ TEST_F(ComputedPropertyCacheTest, AddEpoch) {
   }
   {
     SCOPED_TRACE("read-only on the prototype");
-    Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-    Handle<JSObject> first = child(proto);
-    Handle<JSObject> second = child(proto);
-    Handle<JSObject> third = child(proto);
+    Handle<JSObject> proto = newObj(lv.proto2);
+    Handle<JSObject> first = child(proto, lv.first2);
+    Handle<JSObject> second = child(proto, lv.second2);
+    Handle<JSObject> third = child(proto, lv.third2);
     cache.clear();
     EXPECT_TRUE(putComputed(runtime, first, keyA, v));
     call2(
@@ -1155,11 +1403,11 @@ TEST_F(ComputedPropertyCacheTest, AddEpoch) {
   }
   {
     SCOPED_TRACE("prototype of the prototype replaced");
-    Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-    Handle<JSObject> first = child(proto);
-    Handle<JSObject> second = child(proto);
-    Handle<JSObject> log = runtime.makeHandle(JSObject::create(runtime));
-    Handle<JSObject> withSetter = runtime.makeHandle(JSObject::create(runtime));
+    Handle<JSObject> proto = newObj(lv.proto3);
+    Handle<JSObject> first = child(proto, lv.first3);
+    Handle<JSObject> second = child(proto, lv.second3);
+    Handle<JSObject> log = newObj(lv.log3);
+    Handle<JSObject> withSetter = newObj(lv.withSetter3);
     call2(
         runtime,
         defineSetter,
@@ -1182,38 +1430,59 @@ TEST_F(ComputedPropertyCacheTest, AddEpoch) {
 // dictionary or the host-object test is removed from
 // parentsAllowEpochCaching.
 TEST_F(ComputedPropertyCacheTest, AddNotRecorded) {
-  GCScope scope{runtime, "AddNotRecorded", 256};
-  ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
   constexpr unsigned kThreshold = HiddenClass::kDictionaryThreshold;
   static_assert(kThreshold == 64, "the test names the 64th and 65th");
-  std::vector<SymbolID> names;
+  struct : public Locals {
+    PinnedValue<SymbolID> names[kThreshold + 1];
+    PinnedValue<> key64;
+    PinnedValue<SymbolID> r63;
+    PinnedValue<> keyR63;
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> t;
+    PinnedValue<SymbolID> x;
+    PinnedValue<> keyA;
+    PinnedValue<JSObject> v;
+    PinnedValue<JSObject> proto;
+    PinnedValue<HiddenClass> start;
+    PinnedValue<JSObject> obj64;
+    PinnedValue<JSObject> obj63;
+    PinnedValue<JSObject> dict;
+    PinnedValue<JSObject> dictChild;
+    PinnedValue<JSObject> host;
+    PinnedValue<JSObject> hostChild;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
   for (unsigned i = 0; i <= kThreshold; ++i) {
     std::string s = "q" + std::to_string(i);
-    names.push_back(sym(runtime, s.c_str()));
+    sym(runtime, s.c_str(), lv.names[i]);
   }
-  Handle<> key64 = keyOf(runtime, names[kThreshold]);
+  Handle<> key64 = keyOf(runtime, *lv.names[kThreshold], lv.key64);
   // The 64th name of the 63-property object differs from the 64-property
   // object's, so that the add creates a new class.
-  SymbolID r63 = sym(runtime, "r63");
-  Handle<> keyR63 = keyOf(runtime, r63);
-  SymbolID a = sym(runtime, "a");
-  SymbolID t = sym(runtime, "t");
-  SymbolID x = sym(runtime, "x");
-  Handle<> keyA = keyOf(runtime, a);
-  Handle<JSObject> v = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-  /// \return an object with parent proto and the first \p n names.
-  auto withNames = [&](unsigned n) {
-    Handle<JSObject> obj = runtime.makeHandle(JSObject::create(runtime, proto));
+  SymbolID r63 = sym(runtime, "r63", lv.r63);
+  Handle<> keyR63 = keyOf(runtime, r63, lv.keyR63);
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID t = sym(runtime, "t", lv.t);
+  SymbolID x = sym(runtime, "x", lv.x);
+  Handle<> keyA = keyOf(runtime, a, lv.keyA);
+  lv.v = JSObject::create(runtime);
+  lv.proto = JSObject::create(runtime);
+  Handle<JSObject> v = lv.v;
+  Handle<JSObject> proto = lv.proto;
+  /// Write to \p out an object with parent proto and the first \p n names.
+  /// \return a handle viewing \p out.
+  auto withNames = [&](unsigned n,
+                       MutableHandle<JSObject> out) -> Handle<JSObject> {
+    out = JSObject::create(runtime, proto);
     for (unsigned i = 0; i < n; ++i) {
-      GCScopeMarkerRAII marker{runtime};
       EXPECT_NE(
-          JSObject::putNamed_RJS(obj, runtime, names[i], v).getStatus(),
+          JSObject::putNamed_RJS(out, runtime, *lv.names[i], v).getStatus(),
           ExecutionStatus::EXCEPTION);
     }
-    return obj;
+    return out;
   };
-  MutableHandle<HiddenClass> start{runtime};
+  MutableHandle<HiddenClass> start{lv.start};
   // The cases that must record nothing premark the chain too, and look
   // the entry up right after the put: a wrong fill on an unmarked chain
   // would allocate after writing its entry (marking the chain), and where
@@ -1222,7 +1491,7 @@ TEST_F(ComputedPropertyCacheTest, AddNotRecorded) {
 
   {
     SCOPED_TRACE("64 properties adding the 65th: dictionaryMode");
-    Handle<JSObject> obj = withNames(kThreshold);
+    Handle<JSObject> obj = withNames(kThreshold, lv.obj64);
     ASSERT_FALSE(obj->getClass(runtime)->isDictionary());
     start = obj->getClass(runtime);
     premark(runtime, proto);
@@ -1230,13 +1499,13 @@ TEST_F(ComputedPropertyCacheTest, AddNotRecorded) {
     EXPECT_TRUE(putComputed(runtime, obj, key64, v));
     EXPECT_EQ(
         cache.lookup(
-            CompressedPointer::encode(*start, runtime), names[kThreshold]),
+            CompressedPointer::encode(*start, runtime), *lv.names[kThreshold]),
         nullptr);
     EXPECT_TRUE(obj->getClass(runtime)->isDictionary());
   }
   {
     SCOPED_TRACE("63 properties adding the 64th: recorded");
-    Handle<JSObject> obj = withNames(kThreshold - 1);
+    Handle<JSObject> obj = withNames(kThreshold - 1, lv.obj63);
     start = obj->getClass(runtime);
     premark(runtime, proto);
     cache.clear();
@@ -1252,12 +1521,14 @@ TEST_F(ComputedPropertyCacheTest, AddNotRecorded) {
   }
   {
     SCOPED_TRACE("dictionary prototype: the chain check");
-    Handle<JSObject> dict = makeObject(runtime, objProto(runtime), {x, t}, v);
+    Handle<JSObject> dict =
+        makeObject(runtime, objProto(runtime), {x, t}, v, lv.dict);
     auto delRes = JSObject::deleteNamed(dict, runtime, t);
     ASSERT_NE(delRes.getStatus(), ExecutionStatus::EXCEPTION);
     ASSERT_TRUE(*delRes);
     ASSERT_TRUE(dict->getClass(runtime)->isDictionary());
-    Handle<JSObject> obj = runtime.makeHandle(JSObject::create(runtime, dict));
+    lv.dictChild = JSObject::create(runtime, dict);
+    Handle<JSObject> obj = lv.dictChild;
     start = obj->getClass(runtime);
     // A dictionary is marked in place and stays a dictionary.
     premark(runtime, dict);
@@ -1274,8 +1545,10 @@ TEST_F(ComputedPropertyCacheTest, AddNotRecorded) {
     auto hostRes = HostObject::createWithoutPrototype(
         runtime, std::make_unique<TrivialHostObjectProxy>());
     ASSERT_NE(hostRes.getStatus(), ExecutionStatus::EXCEPTION);
-    Handle<JSObject> host = runtime.makeHandle(vmcast<JSObject>(*hostRes));
-    Handle<JSObject> obj = runtime.makeHandle(JSObject::create(runtime, host));
+    lv.host = vmcast<JSObject>(*hostRes);
+    Handle<JSObject> host = lv.host;
+    lv.hostChild = JSObject::create(runtime, host);
+    Handle<JSObject> obj = lv.hostChild;
     start = obj->getClass(runtime);
     // Marking gives the host a new class that is still a host object's.
     premark(runtime, host);
@@ -1289,21 +1562,63 @@ TEST_F(ComputedPropertyCacheTest, AddNotRecorded) {
   }
 }
 
+/// Write the uniqued string of the new name \p s to \p key. Nothing holds
+/// the name's SymbolID once this returns.
+void keyOfDyingName(Runtime &runtime, const char *s, MutableHandle<> key) {
+  struct : public Locals {
+    PinnedValue<SymbolID> id;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  keyOf(runtime, sym(runtime, s, lv.id), key);
+}
+
 // The assumption AddNameCollected rests on: a uniqued string whose SymbolID
 // nothing holds loses its uniqued bit in a collection while the string
 // itself stays alive.
 TEST_F(ComputedPropertyCacheTest, SymbolDiesWhileStringLives) {
-  GCScope scope{runtime, "SymbolDiesWhileStringLives", 128};
-  MutableHandle<> key{runtime};
-  {
-    GCScope inner{runtime, "SymbolDiesWhileStringLives inner", 16};
-    SymbolID id = sym(runtime, "cpcDyingName");
-    key = keyOf(runtime, id).get();
-    ASSERT_TRUE(key->getString()->isUniqued());
-  }
+  struct : public Locals {
+    PinnedValue<> key;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  MutableHandle<> key{lv.key};
+  keyOfDyingName(runtime, "cpcDyingName", key);
+  // Nothing has allocated since the name's slot was dropped.
+  ASSERT_TRUE(key->getString()->isUniqued());
   runtime.collect("test");
   ASSERT_TRUE(key->isString());
   EXPECT_FALSE(key->getString()->isUniqued());
+}
+
+/// The first half of AddNameCollected: write the uniqued string of a new
+/// name to \p key, then fill an Add entry for the class of \p obj, whose
+/// parent is \p proto, through a new object of the same class. Nothing holds
+/// the new object or the name's SymbolID once this returns.
+void fillAddNameCollected(
+    Runtime &runtime,
+    Handle<JSObject> proto,
+    Handle<JSObject> obj,
+    MutableHandle<> key) {
+  struct : public Locals {
+    PinnedValue<SymbolID> id;
+    PinnedValue<JSObject> o1;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
+  SymbolID id = sym(runtime, "cpcCollectedName", lv.id);
+  keyOf(runtime, id, key);
+  lv.o1 = JSObject::create(runtime, proto);
+  Handle<JSObject> o1 = lv.o1;
+  ASSERT_TRUE(sameClass(o1, obj));
+  cache.clear();
+  EXPECT_TRUE(putComputed(runtime, o1, key, Runtime::getUndefinedValue()));
+  // Nothing allocates between the fill and this lookup, or between it and
+  // the put on obj.
+  const ComputedPropertyCache::Entry *e =
+      cache.lookup(obj->getClassGCPtr(), id);
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->getKind(), ComputedPropertyCache::Kind::Add);
+  EXPECT_TRUE(e->resultClazz == o1->getClassGCPtr());
+  EXPECT_EQ(e->parentEpoch, runtime.getFullParentCacheEpoch());
 }
 
 // [10] The put finds an Add entry for its key, and the encode of the value
@@ -1318,32 +1633,24 @@ TEST_F(ComputedPropertyCacheTest, SymbolDiesWhileStringLives) {
 // name without testing the uniqued bit. Elsewhere the put follows the
 // entry.
 TEST_F(ComputedPropertyCacheTest, AddNameCollected) {
-  GCScope scope{runtime, "AddNameCollected", 128};
-  ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> obj = runtime.makeHandle(JSObject::create(runtime, proto));
-  Handle<> num = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(0.5));
-  MutableHandle<> key{runtime};
+  struct : public Locals {
+    PinnedValue<JSObject> proto;
+    PinnedValue<JSObject> obj;
+    PinnedValue<> num;
+    PinnedValue<> key;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.proto = JSObject::create(runtime);
+  Handle<JSObject> proto = lv.proto;
+  lv.obj = JSObject::create(runtime, proto);
+  Handle<JSObject> obj = lv.obj;
+  lv.num = HermesValue::encodeTrustedNumberValue(0.5);
+  Handle<> num = lv.num;
+  MutableHandle<> key{lv.key};
   // Marked, the chain lets the fill below write its entry last.
   premark(runtime, proto);
-  {
-    GCScope inner{runtime, "AddNameCollected inner", 64};
-    SymbolID id = sym(runtime, "cpcCollectedName");
-    key = keyOf(runtime, id).get();
-    Handle<JSObject> o1 = runtime.makeHandle(JSObject::create(runtime, proto));
-    ASSERT_TRUE(sameClass(o1, obj));
-    cache.clear();
-    EXPECT_TRUE(putComputed(runtime, o1, key, Runtime::getUndefinedValue()));
-    // Nothing allocates between the fill and this lookup, or between it and
-    // the put on obj.
-    const ComputedPropertyCache::Entry *e =
-        cache.lookup(obj->getClassGCPtr(), id);
-    ASSERT_NE(e, nullptr);
-    EXPECT_EQ(e->getKind(), ComputedPropertyCache::Kind::Add);
-    EXPECT_TRUE(e->resultClazz == o1->getClassGCPtr());
-    EXPECT_EQ(e->parentEpoch, runtime.getFullParentCacheEpoch());
-  }
-  // Leaving the scope drops o1 and the handle of the name.
+  ASSERT_NO_FATAL_FAILURE(fillAddNameCollected(runtime, proto, obj, key));
+  // Returning from the fill drops o1 and the slot of the name.
   ASSERT_TRUE(key->getString()->isUniqued());
   EXPECT_TRUE(putComputed(runtime, obj, key, num));
   EXPECT_TRUE(getIs(runtime, obj, key, num));
@@ -1353,35 +1660,40 @@ TEST_F(ComputedPropertyCacheTest, AddNameCollected) {
 // same names on objects created beforehand add and refill. Fails without
 // the add fill.
 TEST_F(ComputedPropertyCacheTest, CollectRefills) {
-  GCScope scope{runtime, "CollectRefills", 128};
+  struct : public Locals {
+    PinnedValue<JSObject> v;
+    PinnedValue<JSObject> proto;
+    PinnedValue<JSObject> objs[kNumCollectNames];
+    PinnedValue<HiddenClass> freshClazz;
+    PinnedValue<SymbolID> names[kNumCollectNames];
+    PinnedValue<> keys[kNumCollectNames];
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   ComputedPropertyCache &cache = runtime.getComputedPropertyCache();
-  Handle<JSObject> v = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> proto = runtime.makeHandle(JSObject::create(runtime));
-  std::vector<Handle<JSObject>> objs;
+  lv.v = JSObject::create(runtime);
+  lv.proto = JSObject::create(runtime);
+  Handle<JSObject> v = lv.v;
+  Handle<JSObject> proto = lv.proto;
   for (unsigned i = 0; i < kNumCollectNames; ++i)
-    objs.push_back(runtime.makeHandle(JSObject::create(runtime, proto)));
-  Handle<HiddenClass> freshClazz =
-      runtime.makeHandle(objs[0]->getClass(runtime));
+    lv.objs[i] = JSObject::create(runtime, proto);
+  lv.freshClazz = lv.objs[0]->getClass(runtime);
+  Handle<HiddenClass> freshClazz = lv.freshClazz;
 
   collectEmpties(runtime);
 
-  std::vector<SymbolID> names;
-  std::vector<Handle<>> keys;
-  for (unsigned i = 0; i < kNumCollectNames; ++i) {
-    names.push_back(sym(runtime, collectName(i).c_str()));
-    keys.push_back(keyOf(runtime, names[i]));
-  }
+  for (unsigned i = 0; i < kNumCollectNames; ++i)
+    keyOf(
+        runtime, sym(runtime, collectName(i).c_str(), lv.names[i]), lv.keys[i]);
   premark(runtime, proto);
   for (unsigned i = 0; i < kNumCollectNames; ++i) {
     SCOPED_TRACE(i);
-    GCScopeMarkerRAII marker{runtime};
-    EXPECT_TRUE(putComputed(runtime, objs[i], keys[i], v));
+    EXPECT_TRUE(putComputed(runtime, lv.objs[i], lv.keys[i], v));
     // Nothing allocates between the fill and this lookup.
-    const ComputedPropertyCache::Entry *e =
-        cache.lookup(CompressedPointer::encode(*freshClazz, runtime), names[i]);
+    const ComputedPropertyCache::Entry *e = cache.lookup(
+        CompressedPointer::encode(*freshClazz, runtime), *lv.names[i]);
     ASSERT_NE(e, nullptr);
     EXPECT_EQ(e->getKind(), ComputedPropertyCache::Kind::Add);
-    EXPECT_TRUE(e->resultClazz == objs[i]->getClassGCPtr());
+    EXPECT_TRUE(e->resultClazz == lv.objs[i]->getClassGCPtr());
   }
 }
 

@@ -55,10 +55,18 @@ using namespace hermes::hbc;
 
 namespace {
 
-Handle<StringPrimitive>
-benchmark(Runtime &runtime, double loopc, double factc) {
-  auto domain = runtime.makeHandle(Domain::create(runtime));
-  auto *runtimeModule = RuntimeModule::createUninitialized(runtime, domain);
+/// Run the benchmark and store the resulting string in \p result.
+void benchmark(
+    Runtime &runtime,
+    double loopc,
+    double factc,
+    MutableHandle<StringPrimitive> result) {
+  struct : public Locals {
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.domain = Domain::create(runtime);
+  auto *runtimeModule = RuntimeModule::createUninitialized(runtime, lv.domain);
 
   std::map<int, int> labels{};
   std::map<int, int> jmps{};
@@ -161,7 +169,7 @@ L1:
 
   auto status = runtime.interpretFunction(codeBlock);
   assert(status == ExecutionStatus::RETURNED);
-  return runtime.makeHandle<StringPrimitive>(*status);
+  result.set(vmcast<StringPrimitive>(*status));
 }
 } // namespace
 
@@ -195,10 +203,15 @@ int main(int argc, char **argv) {
           .build());
 
   GCScope scope(*runtime);
-  auto res = benchmark(*runtime, LoopCount, FactValue);
+  struct : public Locals {
+    PinnedValue<StringPrimitive> res;
+  } lv;
+  LocalsRAII lraii(*runtime, &lv);
+  benchmark(
+      *runtime, LoopCount, FactValue, MutableHandle<StringPrimitive>{lv.res});
   SmallU16String<32> tmp;
   llvh::outs()
-      << StringPrimitive::createStringView(*runtime, res).getUTF16Ref(tmp)
+      << StringPrimitive::createStringView(*runtime, lv.res).getUTF16Ref(tmp)
       << "\n";
 #ifdef HERMESVM_OPCODE_STATS
   Runtime::dumpOpcodeStats(llvh::outs());

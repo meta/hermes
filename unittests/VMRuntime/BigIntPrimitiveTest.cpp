@@ -56,22 +56,29 @@ LeftToRightVector compactRawData(HermesValue bigint) {
 // Zero is an important corner case -- it has no trailing digits, and it is
 // always expected to be non-negative. Thus, it is tested separately.
 TEST_F(BigIntPrimitiveTest, CreateZero) {
+  struct : public Locals {
+    PinnedValue<BigIntPrimitive> H0;
+    PinnedValue<BigIntPrimitive> tmp;
+    PinnedValue<BigIntPrimitive> tmp2;
+    PinnedValue<BigIntPrimitive> tmp3;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // Must create the correct zero from a signed 0.
-  auto H0 = fromSignedNoThrowForTest(runtime, 0);
+  auto H0 = fromSignedNoThrowForTest(runtime, 0, lv.H0);
   EXPECT_FALSE(H0->sign());
   EXPECT_EQ(compactRawData(H0), noDigits());
   EXPECT_EQ(fullRawData(H0), noDigits());
 
   // Must create the correct zero from the canonical (i.e., empty) digit
   // sequence.
-  H0 = fromBytesNoThrowForTest(runtime, noDigits());
+  H0 = fromBytesNoThrowForTest(runtime, noDigits(), lv.tmp);
   EXPECT_FALSE(H0->sign());
   EXPECT_EQ(compactRawData(H0), noDigits());
   EXPECT_EQ(fullRawData(H0), noDigits());
 
   // Must create the correct zero from the non-canonical (i.e., non-empty)
   // digit sequence.
-  H0 = fromBytesNoThrowForTest(runtime, digit(0));
+  H0 = fromBytesNoThrowForTest(runtime, digit(0), lv.tmp2);
   EXPECT_FALSE(H0->sign());
   EXPECT_EQ(compactRawData(H0), noDigits());
   EXPECT_EQ(fullRawData(H0), noDigits());
@@ -79,27 +86,42 @@ TEST_F(BigIntPrimitiveTest, CreateZero) {
   auto digitZero = digit(0, 0, 0, 0, 0, 0, 0, 0);
   auto lotsOfZeros = digitZero + digitZero + digitZero + digitZero + digitZero +
       digitZero + digitZero + digitZero;
-  H0 = fromBytesNoThrowForTest(runtime, lotsOfZeros);
+  H0 = fromBytesNoThrowForTest(runtime, lotsOfZeros, lv.tmp3);
   EXPECT_FALSE(H0->sign());
   EXPECT_EQ(compactRawData(H0), noDigits());
   EXPECT_EQ(fullRawData(H0), noDigits());
 }
 
 TEST_F(BigIntPrimitiveTest, Create) {
+  struct : public Locals {
+    PinnedValue<BigIntPrimitive> HNeg1;
+    PinnedValue<BigIntPrimitive> H1;
+    PinnedValue<BigIntPrimitive> HNeg1234568;
+    PinnedValue<BigIntPrimitive> HHfe;
+    PinnedValue<BigIntPrimitive> HH4e;
+    PinnedValue<BigIntPrimitive> HH8000;
+    PinnedValue<BigIntPrimitive> HH4000;
+    PinnedValue<BigIntPrimitive> HHffffffffffffffff;
+    PinnedValue<BigIntPrimitive> HH7fffffffffffffff;
+    PinnedValue<BigIntPrimitive> HH400000000000000000;
+    PinnedValue<BigIntPrimitive> HH800000000000000000;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // Need to be able to create from signed.
-  auto HNeg1 = fromSignedNoThrowForTest(runtime, -1);
+  auto HNeg1 = fromSignedNoThrowForTest(runtime, -1, lv.HNeg1);
   EXPECT_TRUE(HNeg1->sign());
   EXPECT_EQ(compactRawData(HNeg1), digit(0xff));
   EXPECT_EQ(
       fullRawData(HNeg1),
       digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
 
-  auto H1 = fromSignedNoThrowForTest(runtime, 1);
+  auto H1 = fromSignedNoThrowForTest(runtime, 1, lv.H1);
   EXPECT_FALSE(H1->sign());
   EXPECT_EQ(compactRawData(H1), digit(1));
   EXPECT_EQ(fullRawData(H1), digit(0, 0, 0, 0, 0, 0, 0, 1));
 
-  auto HNeg1234568 = fromSignedNoThrowForTest(runtime, -1234568);
+  auto HNeg1234568 =
+      fromSignedNoThrowForTest(runtime, -1234568, lv.HNeg1234568);
   EXPECT_TRUE(HNeg1234568->sign());
   EXPECT_EQ(compactRawData(HNeg1234568), digit(0xed, 0x29, 0x78));
   EXPECT_EQ(
@@ -107,25 +129,25 @@ TEST_F(BigIntPrimitiveTest, Create) {
       digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xed, 0x29, 0x78));
 
   // Need to be able to create from short byte array.
-  auto HHfe = fromBytesNoThrowForTest(runtime, digit(0xfe));
+  auto HHfe = fromBytesNoThrowForTest(runtime, digit(0xfe), lv.HHfe);
   EXPECT_TRUE(HHfe->sign());
   EXPECT_EQ(compactRawData(HHfe), digit(0xfe));
   EXPECT_EQ(
       fullRawData(HHfe), digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe));
 
-  auto HH4e = fromBytesNoThrowForTest(runtime, digit(0x4e));
+  auto HH4e = fromBytesNoThrowForTest(runtime, digit(0x4e), lv.HH4e);
   EXPECT_FALSE(HH4e->sign());
   EXPECT_EQ(compactRawData(HH4e), digit(0x4e));
   EXPECT_EQ(fullRawData(HH4e), digit(0, 0, 0, 0, 0, 0, 0, 0x4e));
 
-  auto HH8000 = fromBytesNoThrowForTest(runtime, digit(0x80, 0x00));
+  auto HH8000 = fromBytesNoThrowForTest(runtime, digit(0x80, 0x00), lv.HH8000);
   EXPECT_TRUE(HH8000->sign());
   EXPECT_EQ(compactRawData(HH8000), digit(0x80, 0x00));
   EXPECT_EQ(
       fullRawData(HH8000),
       digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x80, 0x00));
 
-  auto HH4000 = fromBytesNoThrowForTest(runtime, digit(0x40, 0x00));
+  auto HH4000 = fromBytesNoThrowForTest(runtime, digit(0x40, 0x00), lv.HH4000);
   EXPECT_FALSE(HH4000->sign());
   EXPECT_EQ(compactRawData(HH4000), digit(0x40, 0x00));
   EXPECT_EQ(fullRawData(HH4000), digit(0, 0, 0, 0, 0, 0, 0x40, 0x00));
@@ -133,7 +155,9 @@ TEST_F(BigIntPrimitiveTest, Create) {
   // Need to be able to create from array that's as long as a digit without
   // adding extra digits.
   auto HHffffffffffffffff = fromBytesNoThrowForTest(
-      runtime, digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
+      runtime,
+      digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff),
+      lv.HHffffffffffffffff);
   EXPECT_TRUE(HHffffffffffffffff->sign());
   EXPECT_EQ(compactRawData(HHffffffffffffffff), digit(0xff));
   EXPECT_EQ(
@@ -141,7 +165,9 @@ TEST_F(BigIntPrimitiveTest, Create) {
       digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
 
   auto HH7fffffffffffffff = fromBytesNoThrowForTest(
-      runtime, digit(0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
+      runtime,
+      digit(0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff),
+      lv.HH7fffffffffffffff);
   EXPECT_FALSE(HH7fffffffffffffff->sign());
   EXPECT_EQ(
       compactRawData(HH7fffffffffffffff),
@@ -152,7 +178,9 @@ TEST_F(BigIntPrimitiveTest, Create) {
 
   // Need to be able to create from arrays that are over WordType in size.
   auto HH400000000000000000 = fromBytesNoThrowForTest(
-      runtime, digit(0x40) + digit(0, 0, 0, 0, 0, 0, 0, 0));
+      runtime,
+      digit(0x40) + digit(0, 0, 0, 0, 0, 0, 0, 0),
+      lv.HH400000000000000000);
   EXPECT_FALSE(HH400000000000000000->sign());
   EXPECT_EQ(
       compactRawData(HH400000000000000000),
@@ -162,7 +190,9 @@ TEST_F(BigIntPrimitiveTest, Create) {
       digit(0, 0, 0, 0, 0, 0, 0, 0x40) + digit(0, 0, 0, 0, 0, 0, 0, 0));
 
   auto HH800000000000000000 = fromBytesNoThrowForTest(
-      runtime, digit(0x80) + digit(0, 0, 0, 0, 0, 0, 0, 0));
+      runtime,
+      digit(0x80) + digit(0, 0, 0, 0, 0, 0, 0, 0),
+      lv.HH800000000000000000);
   EXPECT_TRUE(HH800000000000000000->sign());
   EXPECT_EQ(
       compactRawData(HH800000000000000000),
@@ -257,13 +287,25 @@ TEST_F(BigIntPrimitiveTest, FromDouble) {
 }
 
 TEST_F(BigIntPrimitiveTest, Compare) {
-  auto H0 = fromSignedNoThrowForTest(runtime, 0);
-  auto H1 = fromSignedNoThrowForTest(runtime, 1);
-  auto HM1 = fromSignedNoThrowForTest(runtime, -1);
+  struct : public Locals {
+    PinnedValue<BigIntPrimitive> H0;
+    PinnedValue<BigIntPrimitive> H1;
+    PinnedValue<BigIntPrimitive> HM1;
+    PinnedValue<BigIntPrimitive> HH10000000000000000;
+    PinnedValue<BigIntPrimitive> HH80000000000000000;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  auto H0 = fromSignedNoThrowForTest(runtime, 0, lv.H0);
+  auto H1 = fromSignedNoThrowForTest(runtime, 1, lv.H1);
+  auto HM1 = fromSignedNoThrowForTest(runtime, -1, lv.HM1);
   auto HH10000000000000000 = fromBytesNoThrowForTest(
-      runtime, digit(1) + digit(0, 0, 0, 0, 0, 0, 0, 0));
+      runtime,
+      digit(1) + digit(0, 0, 0, 0, 0, 0, 0, 0),
+      lv.HH10000000000000000);
   auto HH80000000000000000 = fromBytesNoThrowForTest(
-      runtime, digit(0x80) + digit(0, 0, 0, 0, 0, 0, 0, 0));
+      runtime,
+      digit(0x80) + digit(0, 0, 0, 0, 0, 0, 0, 0),
+      lv.HH80000000000000000);
 
   // H0 == H0
   EXPECT_EQ(H0->compare(H0.get()), 0);
@@ -312,13 +354,25 @@ TEST_F(BigIntPrimitiveTest, Compare) {
 }
 
 TEST_F(BigIntPrimitiveTest, CompareSigned) {
-  auto H0 = fromSignedNoThrowForTest(runtime, 0);
-  auto H1 = fromSignedNoThrowForTest(runtime, 1);
-  auto HM1 = fromSignedNoThrowForTest(runtime, -1);
+  struct : public Locals {
+    PinnedValue<BigIntPrimitive> H0;
+    PinnedValue<BigIntPrimitive> H1;
+    PinnedValue<BigIntPrimitive> HM1;
+    PinnedValue<BigIntPrimitive> HH7fffffffffffffff;
+    PinnedValue<BigIntPrimitive> HH8000000000000000;
+    PinnedValue<BigIntPrimitive> a;
+    PinnedValue<BigIntPrimitive> b;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  auto H0 = fromSignedNoThrowForTest(runtime, 0, lv.H0);
+  auto H1 = fromSignedNoThrowForTest(runtime, 1, lv.H1);
+  auto HM1 = fromSignedNoThrowForTest(runtime, -1, lv.HM1);
   auto HH7fffffffffffffff = fromBytesNoThrowForTest(
-      runtime, digit(0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
-  auto HH8000000000000000 =
-      fromBytesNoThrowForTest(runtime, digit(0x80, 0, 0, 0, 0, 0, 0, 0));
+      runtime,
+      digit(0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff),
+      lv.HH7fffffffffffffff);
+  auto HH8000000000000000 = fromBytesNoThrowForTest(
+      runtime, digit(0x80, 0, 0, 0, 0, 0, 0, 0), lv.HH8000000000000000);
 
   // 0n == 0
   EXPECT_EQ(H0->compare(0), 0);
@@ -356,10 +410,11 @@ TEST_F(BigIntPrimitiveTest, CompareSigned) {
       runtime,
       digit(0x00) + digit(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) +
           digit(0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) +
-          digit(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00));
+          digit(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00),
+      lv.a);
 
   // 0x80n
-  auto b = fromBytesNoThrowForTest(runtime, digit(0x80));
+  auto b = fromBytesNoThrowForTest(runtime, digit(0x80), lv.b);
 
   // 0x00_0000000000000000_8000000000000000_0000000000000000n > 0
   EXPECT_GT(a->compare(0), 0);

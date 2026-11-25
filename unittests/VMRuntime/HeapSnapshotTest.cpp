@@ -856,6 +856,10 @@ size_t firstNamedPropertyEdge() {
 }
 
 TEST_F(HeapSnapshotRuntimeTest, FunctionLocationForLazyCode) {
+  struct : public Locals {
+    PinnedValue<JSFunction> func;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // Similar test to the above, but for lazy-compiled source.
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
@@ -872,7 +876,8 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationForLazyCode) {
 
   CallResult<HermesValue> res = runtime.run(source, "file:///fake.js", flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSFunction> func = runtime.makeHandle(vmcast<JSFunction>(*res));
+  lv.func.castAndSetHermesValue<JSFunction>(*res);
+  Handle<JSFunction> func = lv.func;
   const auto funcID = runtime.getHeap().getObjectID(func.get());
 
   JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory, true);
@@ -1030,6 +1035,10 @@ TEST_F(HeapSnapshotRuntimeTest, RegExpBytecodeReportedByItsModule) {
 }
 
 TEST_F(HeapSnapshotRuntimeTest, FunctionLocationAndNameTest) {
+  struct : public Locals {
+    PinnedValue<JSFunction> func;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   hbc::CompileFlags flags;
@@ -1040,7 +1049,8 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationAndNameTest) {
   CallResult<HermesValue> res =
       runtime.run("\n  function foo() {}; foo;", "file:///fake.js", flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSFunction> func = runtime.makeHandle(vmcast<JSFunction>(*res));
+  lv.func.castAndSetHermesValue<JSFunction>(*res);
+  Handle<JSFunction> func = lv.func;
   const auto funcID = runtime.getHeap().getObjectID(func.get());
 
   JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory, true);
@@ -1073,6 +1083,10 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationAndNameTest) {
 }
 
 TEST_F(HeapSnapshotRuntimeTest, FunctionDisplayNameTest) {
+  struct : public Locals {
+    PinnedValue<JSFunction> func;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   hbc::CompileFlags flags;
@@ -1084,7 +1098,8 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionDisplayNameTest) {
       "file:///fake.js",
       flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSFunction> func = runtime.makeHandle(vmcast<JSFunction>(*res));
+  lv.func.castAndSetHermesValue<JSFunction>(*res);
+  Handle<JSFunction> func = lv.func;
   const auto funcID = runtime.getHeap().getObjectID(func.get());
 
   JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory, true);
@@ -1105,14 +1120,23 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionDisplayNameTest) {
 }
 
 TEST_F(HeapSnapshotRuntimeTest, WeakMapTest) {
+  struct : public Locals {
+    PinnedValue<JSWeakMap> map;
+    PinnedValue<JSObject> key;
+    PinnedValue<JSObject> value;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   auto mapResult = JSWeakMap::create(
       runtime, Handle<JSObject>::vmcast(&runtime.weakMapPrototype));
   ASSERT_FALSE(isException(mapResult));
-  Handle<JSWeakMap> map = runtime.makeHandle(std::move(*mapResult));
-  Handle<JSObject> key = runtime.makeHandle(JSObject::create(runtime));
-  Handle<JSObject> value = runtime.makeHandle(JSObject::create(runtime));
+  lv.map = std::move(*mapResult);
+  Handle<JSWeakMap> map = lv.map;
+  lv.key = JSObject::create(runtime);
+  Handle<JSObject> key = lv.key;
+  lv.value = JSObject::create(runtime);
+  Handle<JSObject> value = lv.value;
   // Add a key so the DenseMap will exist.
   JSWeakMap::setValue(map, runtime, key, value);
 
@@ -1165,53 +1189,42 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
     PinnedValue<JSObject> obj;
     PinnedValue<SymbolID> fooSym;
     PinnedValue<SymbolID> barSym;
+    PinnedValue<StringPrimitive> fooStr;
+    PinnedValue<StringPrimitive> barStr;
+    PinnedValue<> num;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
   lv.obj = JSObject::create(runtime);
   {
     vm::GCScope gcScope(runtime);
-    lv.fooSym = vm::stringToSymbolIDForTest(
-                    runtime, vm::createNoThrowForTest(runtime, "foo"))
-                    ->getHermesValue()
-                    .getSymbol();
-    lv.barSym = vm::stringToSymbolIDForTest(
-                    runtime, vm::createNoThrowForTest(runtime, "bar"))
-                    ->getHermesValue()
-                    .getSymbol();
+    ASSERT_FALSE(isException(
+        vm::stringToSymbolIDForTest(
+            runtime,
+            vm::createNoThrowForTest(runtime, "foo", lv.fooStr),
+            lv.fooSym)));
+    ASSERT_FALSE(isException(
+        vm::stringToSymbolIDForTest(
+            runtime,
+            vm::createNoThrowForTest(runtime, "bar", lv.barStr),
+            lv.barSym)));
   }
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   // Add two properties to the hidden class chain.
+  lv.num = HermesValue::encodeTrustedNumberValue(100);
   ASSERT_FALSE(isException(
-      JSObject::defineOwnProperty(
-          lv.obj,
-          runtime,
-          *lv.fooSym,
-          dpf,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(100)))));
+      JSObject::defineOwnProperty(lv.obj, runtime, *lv.fooSym, dpf, lv.num)));
+  lv.num = HermesValue::encodeTrustedNumberValue(200);
   ASSERT_FALSE(isException(
-      JSObject::defineOwnProperty(
-          lv.obj,
-          runtime,
-          *lv.barSym,
-          dpf,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(200)))));
+      JSObject::defineOwnProperty(lv.obj, runtime, *lv.barSym, dpf, lv.num)));
   // Trigger update transitions for both properties.
   dpf.writable = false;
+  lv.num = HermesValue::encodeTrustedNumberValue(100);
   ASSERT_FALSE(isException(
-      JSObject::defineOwnProperty(
-          lv.obj,
-          runtime,
-          *lv.fooSym,
-          dpf,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(100)))));
+      JSObject::defineOwnProperty(lv.obj, runtime, *lv.fooSym, dpf, lv.num)));
+  lv.num = HermesValue::encodeTrustedNumberValue(200);
   ASSERT_FALSE(isException(
-      JSObject::defineOwnProperty(
-          lv.obj,
-          runtime,
-          *lv.barSym,
-          dpf,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(200)))));
+      JSObject::defineOwnProperty(lv.obj, runtime, *lv.barSym, dpf, lv.num)));
   // Forcibly clear the final hidden class's property map.
   auto *clazz = lv.obj->getClass(runtime);
   clazz->clearPropertyMap(runtime.getHeap());
@@ -1257,6 +1270,11 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
 }
 
 TEST_F(HeapSnapshotRuntimeTest, ArrayElementsCaptureNumeric) {
+  struct : public Locals {
+    PinnedValue<JSArray> array;
+    PinnedValue<JSObject> firstElement;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   hbc::CompileFlags flags;
@@ -1265,9 +1283,10 @@ TEST_F(HeapSnapshotRuntimeTest, ArrayElementsCaptureNumeric) {
       "var a = []; a[10] = {}; a[15] = 222; a[(1 << 20) + 1000] = 333; a";
   CallResult<HermesValue> res = runtime.run(source, "file:///fake.js", flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSArray> array = runtime.makeHandle(vmcast<JSArray>(*res));
-  Handle<JSObject> firstElement = runtime.makeHandle<JSObject>(
-      vmcast<JSObject>(array->at(runtime, 10).getObject(runtime)));
+  lv.array.castAndSetHermesValue<JSArray>(*res);
+  Handle<JSArray> array = lv.array;
+  lv.firstElement = vmcast<JSObject>(array->at(runtime, 10).getObject(runtime));
+  Handle<JSObject> firstElement = lv.firstElement;
   const auto arrayID = runtime.getHeap().getObjectID(array.get());
 
   JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory, true);
@@ -1342,6 +1361,12 @@ TEST_F(HeapSnapshotRuntimeTest, ArrayElementsCaptureNumeric) {
 }
 
 TEST_F(HeapSnapshotRuntimeTest, ArrayElementsNoNumeric) {
+  struct : public Locals {
+    PinnedValue<JSArray> array;
+    PinnedValue<JSObject> firstElement;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   hbc::CompileFlags flags;
@@ -1350,14 +1375,12 @@ TEST_F(HeapSnapshotRuntimeTest, ArrayElementsNoNumeric) {
       "var a = []; a[10] = {}; a[15] = 222; a[(1 << 20) + 1000] = 333; a";
   CallResult<HermesValue> res = runtime.run(source, "file:///fake.js", flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSArray> array = runtime.makeHandle(vmcast<JSArray>(*res));
-  Handle<JSObject> firstElement = runtime.makeHandle<JSObject>(
-      vmcast<JSObject>(array->at(runtime, 10).getObject(runtime)));
-  auto cr = JSObject::getComputed_RJS(
-      array,
-      runtime,
-      runtime.makeHandle(
-          HermesValue::encodeTrustedNumberValue((1 << 20) + 1000)));
+  lv.array.castAndSetHermesValue<JSArray>(*res);
+  Handle<JSArray> array = lv.array;
+  lv.firstElement = vmcast<JSObject>(array->at(runtime, 10).getObject(runtime));
+  Handle<JSObject> firstElement = lv.firstElement;
+  lv.num = HermesValue::encodeTrustedNumberValue((1 << 20) + 1000);
+  auto cr = JSObject::getComputed_RJS(array, runtime, lv.num);
   ASSERT_FALSE(isException(cr));
   const auto arrayID = runtime.getHeap().getObjectID(array.get());
 
@@ -1432,6 +1455,12 @@ TEST_F(HeapSnapshotRuntimeTest, ArrayElementsNoNumeric) {
 }
 
 TEST_F(HeapSnapshotRuntimeTest, GetSnapshotIDThenCaptureNumeric) {
+  struct : public Locals {
+    PinnedValue<> secondElement;
+    PinnedValue<JSArray> array;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   hbc::CompileFlags flags;
@@ -1440,14 +1469,12 @@ TEST_F(HeapSnapshotRuntimeTest, GetSnapshotIDThenCaptureNumeric) {
       "var a = []; a[10] = {}; a[15] = 222; a[(1 << 20) + 1000] = 333; a";
   CallResult<HermesValue> res = runtime.run(source, "file:///fake.js", flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSArray> array = runtime.makeHandle(vmcast<JSArray>(*res));
-  Handle<> secondElement =
-      runtime.makeHandle(array->at(runtime, 15).unboxToHV(runtime));
-  auto cr = JSObject::getComputed_RJS(
-      array,
-      runtime,
-      runtime.makeHandle(
-          HermesValue::encodeTrustedNumberValue((1 << 20) + 1000)));
+  lv.array.castAndSetHermesValue<JSArray>(*res);
+  Handle<JSArray> array = lv.array;
+  lv.secondElement = array->at(runtime, 15).unboxToHV(runtime);
+  Handle<> secondElement = lv.secondElement;
+  lv.num = HermesValue::encodeTrustedNumberValue((1 << 20) + 1000);
+  auto cr = JSObject::getComputed_RJS(array, runtime, lv.num);
   ASSERT_FALSE(isException(cr));
 
   // Take snapshot without numeric values
@@ -1568,6 +1595,14 @@ struct ChromeStackTreeNode {
 };
 
 TEST_F(HeapSnapshotRuntimeTest, AllocationTraces) {
+  struct : public Locals {
+    PinnedValue<SymbolID> fooHnd;
+    PinnedValue<SymbolID> barHnd;
+    PinnedValue<StringPrimitive> fooStr;
+    PinnedValue<StringPrimitive> barStr;
+    PinnedValue<JSObject> resObj;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   runtime.enableAllocationLocationTracker();
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
@@ -1589,16 +1624,21 @@ baz();
       flags);
   ASSERT_FALSE(isException(res));
   ASSERT_TRUE(res->isObject());
-  Handle<JSObject> resObj = runtime.makeHandle(vmcast<JSObject>(*res));
+  lv.resObj.castAndSetHermesValue<JSObject>(*res);
+  Handle<JSObject> resObj = lv.resObj;
   SymbolID fooSym, barSym;
   {
     vm::GCScope gcScope(runtime);
     fooSym = vm::stringToSymbolIDForTest(
-                 runtime, vm::createNoThrowForTest(runtime, "foo"))
+                 runtime,
+                 vm::createNoThrowForTest(runtime, "foo", lv.fooStr),
+                 lv.fooHnd)
                  ->getHermesValue()
                  .getSymbol();
     barSym = vm::stringToSymbolIDForTest(
-                 runtime, vm::createNoThrowForTest(runtime, "bar"))
+                 runtime,
+                 vm::createNoThrowForTest(runtime, "bar", lv.barStr),
+                 lv.barHnd)
                  ->getHermesValue()
                  .getSymbol();
   }
@@ -1670,6 +1710,10 @@ bar(4) @ test.js(2):6:20)#");
 }
 
 TEST_F(HeapSnapshotRuntimeTest, TwoPathsToFunction) {
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   runtime.enableAllocationLocationTracker();
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
@@ -1698,7 +1742,8 @@ objects[0];
       flags);
   ASSERT_FALSE(isException(res));
   ASSERT_TRUE(res->isObject());
-  Handle<JSObject> obj = runtime.makeHandle(vmcast<JSObject>(*res));
+  lv.obj.castAndSetHermesValue<JSObject>(*res);
+  Handle<JSObject> obj = lv.obj;
   auto objID = runtime.getHeap().getObjectID(*obj);
 
   JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory, true);

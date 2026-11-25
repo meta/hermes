@@ -17,9 +17,14 @@ namespace vm {
     Runtime &runtime,
     ExecutionStatus status) {
   if (status == ExecutionStatus::EXCEPTION) {
+    struct : public Locals {
+      PinnedValue<> thrown;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+    lv.thrown = runtime.getThrownValue();
     std::string s;
     llvh::raw_string_ostream os(s);
-    runtime.printException(os, runtime.makeHandle(runtime.getThrownValue()));
+    runtime.printException(os, lv.thrown);
     os.flush();
     return ::testing::AssertionSuccess() << "An exception occurred: " << s;
   }

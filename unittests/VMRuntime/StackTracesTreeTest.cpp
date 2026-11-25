@@ -185,6 +185,12 @@ struct StackTracesTreeParameterizedTest
     // Add a JS function 'enableAllocationLocationTracker'
     // The stack traces for objects allocated after the call to
     // enableAllocationLocationTracker should be identical.
+    struct : public Locals {
+      PinnedValue<SymbolID> symHnd;
+      PinnedValue<StringPrimitive> nameStr;
+      PinnedValue<NativeFunction> trackerFn;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     SymbolID enableAllocationLocationTrackerSym;
     {
       vm::GCScope gcScope(runtime);
@@ -192,22 +198,24 @@ struct StackTracesTreeParameterizedTest
           vm::stringToSymbolIDForTest(
               runtime,
               vm::createNoThrowForTest(
-                  runtime, "enableAllocationLocationTracker"))
+                  runtime, "enableAllocationLocationTracker", lv.nameStr),
+              lv.symHnd)
               ->getHermesValue()
               .getSymbol();
     }
 
+    lv.trackerFn = NativeFunction::create(
+        runtime,
+        nullptr,
+        trackerOnByDefault() ? noop : enableAllocationLocationTracker,
+        enableAllocationLocationTrackerSym,
+        0);
     ASSERT_FALSE(isException(
         JSObject::putNamed_RJS(
             runtime.getGlobal(),
             runtime,
             enableAllocationLocationTrackerSym,
-            runtime.makeHandle<NativeFunction>(NativeFunction::create(
-                runtime,
-                nullptr,
-                trackerOnByDefault() ? noop : enableAllocationLocationTracker,
-                enableAllocationLocationTrackerSym,
-                0)))));
+            lv.trackerFn)));
   }
 
   // No need for a tear-down, because the runtime destructor will clear all

@@ -19,9 +19,13 @@ namespace {
 using StringViewTest = RuntimeTestFixture;
 
 TEST_F(StringViewTest, Construction) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim1;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // Test createStringView
   UTF16Ref str1 = createUTF16Ref(u"abcdef\x100");
-  auto strPrim1 = createNoThrowForTest(runtime, str1);
+  auto strPrim1 = createNoThrowForTest(runtime, str1, lv.strPrim1);
   StringView view1 = StringPrimitive::createStringView(runtime, strPrim1);
   EXPECT_TRUE(!view1.isASCII());
   EXPECT_EQ(view1.length(), 7u);
@@ -39,28 +43,40 @@ TEST_F(StringViewTest, Construction) {
 }
 
 TEST_F(StringViewTest, Comparison) {
-  auto strPrim1 = createNoThrowForTest(runtime, createUTF16Ref(u"abcde"));
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim1;
+    PinnedValue<StringPrimitive> strPrim2;
+    PinnedValue<StringPrimitive> strPrim3;
+    PinnedValue<StringPrimitive> strPrim4;
+    PinnedValue<StringPrimitive> strPrim5;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  auto strPrim1 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"abcde"), lv.strPrim1);
   auto view1 = StringPrimitive::createStringView(runtime, strPrim1);
 
-  auto strPrim2 = createNoThrowForTest(runtime, createUTF16Ref(u"abcdefg"));
+  auto strPrim2 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"abcdefg"), lv.strPrim2);
   auto view2 = StringPrimitive::createStringView(runtime, strPrim2);
 
   EXPECT_FALSE(view1.equals(view2));
   EXPECT_FALSE(view2.equals(view1));
 
-  auto strPrim3 = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
+  auto strPrim3 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"abc"), lv.strPrim3);
   auto view3 = StringPrimitive::createStringView(runtime, strPrim3);
 
   EXPECT_FALSE(view1.equals(view3));
   EXPECT_FALSE(view3.equals(view1));
 
-  auto strPrim4 = createNoThrowForTest(runtime, createUTF16Ref(u"defgh"));
+  auto strPrim4 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"defgh"), lv.strPrim4);
   auto view4 = StringPrimitive::createStringView(runtime, strPrim4);
   EXPECT_FALSE(view1.equals(view4));
   EXPECT_FALSE(view4.equals(view1));
 
   llvh::StringRef str = "abcde";
-  auto strPrim5 = createNoThrowForTest(runtime, str);
+  auto strPrim5 = createNoThrowForTest(runtime, str, lv.strPrim5);
   auto view5 = StringPrimitive::createStringView(runtime, strPrim5);
   EXPECT_TRUE(view1.equals(view5));
   EXPECT_TRUE(view1.equals(view5));
@@ -75,22 +91,27 @@ TEST_F(StringViewTest, Comparison) {
 }
 
 TEST_F(StringViewTest, HandleHandling) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim1;
+    PinnedValue<StringPrimitive> strPrim2;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // StringView conditionally holds onto a handle.
   // This verifies that we correctly perform handle book-keeping in ctors and
   // operator=. It has no assertions; it relies on GCScope to check its handle
   // count in its dtor.
   GCScope scope1{runtime, "StringViewTest.HandleHandling1"};
 
-  auto strPrim1 =
-      createNoThrowForTest(runtime, createUTF16Ref(u"I have a handle"));
+  auto strPrim1 = createNoThrowForTest(
+      runtime, createUTF16Ref(u"I have a handle"), lv.strPrim1);
   StringView scope1View1 = StringPrimitive::createStringView(runtime, strPrim1);
   StringView scope1View2 = StringPrimitive::createStringView(runtime, strPrim1);
   StringView scope1View3 = StringPrimitive::createStringView(runtime, strPrim1);
   (void)scope1View3;
 
   GCScope scope2{runtime, "StringViewTest.HandleHandling2"};
-  auto strPrim2 =
-      createNoThrowForTest(runtime, createUTF16Ref(u"I also have a handle"));
+  auto strPrim2 = createNoThrowForTest(
+      runtime, createUTF16Ref(u"I also have a handle"), lv.strPrim2);
   StringView scope2View1 = StringPrimitive::createStringView(runtime, strPrim2);
 
   // This assignment requires us to change the GCScope associated with the
@@ -111,8 +132,12 @@ TEST_F(StringViewTest, HandleHandling) {
 }
 
 TEST_F(StringViewTest, Iteration) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim1;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   auto str1 = createUTF16Ref(u"abcdefghijklmnopqrstuvwxyz");
-  auto strPrim1 = createNoThrowForTest(runtime, str1);
+  auto strPrim1 = createNoThrowForTest(runtime, str1, lv.strPrim1);
   auto view1 = StringPrimitive::createStringView(runtime, strPrim1);
   uint32_t index = 0;
   for (const char16_t c : view1) {
@@ -121,8 +146,12 @@ TEST_F(StringViewTest, Iteration) {
 }
 
 TEST_F(StringViewTest, Slice) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim1;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   auto str = createUTF16Ref(u"abcdefgh");
-  auto strPrim1 = createNoThrowForTest(runtime, str);
+  auto strPrim1 = createNoThrowForTest(runtime, str, lv.strPrim1);
   auto view = StringPrimitive::createStringView(runtime, strPrim1);
   auto itr = view.begin();
   for (uint32_t i = 0; i < 8; ++i, ++itr) {
@@ -133,10 +162,14 @@ TEST_F(StringViewTest, Slice) {
 }
 
 TEST_F(StringViewTest, Output) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   auto str = createUTF16Ref(u"abcd");
   llvh::SmallVector<char, 32> result{};
   llvh::raw_svector_ostream os{result};
-  auto strPrim = createNoThrowForTest(runtime, str);
+  auto strPrim = createNoThrowForTest(runtime, str, lv.strPrim);
   auto view = StringPrimitive::createStringView(runtime, strPrim);
   os << view;
   EXPECT_EQ('a', result[0]);

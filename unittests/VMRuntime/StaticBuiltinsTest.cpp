@@ -49,6 +49,10 @@ namespace {
 /// are frozen and marked as static builtins.
 static void verifyAllBuiltinsFrozen(Runtime &runtime) {
   GCScope gcScope{runtime};
+  struct : public Locals {
+    PinnedValue<JSObject> objHandleSlot;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto global = runtime.getGlobal();
   Predefined::getSymbolID(Predefined::isArray);
 #define NORMAL_OBJECT(object) \
@@ -56,7 +60,7 @@ static void verifyAllBuiltinsFrozen(Runtime &runtime) {
 #define BUILTIN_OBJECT(object) \
   {EXPECT_PROPERTY_FROZEN_AND_MARKED_AS_STATIC(global, Predefined::object)}
 
-  MutableHandle<JSObject> objHandle{runtime};
+  MutableHandle<JSObject> objHandle{lv.objHandleSlot};
 
 #define NORMAL_METHOD(object, method)                            \
   {                                                              \

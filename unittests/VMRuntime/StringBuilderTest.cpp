@@ -20,13 +20,18 @@ namespace {
 using StringBuilderTest = RuntimeTestFixture;
 
 TEST_F(StringBuilderTest, NormalASCIIBuildTest) {
-  MutableHandle<StringPrimitive> storage{runtime};
+  struct : public Locals {
+    PinnedValue<StringPrimitive> storageSlot;
+    PinnedValue<StringPrimitive> tmp;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  MutableHandle<StringPrimitive> storage{lv.storageSlot};
   auto builder = StringBuilder::createStringBuilder(
       runtime, storage, hermes::SafeUInt32{10}, true);
   ASSERT_NE(builder, ExecutionStatus::EXCEPTION);
   builder->appendASCIIRef(createASCIIRef("abc"));
   builder->appendCharacter('d');
-  builder->appendStringPrim(createNoThrowForTest(runtime, "efghij"));
+  builder->appendStringPrim(createNoThrowForTest(runtime, "efghij", lv.tmp));
   auto result = builder->getStringPrimitive();
   ASSERT_TRUE(result->isASCII());
   ASSERT_EQ(result->getStringLength(), 10u);
@@ -35,7 +40,13 @@ TEST_F(StringBuilderTest, NormalASCIIBuildTest) {
 }
 
 TEST_F(StringBuilderTest, NormalUTF16BuildTest) {
-  MutableHandle<StringPrimitive> storage{runtime};
+  struct : public Locals {
+    PinnedValue<StringPrimitive> storageSlot;
+    PinnedValue<StringPrimitive> tmp;
+    PinnedValue<StringPrimitive> tmp2;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  MutableHandle<StringPrimitive> storage{lv.storageSlot};
   auto builder = StringBuilder::createStringBuilder(
       runtime, storage, hermes::SafeUInt32{10}, false);
   ASSERT_NE(builder, ExecutionStatus::EXCEPTION);
@@ -43,8 +54,8 @@ TEST_F(StringBuilderTest, NormalUTF16BuildTest) {
   builder->appendUTF16Ref(createUTF16Ref(u"def"));
   builder->appendCharacter(u'g');
   builder->appendStringPrim(
-      createNoThrowForTest(runtime, createUTF16Ref(u"hi")));
-  builder->appendStringPrim(createNoThrowForTest(runtime, "j"));
+      createNoThrowForTest(runtime, createUTF16Ref(u"hi"), lv.tmp));
+  builder->appendStringPrim(createNoThrowForTest(runtime, "j", lv.tmp2));
   auto result = builder->getStringPrimitive();
   ASSERT_FALSE(result->isASCII());
   ASSERT_EQ(result->getStringLength(), 10u);
@@ -53,7 +64,12 @@ TEST_F(StringBuilderTest, NormalUTF16BuildTest) {
 }
 
 TEST_F(StringBuilderTest, AbnormalBuildTest) {
-  MutableHandle<StringPrimitive> storage{runtime};
+  struct : public Locals {
+    PinnedValue<StringPrimitive> storageSlot;
+    PinnedValue<StringPrimitive> tmp;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  MutableHandle<StringPrimitive> storage{lv.storageSlot};
   // In this test, we will start with a ASCII string builder, and turn it
   // into an UTF16 builder by appending UTF16 strings.
   auto builder = StringBuilder::createStringBuilder(
@@ -83,7 +99,7 @@ TEST_F(StringBuilderTest, AbnormalBuildTest) {
   ASSERT_NE(builder, ExecutionStatus::EXCEPTION);
   builder->appendASCIIRef(createASCIIRef("abc"));
   builder->appendStringPrim(
-      createNoThrowForTest(runtime, createUTF16Ref(u"defg\x100")));
+      createNoThrowForTest(runtime, createUTF16Ref(u"defg\x100"), lv.tmp));
   auto result3 = builder->getStringPrimitive();
   ASSERT_FALSE(result3->isASCII());
   ASSERT_EQ(result3->getStringLength(), 8u);

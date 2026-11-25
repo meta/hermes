@@ -45,31 +45,34 @@ static constexpr uint32_t kInitialRehashThreshold =
 static constexpr uint32_t kGrownShrinkThreshold = kGrownCapacity / 8;
 
 /// Helper to create a JSSet, initialize its storage, and return a handle.
-static Handle<JSSet> createSet(Runtime &runtime) {
-  auto set = JSSet::create(runtime, runtime.setPrototype);
-  auto handle = runtime.makeHandle(std::move(set));
-  auto res = JSSet::initializeStorage(handle, runtime);
+static Handle<JSSet> createSet(Runtime &runtime, MutableHandle<JSSet> out) {
+  out = JSSet::create(runtime, runtime.setPrototype);
+  auto res = JSSet::initializeStorage(out, runtime);
   (void)res;
   assert(res != ExecutionStatus::EXCEPTION);
-  return handle;
+  return out;
 }
 
 /// Helper to add a number to a JSSet.
 static void setAdd(Handle<JSSet> set, Runtime &runtime, double value) {
-  auto res = JSSet::insert(
-      set,
-      runtime,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(value)));
+  struct : public Locals {
+    PinnedValue<> val;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.val = HermesValue::encodeTrustedNumberValue(value);
+  auto res = JSSet::insert(set, runtime, lv.val);
   (void)res;
   assert(res != ExecutionStatus::EXCEPTION);
 }
 
 /// Helper to delete a number from a JSSet.
 static bool setDelete(Handle<JSSet> set, Runtime &runtime, double value) {
-  return JSSet::erase(
-      set,
-      runtime,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(value)));
+  struct : public Locals {
+    PinnedValue<> val;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.val = HermesValue::encodeTrustedNumberValue(value);
+  return JSSet::erase(set, runtime, lv.val);
 }
 
 /// Test rehash triggered by erase (shouldShrink path).
@@ -92,7 +95,11 @@ static bool setDelete(Handle<JSSet> set, Runtime &runtime, double value) {
 /// With the fix (upper_bound): the deleted entry is counted, all remaining
 ///   entries are visited.
 TEST_F(OrderedHashMapTest, IteratorAdjustmentOnShrinkRehash) {
-  auto set = createSet(runtime);
+  struct : public Locals {
+    PinnedValue<JSSet> setSlot;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  auto set = createSet(runtime, lv.setSlot);
 
   // Add (kInitialRehashThreshold + 1) entries to trigger a grow rehash, growing
   // capacity from kInitialCapacity to kGrownCapacity.
@@ -159,7 +166,11 @@ TEST_F(OrderedHashMapTest, IteratorAdjustmentOnShrinkRehash) {
 /// With the fix (upper_bound): isFirstIteration is set, next advance starts
 ///   at 0, visiting all entries.
 TEST_F(OrderedHashMapTest, IteratorAdjustmentOnGrowRehash) {
-  auto set = createSet(runtime);
+  struct : public Locals {
+    PinnedValue<JSSet> setSlot;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  auto set = createSet(runtime, lv.setSlot);
 
   // Add kInitialRehashThreshold entries at capacity kInitialCapacity.
   for (uint32_t i = 0; i < kInitialRehashThreshold; ++i) {
@@ -196,7 +207,11 @@ TEST_F(OrderedHashMapTest, IteratorAdjustmentOnGrowRehash) {
 /// This verifies that the fix doesn't break the common case where the iterator
 /// points to a valid (non-deleted) entry when rehash happens.
 TEST_F(OrderedHashMapTest, IteratorAdjustmentNormalCase) {
-  auto set = createSet(runtime);
+  struct : public Locals {
+    PinnedValue<JSSet> setSlot;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  auto set = createSet(runtime, lv.setSlot);
 
   // Add kInitialRehashThreshold entries at capacity kInitialCapacity.
   for (uint32_t i = 0; i < kInitialRehashThreshold; ++i) {

@@ -32,12 +32,15 @@ TEST_F(DecoratedObjectTest, DecoratedObjectFinalizerRunsOnce) {
   auto counter = std::make_shared<int>(0);
   {
     GCScope scope{runtime, "DecoratedObjectTest"};
-    (void)runtime.makeHandle(
-        DecoratedObject::create(
-            runtime,
-            Handle<JSObject>::vmcast(&runtime.objectPrototype),
-            runtime.classDecoratedObject,
-            std::make_unique<TestDecoration>(counter)));
+    struct : public Locals {
+      PinnedValue<DecoratedObject> obj;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+    lv.obj = DecoratedObject::create(
+        runtime,
+        Handle<JSObject>::vmcast(&runtime.objectPrototype),
+        runtime.classDecoratedObject,
+        std::make_unique<TestDecoration>(counter));
     runtime.collect("test");
     // should not have been finalized yet
     EXPECT_EQ(0, *counter);
@@ -55,14 +58,17 @@ TEST_F(DecoratedObjectTest, ChangeDecoration) {
   auto counter = std::make_shared<int>(0);
   {
     GCScope scope{runtime, "DecoratedObjectTest"};
-    auto handle = runtime.makeHandle(
-        DecoratedObject::create(
-            runtime,
-            Handle<JSObject>::vmcast(&runtime.objectPrototype),
-            runtime.classDecoratedObject,
-            std::make_unique<TestDecoration>(counter)));
+    struct : public Locals {
+      PinnedValue<DecoratedObject> handle;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+    lv.handle = DecoratedObject::create(
+        runtime,
+        Handle<JSObject>::vmcast(&runtime.objectPrototype),
+        runtime.classDecoratedObject,
+        std::make_unique<TestDecoration>(counter));
     EXPECT_EQ(0, *counter);
-    handle->setDecoration(std::make_unique<TestDecoration>(counter));
+    lv.handle->setDecoration(std::make_unique<TestDecoration>(counter));
     // Old decoration was deallocated.
     EXPECT_EQ(1, *counter);
   }
@@ -75,13 +81,16 @@ TEST_F(DecoratedObjectTest, NullDecoration) {
   // Null decorations do not crash.
   {
     GCScope scope{runtime, "DecoratedObjectTest"};
-    auto handle = runtime.makeHandle(
-        DecoratedObject::create(
-            runtime,
-            Handle<JSObject>::vmcast(&runtime.objectPrototype),
-            runtime.classDecoratedObject,
-            nullptr));
-    EXPECT_EQ(nullptr, handle->getDecoration());
+    struct : public Locals {
+      PinnedValue<DecoratedObject> handle;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+    lv.handle = DecoratedObject::create(
+        runtime,
+        Handle<JSObject>::vmcast(&runtime.objectPrototype),
+        runtime.classDecoratedObject,
+        nullptr);
+    EXPECT_EQ(nullptr, lv.handle->getDecoration());
   }
   runtime.collect("test");
 }

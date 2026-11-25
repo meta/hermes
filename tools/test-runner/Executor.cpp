@@ -180,10 +180,14 @@ struct TestRuntimeEnv {
 
 /// Capture the current exception message from the runtime and clear it.
 std::string captureException(vm::Runtime &runtime) {
-  auto thrownVal = runtime.makeHandle(runtime.getThrownValue());
+  struct : public vm::Locals {
+    vm::PinnedValue<> thrownVal;
+  } lv;
+  vm::LocalsRAII lraii(runtime, &lv);
+  lv.thrownVal = runtime.getThrownValue();
   std::string buf;
   llvh::raw_string_ostream sos(buf);
-  runtime.printException(sos, thrownVal);
+  runtime.printException(sos, lv.thrownVal);
   runtime.clearThrownValue();
   return sos.str();
 }
@@ -275,12 +279,15 @@ bool drainTaskQueue(
     std::string &exceptionMsg) {
   vm::GCScope scope{runtime};
   vm::GCScopeMarkerRAII marker{scope};
-  vm::MutableHandle<vm::Callable> task{runtime};
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::Callable> task;
+  } lv;
+  vm::LocalsRAII lraii(runtime, &lv);
   while (auto optTask = ctx.dequeueTask()) {
     marker.flush();
-    task = std::move(*optTask);
+    lv.task = std::move(*optTask);
     auto callRes = vm::Callable::executeCall0(
-        task, runtime, vm::Runtime::getUndefinedValue(), false);
+        lv.task, runtime, vm::Runtime::getUndefinedValue(), false);
     if (callRes == vm::ExecutionStatus::EXCEPTION) {
       exceptionMsg = captureException(runtime);
       return true;

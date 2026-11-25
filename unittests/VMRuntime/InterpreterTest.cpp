@@ -84,19 +84,23 @@ namespace {
 static CallResult<HermesValue> print(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   GCScope scope(runtime);
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   bool first = true;
 
   for (Handle<> arg : args.handles()) {
     auto res = toString_RJS(runtime, arg);
     if (res != ExecutionStatus::RETURNED)
       return ExecutionStatus::EXCEPTION;
+    lv.str = std::move(*res);
 
     if (!first)
       llvh::outs() << " ";
     SmallU16String<32> tmp;
-    llvh::outs() << StringPrimitive::createStringView(
-                        runtime, runtime.makeHandle(std::move(*res)))
-                        .getUTF16Ref(tmp);
+    llvh::outs()
+        << StringPrimitive::createStringView(runtime, lv.str).getUTF16Ref(tmp);
     first = false;
   }
 
@@ -106,7 +110,10 @@ static CallResult<HermesValue> print(void *, Runtime &runtime) {
 
 class InterpreterFunctionTest : public RuntimeTestFixture {
  private:
-  Handle<Domain> domain;
+  struct ResultLocals : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } resultLv_;
+  LocalsRAII resultLraii_;
   RuntimeModule *runtimeModule;
   SimpleBytecodeBuilder builder;
   bool hasRun = false;
@@ -117,7 +124,7 @@ class InterpreterFunctionTest : public RuntimeTestFixture {
 
   InterpreterFunctionTest()
       : RuntimeTestFixture(),
-        domain(runtime.makeHandle(Domain::create(runtime))),
+        resultLraii_(runtime, &resultLv_),
         runtimeModule(RuntimeModule::createUninitialized(runtime, domain)) {}
 
   CallResult<HermesValue> run() {
@@ -146,7 +153,8 @@ class InterpreterFunctionTest : public RuntimeTestFixture {
   Handle<StringPrimitive> getResultAsString() {
     assert(hasRun);
     assert(result != ExecutionStatus::EXCEPTION);
-    return runtime.makeHandle(result->getString());
+    resultLv_.str = result->getString();
+    return resultLv_.str;
   }
 };
 
@@ -200,19 +208,23 @@ TEST_F(InterpreterTest, SimpleSmokeTest) {
   ASSERT_EQ(
       vmdetail::mapStringMayAllocate(*runtimeModule, "result="), resultID);
 
-  auto printFn = runtime.makeHandle<NativeFunction>(NativeFunction::create(
+  struct : public Locals {
+    PinnedValue<NativeFunction> printFn;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.printFn = NativeFunction::create(
       runtime,
       nullptr,
       print,
       Predefined::getSymbolID(Predefined::emptyString),
-      0));
+      0);
 
   // Define the 'print' function.
   (void)JSObject::putNamed_RJS(
       runtime.getGlobal(),
       runtime,
       runtimeModule->getSymbolIDFromStringIDMayAllocate(printID),
-      printFn);
+      lv.printFn);
 
   CallResult<HermesValue> status{ExecutionStatus::EXCEPTION};
   {
@@ -300,6 +312,11 @@ L2:
 }
 
 TEST_F(InterpreterTest, RecursiveFactorialTest) {
+  struct : public Locals {
+    PinnedValue<Domain> domainH;
+    PinnedValue<JSFunction> factFn;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto runtimeModule = RuntimeModule::createUninitialized(runtime, domain);
 
   auto factID = vmdetail::mapStringMayAllocate(*runtimeModule, "fact");
@@ -354,20 +371,20 @@ L1:
   BMG.addFunction(1, FRAME_SIZE, instGen.acquireBytecode(), 1, 0);
   auto *codeBlock = createSimpleCodeBlock(runtimeModule, runtime, BMG);
 
-  Handle<JSFunction> factFn = runtime.makeHandle(
-      JSFunction::create(
-          runtime,
-          runtime.makeHandle(runtimeModule->getDomainUnsafe(runtime)),
-          runtime.makeNullHandle<JSObject>(),
-          runtime.makeNullHandle<Environment>(),
-          codeBlock));
+  lv.domainH = runtimeModule->getDomainUnsafe(runtime);
+  lv.factFn = JSFunction::create(
+      runtime,
+      lv.domainH,
+      runtime.makeNullHandle<JSObject>(),
+      runtime.makeNullHandle<Environment>(),
+      codeBlock);
 
   // Define the 'fact' function.
   (void)JSObject::putNamed_RJS(
       runtime.getGlobal(),
       runtime,
       runtimeModule->getSymbolIDFromStringIDMayAllocate(factID),
-      factFn);
+      lv.factFn);
 
   {
     CallResult<HermesValue> status{ExecutionStatus::EXCEPTION};

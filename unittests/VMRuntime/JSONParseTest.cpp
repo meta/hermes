@@ -18,13 +18,24 @@ using namespace hermes::vm;
 namespace {
 
 class RuntimeJSONUtilsTest : public RuntimeTestFixture {
+  struct : public Locals {
+    PinnedValue<SymbolID> sym;
+  } symLocals_;
+  LocalsRAII symLocalsRAII_{runtime, &symLocals_};
+
  public:
+  /// \return the SymbolID of \p s. It stays rooted until the next call.
   SymbolID symbolFor(std::string s) {
-    return **getSymbolHandleForTest(runtime, createASCIIRef(s.data()));
+    return **getSymbolHandleForTest(
+        runtime, createASCIIRef(s.data()), symLocals_.sym);
   }
 };
 
 TEST_F(RuntimeJSONUtilsTest, SimpleUTF16StringPropertyVal) {
+  struct : public Locals {
+    PinnedValue<JSObject> jsobj;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   std::u16string src =
       uR"(
 {"prop1": 45, "x": "hi"}
@@ -33,13 +44,14 @@ TEST_F(RuntimeJSONUtilsTest, SimpleUTF16StringPropertyVal) {
       llvh::ArrayRef<char16_t>(src.data(), src.length())};
   CallResult<HermesValue> parsedObj =
       runtimeJSONParseRef(runtime, std::move(stream));
-  auto jsobj = Handle<JSObject>::vmcast(runtime, *parsedObj);
-  ASSERT_EQ(2, jsobj->getClass(runtime)->getNumProperties());
-  double prop1Val = jsobj->getNamed_RJS(jsobj, runtime, symbolFor("prop1"))
-                        ->getHermesValue()
-                        .getDouble();
+  lv.jsobj.castAndSetHermesValue<JSObject>(*parsedObj);
+  ASSERT_EQ(2, lv.jsobj->getClass(runtime)->getNumProperties());
+  double prop1Val =
+      lv.jsobj->getNamed_RJS(lv.jsobj, runtime, symbolFor("prop1"))
+          ->getHermesValue()
+          .getDouble();
   ASSERT_EQ(45, prop1Val);
-  auto xVal = jsobj->getNamed_RJS(jsobj, runtime, symbolFor("x"))
+  auto xVal = lv.jsobj->getNamed_RJS(lv.jsobj, runtime, symbolFor("x"))
                   ->getHermesValue()
                   .getString()
                   ->getStringRef<char>();
@@ -48,6 +60,10 @@ TEST_F(RuntimeJSONUtilsTest, SimpleUTF16StringPropertyVal) {
 }
 
 TEST_F(RuntimeJSONUtilsTest, LongUTF16StringVal) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   std::u16string src = u"\"";
   for (size_t i = 0; i < 4096; i++) {
     src += i % 26 + 'a';
@@ -57,15 +73,19 @@ TEST_F(RuntimeJSONUtilsTest, LongUTF16StringVal) {
   hermes::UTF16Stream stream{srcRef};
   CallResult<HermesValue> parsedStr =
       runtimeJSONParseRef(runtime, std::move(stream));
-  auto strPrim = Handle<StringPrimitive>::vmcast(runtime, *parsedStr);
+  lv.strPrim.castAndSetHermesValue<StringPrimitive>(*parsedStr);
   auto expectedStrRef = srcRef.slice(1, src.size() - 2);
-  ASSERT_EQ(expectedStrRef.size(), strPrim->getStringLength());
+  ASSERT_EQ(expectedStrRef.size(), lv.strPrim->getStringLength());
   for (size_t i = 0; i < expectedStrRef.size(); i++) {
-    ASSERT_TRUE(strPrim->at(i) == expectedStrRef[i]);
+    ASSERT_TRUE(lv.strPrim->at(i) == expectedStrRef[i]);
   }
 }
 
 TEST_F(RuntimeJSONUtilsTest, LongUTF8StringVal) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   std::string src = "\"";
   for (size_t i = 0; i < 4096; i++) {
     src += i % 26 + 'a';
@@ -76,15 +96,19 @@ TEST_F(RuntimeJSONUtilsTest, LongUTF8StringVal) {
   hermes::UTF16Stream stream{srcRef};
   CallResult<HermesValue> parsedStr =
       runtimeJSONParseRef(runtime, std::move(stream));
-  auto strPrim = Handle<StringPrimitive>::vmcast(runtime, *parsedStr);
+  lv.strPrim.castAndSetHermesValue<StringPrimitive>(*parsedStr);
   auto expectedStrRef = srcRef.slice(1, src.size() - 2);
-  ASSERT_EQ(expectedStrRef.size(), strPrim->getStringLength());
+  ASSERT_EQ(expectedStrRef.size(), lv.strPrim->getStringLength());
   for (size_t i = 0; i < expectedStrRef.size(); i++) {
-    ASSERT_TRUE(strPrim->at(i) == expectedStrRef[i]);
+    ASSERT_TRUE(lv.strPrim->at(i) == expectedStrRef[i]);
   }
 }
 
 TEST_F(RuntimeJSONUtilsTest, LongUTF8StringPropertyVal) {
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   std::string valSrc = "\"";
   for (size_t i = 0; i < 4096; i++) {
     valSrc += i % 26 + 'a';
@@ -99,8 +123,8 @@ TEST_F(RuntimeJSONUtilsTest, LongUTF8StringPropertyVal) {
   hermes::UTF16Stream stream{srcRef};
   CallResult<HermesValue> parsedObj =
       runtimeJSONParseRef(runtime, std::move(stream));
-  auto obj = Handle<JSObject>::vmcast(runtime, *parsedObj);
-  auto prop1Val = obj->getNamed_RJS(obj, runtime, symbolFor("prop1"))
+  lv.obj.castAndSetHermesValue<JSObject>(*parsedObj);
+  auto prop1Val = lv.obj->getNamed_RJS(lv.obj, runtime, symbolFor("prop1"))
                       ->getHermesValue()
                       .getString();
   ASSERT_EQ(expectedStrRef.size(), prop1Val->getStringLength());
@@ -110,6 +134,10 @@ TEST_F(RuntimeJSONUtilsTest, LongUTF8StringPropertyVal) {
 }
 
 TEST_F(RuntimeJSONUtilsTest, LongUTF8StringValWithEscapes) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   std::string src = "\"";
   std::string expectedStr = "";
   for (size_t i = 0; i < 4096; i++) {
@@ -131,14 +159,18 @@ TEST_F(RuntimeJSONUtilsTest, LongUTF8StringValWithEscapes) {
   hermes::UTF16Stream stream{srcRef};
   CallResult<HermesValue> parsedStr =
       runtimeJSONParseRef(runtime, std::move(stream));
-  auto strPrim = Handle<StringPrimitive>::vmcast(runtime, *parsedStr);
-  ASSERT_EQ(expectedStrRef.size(), strPrim->getStringLength());
+  lv.strPrim.castAndSetHermesValue<StringPrimitive>(*parsedStr);
+  ASSERT_EQ(expectedStrRef.size(), lv.strPrim->getStringLength());
   for (size_t i = 0; i < expectedStrRef.size(); i++) {
-    ASSERT_TRUE(strPrim->at(i) == expectedStrRef[i]);
+    ASSERT_TRUE(lv.strPrim->at(i) == expectedStrRef[i]);
   }
 }
 
 TEST_F(RuntimeJSONUtilsTest, LongUTF8StringValWithConversions) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   std::string src = "\"";
   std::u16string expectedStr = u"";
   for (size_t i = 0; i < 4096; i++) {
@@ -169,10 +201,10 @@ TEST_F(RuntimeJSONUtilsTest, LongUTF8StringValWithConversions) {
   hermes::UTF16Stream stream{srcRef};
   CallResult<HermesValue> parsedStr =
       runtimeJSONParseRef(runtime, std::move(stream));
-  auto strPrim = Handle<StringPrimitive>::vmcast(runtime, *parsedStr);
-  ASSERT_EQ(expectedStrRef.size(), strPrim->getStringLength());
+  lv.strPrim.castAndSetHermesValue<StringPrimitive>(*parsedStr);
+  ASSERT_EQ(expectedStrRef.size(), lv.strPrim->getStringLength());
   for (size_t i = 0; i < expectedStrRef.size(); i++) {
-    ASSERT_TRUE(strPrim->at(i) == expectedStrRef[i]);
+    ASSERT_TRUE(lv.strPrim->at(i) == expectedStrRef[i]);
   }
 }
 

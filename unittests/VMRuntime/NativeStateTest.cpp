@@ -24,7 +24,11 @@ TEST_F(NativeStateTest, NativeStateFinalizerRunsOnce) {
   int counter = 0;
   {
     GCScope scope{runtime, "NativeStateTest"};
-    (void)runtime.makeHandle(NativeState::create(runtime, &counter, inc));
+    struct : public Locals {
+      PinnedValue<NativeState> state;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+    lv.state = NativeState::create(runtime, &counter, inc);
     runtime.collect("test");
     // should not have been finalized yet
     EXPECT_EQ(0, counter);

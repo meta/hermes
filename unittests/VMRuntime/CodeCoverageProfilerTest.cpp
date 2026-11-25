@@ -87,6 +87,12 @@ class CodeCoverageProfilerTest : public RuntimeTestFixture {
 };
 
 TEST_F(CodeCoverageProfilerTest, BasicFunctionUsedUnused) {
+  struct : public Locals {
+    PinnedValue<JSArray> funcArr;
+    PinnedValue<JSFunction> funcUsed;
+    PinnedValue<JSFunction> funcUnused;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   hbc::CompileFlags flags;
   flags.lazy = false;
   CallResult<HermesValue> res = runtime.run(
@@ -100,11 +106,13 @@ TEST_F(CodeCoverageProfilerTest, BasicFunctionUsedUnused) {
   std::vector<CodeCoverageProfiler::FuncInfo> testRuntimeExecutedFuncInfos =
       executedFuncInfos.find(runtime.getHeap().getName())->second;
 
-  Handle<JSArray> funcArr = runtime.makeHandle(vmcast<JSArray>(*res));
-  Handle<JSFunction> funcUsed = runtime.makeHandle(
-      vmcast<JSFunction>(funcArr->at(runtime, 0).getObject(runtime)));
-  Handle<JSFunction> funcUnused = runtime.makeHandle(
-      vmcast<JSFunction>(funcArr->at(runtime, 1).getObject(runtime)));
+  lv.funcArr.castAndSetHermesValue<JSArray>(*res);
+  Handle<JSArray> funcArr = lv.funcArr;
+  lv.funcUsed = vmcast<JSFunction>(funcArr->at(runtime, 0).getObject(runtime));
+  Handle<JSFunction> funcUsed = lv.funcUsed;
+  lv.funcUnused =
+      vmcast<JSFunction>(funcArr->at(runtime, 1).getObject(runtime));
+  Handle<JSFunction> funcUnused = lv.funcUnused;
 
   // Used and unused functions should have different info.
   EXPECT_TRUE(hasDifferentInfo(runtime, funcUsed, funcUnused));
@@ -145,16 +153,24 @@ TEST_F(CodeCoverageProfilerTest, BasicFunctionUsedUnusedTwoRuntimes) {
 
   for (size_t i = 0; i < runtimes.size(); i++) {
     Runtime &rt = *runtimes[i];
+    // Wait for the thread using rt to finish before touching rt's Locals.
     HermesValue res = resFuts[i].get();
+    struct : public Locals {
+      PinnedValue<JSArray> funcArr;
+      PinnedValue<JSFunction> funcUsed;
+      PinnedValue<JSFunction> funcUnused;
+    } lv;
+    LocalsRAII lraii_lv(rt, &lv);
+    lv.funcArr.castAndSetHermesValue<JSArray>(res);
 
     std::vector<CodeCoverageProfiler::FuncInfo> executedFuncInfos =
         rt.getCodeCoverageProfiler().getExecutedFunctionsLocal();
 
-    Handle<JSArray> funcArr = rt.makeHandle(vmcast<JSArray>(res));
-    Handle<JSFunction> funcUsed =
-        rt.makeHandle(vmcast<JSFunction>(funcArr->at(rt, 0).getObject(rt)));
-    Handle<JSFunction> funcUnused =
-        rt.makeHandle(vmcast<JSFunction>(funcArr->at(rt, 1).getObject(rt)));
+    Handle<JSArray> funcArr = lv.funcArr;
+    lv.funcUsed = vmcast<JSFunction>(funcArr->at(rt, 0).getObject(rt));
+    Handle<JSFunction> funcUsed = lv.funcUsed;
+    lv.funcUnused = vmcast<JSFunction>(funcArr->at(rt, 1).getObject(rt));
+    Handle<JSFunction> funcUnused = lv.funcUnused;
 
     // Used and unused functions should have different info.
     EXPECT_TRUE(hasDifferentInfo(rt, funcUsed, funcUnused));
@@ -168,12 +184,20 @@ TEST_F(CodeCoverageProfilerTest, BasicFunctionUsedUnusedTwoRuntimes) {
 #endif
 
 TEST_F(CodeCoverageProfilerTest, FunctionsFromMultipleModules) {
+  struct : public Locals {
+    PinnedValue<JSFunction> funcFoo;
+    PinnedValue<JSArray> funcArr;
+    PinnedValue<JSFunction> funcBar;
+    PinnedValue<JSFunction> funcUnused;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   hbc::CompileFlags flags;
   flags.lazy = false;
   CallResult<HermesValue> res1 =
       runtime.run("function foo() {}; foo(); foo;", "file:///fake1.js", flags);
   EXPECT_FALSE(isException(res1));
-  Handle<JSFunction> funcFoo = runtime.makeHandle(vmcast<JSFunction>(*res1));
+  lv.funcFoo.castAndSetHermesValue<JSFunction>(*res1);
+  Handle<JSFunction> funcFoo = lv.funcFoo;
 
   CallResult<HermesValue> res2 = runtime.run(
       "\n  function bar() {}; function bar() {}; function unused() {}; bar(); [bar, unused];",
@@ -186,11 +210,13 @@ TEST_F(CodeCoverageProfilerTest, FunctionsFromMultipleModules) {
   std::vector<CodeCoverageProfiler::FuncInfo> testRuntimeExecutedFuncInfos =
       executedFuncInfos.find(runtime.getHeap().getName())->second;
 
-  Handle<JSArray> funcArr = runtime.makeHandle(vmcast<JSArray>(*res2));
-  Handle<JSFunction> funcBar = runtime.makeHandle(
-      vmcast<JSFunction>(funcArr->at(runtime, 0).getObject(runtime)));
-  Handle<JSFunction> funcUnused = runtime.makeHandle(
-      vmcast<JSFunction>(funcArr->at(runtime, 1).getObject(runtime)));
+  lv.funcArr.castAndSetHermesValue<JSArray>(*res2);
+  Handle<JSArray> funcArr = lv.funcArr;
+  lv.funcBar = vmcast<JSFunction>(funcArr->at(runtime, 0).getObject(runtime));
+  Handle<JSFunction> funcBar = lv.funcBar;
+  lv.funcUnused =
+      vmcast<JSFunction>(funcArr->at(runtime, 1).getObject(runtime));
+  Handle<JSFunction> funcUnused = lv.funcUnused;
 
   // Used and unused functions should have different info.
   EXPECT_TRUE(hasDifferentInfo(runtime, funcFoo, funcUnused));
@@ -204,6 +230,13 @@ TEST_F(CodeCoverageProfilerTest, FunctionsFromMultipleModules) {
 }
 
 TEST_F(CodeCoverageProfilerTest, FunctionsFromMultipleDomains) {
+  struct : public Locals {
+    PinnedValue<JSArray> funcArr;
+    PinnedValue<JSFunction> funcUsed1;
+    PinnedValue<JSFunction> funcUsed2;
+    PinnedValue<JSFunction> funcUnused;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   hbc::CompileFlags flags;
   flags.lazy = false;
   CallResult<HermesValue> res = runtime.run(
@@ -219,13 +252,15 @@ TEST_F(CodeCoverageProfilerTest, FunctionsFromMultipleDomains) {
   std::vector<CodeCoverageProfiler::FuncInfo> testRuntimeExecutedFuncInfos =
       executedFuncInfos.find(runtime.getHeap().getName())->second;
 
-  Handle<JSArray> funcArr = runtime.makeHandle(vmcast<JSArray>(*res));
-  Handle<JSFunction> funcUsed1 = runtime.makeHandle(
-      vmcast<JSFunction>(funcArr->at(runtime, 0).getObject(runtime)));
-  Handle<JSFunction> funcUsed2 = runtime.makeHandle(
-      vmcast<JSFunction>(funcArr->at(runtime, 1).getObject(runtime)));
-  Handle<JSFunction> funcUnused = runtime.makeHandle(
-      vmcast<JSFunction>(funcArr->at(runtime, 2).getObject(runtime)));
+  lv.funcArr.castAndSetHermesValue<JSArray>(*res);
+  Handle<JSArray> funcArr = lv.funcArr;
+  lv.funcUsed1 = vmcast<JSFunction>(funcArr->at(runtime, 0).getObject(runtime));
+  Handle<JSFunction> funcUsed1 = lv.funcUsed1;
+  lv.funcUsed2 = vmcast<JSFunction>(funcArr->at(runtime, 1).getObject(runtime));
+  Handle<JSFunction> funcUsed2 = lv.funcUsed2;
+  lv.funcUnused =
+      vmcast<JSFunction>(funcArr->at(runtime, 2).getObject(runtime));
+  Handle<JSFunction> funcUnused = lv.funcUnused;
 
   // Used and unused functions should have different info.
   EXPECT_TRUE(hasDifferentInfo(runtime, funcUsed1, funcUnused));
@@ -240,6 +275,10 @@ TEST_F(CodeCoverageProfilerTest, FunctionsFromMultipleDomains) {
 }
 
 TEST_F(CodeCoverageProfilerTest, LazyFunction) {
+  struct : public Locals {
+    PinnedValue<JSFunction> funcFoo;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   hbc::CompileFlags flags;
   flags.lazy = true;
   // Force lazy compilation.
@@ -256,7 +295,8 @@ TEST_F(CodeCoverageProfilerTest, LazyFunction) {
   std::vector<CodeCoverageProfiler::FuncInfo> testRuntimeExecutedFuncInfos =
       executedFuncInfos.find(runtime.getHeap().getName())->second;
 
-  Handle<JSFunction> funcFoo = runtime.makeHandle(vmcast<JSFunction>(*res));
+  lv.funcFoo.castAndSetHermesValue<JSFunction>(*res);
+  Handle<JSFunction> funcFoo = lv.funcFoo;
   // Global + bar + foo.
   EXPECT_EQ(testRuntimeExecutedFuncInfos.size(), 3);
   EXPECT_TRUE(isFuncExecuted(runtime, testRuntimeExecutedFuncInfos, funcFoo));

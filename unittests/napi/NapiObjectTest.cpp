@@ -2976,8 +2976,12 @@ TEST_F(NapiTestFixture, DefineProperties_SymbolKey) {
     auto strRes =
         StringPrimitive::createEfficient(env_->runtime, ASCIIRef{"sym", 3});
     ASSERT_NE(ExecutionStatus::EXCEPTION, strRes.getStatus());
-    auto strHandle = env_->runtime.makeHandle<StringPrimitive>(
-        vmcast<StringPrimitive>(*strRes));
+    struct : public Locals {
+      PinnedValue<StringPrimitive> str;
+    } lv;
+    LocalsRAII lraii(env_->runtime, &lv);
+    lv.str = vmcast<StringPrimitive>(*strRes);
+    Handle<StringPrimitive> strHandle = lv.str;
     auto sym = env_->runtime.getIdentifierTable().createNotUniquedSymbol(
         env_->runtime, strHandle);
     ASSERT_NE(ExecutionStatus::EXCEPTION, sym.getStatus());

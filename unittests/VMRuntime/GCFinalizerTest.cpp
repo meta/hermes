@@ -121,21 +121,22 @@ TEST(GCFinalizerTest, FinalizeAllOnRuntimeDestructRealRuntime) {
   std::shared_ptr<Runtime> rt{Runtime::create(kTestRTConfig)};
   {
     GCScope gcScope(*rt);
+    struct : public Locals {
+      PinnedValue<> r1;
+      PinnedValue<> r2;
+    } lv;
+    LocalsRAII lraii(*rt, &lv);
 
-    auto r1 = rt->makeHandle(
-        HermesValue::encodeObjectValue(
-            createWithFinalizeCount(*rt, rt->getHeap(), &finalized)));
-    auto r2 = rt->makeHandle(
-        HermesValue::encodeObjectValue(
-            createWithFinalizeCount(*rt, rt->getHeap(), &finalized)));
+    lv.r1 = HermesValue::encodeObjectValue(
+        createWithFinalizeCount(*rt, rt->getHeap(), &finalized));
+    lv.r2 = HermesValue::encodeObjectValue(
+        createWithFinalizeCount(*rt, rt->getHeap(), &finalized));
 
     // Collect once to get the objects into the old gen, then a second time
     // to get their mark bits set in their stable locations.
     rt->collect("test");
     rt->collect("test");
     ASSERT_EQ(0, finalized);
-    (void)r1;
-    (void)r2;
   }
 
   // Now: does destructing the runtime with set mark bits run all the

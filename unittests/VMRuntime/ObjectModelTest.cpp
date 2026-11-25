@@ -31,7 +31,12 @@ namespace {
 
 static inline Handle<Callable> makeSimpleJSFunction(
     Runtime &runtime,
-    RuntimeModule *runtimeModule) {
+    RuntimeModule *runtimeModule,
+    MutableHandle<Callable> out) {
+  struct : public Locals {
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   CodeBlock *codeBlock;
 
   if (runtimeModule->getBytecode()) {
@@ -44,43 +49,58 @@ static inline Handle<Callable> makeSimpleJSFunction(
     builder.addFunction(1, 1, instGen.acquireBytecode());
     codeBlock = createSimpleCodeBlock(runtimeModule, runtime, builder);
   }
-  return runtime.makeHandle<JSFunction>(JSFunction::create(
+  lv.domain = runtimeModule->getDomainUnsafe(runtime);
+  out = JSFunction::create(
       runtime,
-      runtime.makeHandle(runtimeModule->getDomainUnsafe(runtime)),
+      lv.domain,
       Runtime::makeNullHandle<JSObject>(),
       Runtime::makeNullHandle<Environment>(),
-      codeBlock));
+      codeBlock);
+  return out;
 }
 
 static inline Handle<PropertyAccessor> createPropertyAccessor(
     Runtime &runtime,
-    RuntimeModule *runtimeModule) {
-  return runtime.makeHandle<PropertyAccessor>(PropertyAccessor::create(
-      runtime,
-      makeSimpleJSFunction(runtime, runtimeModule),
-      makeSimpleJSFunction(runtime, runtimeModule)));
+    RuntimeModule *runtimeModule,
+    MutableHandle<PropertyAccessor> out) {
+  struct : public Locals {
+    PinnedValue<Callable> getter;
+    PinnedValue<Callable> setter;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  makeSimpleJSFunction(runtime, runtimeModule, lv.getter);
+  makeSimpleJSFunction(runtime, runtimeModule, lv.setter);
+  out = PropertyAccessor::create(runtime, lv.getter, lv.setter);
+  return out;
 }
 
 using ObjectModelTest = RuntimeTestFixture;
 
 TEST_F(ObjectModelTest, SmokeTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<SymbolID> prop2ID;
+    PinnedValue<JSObject> obj1;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   CallResult<bool> cr{false};
 
-  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
+  auto prop1ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID);
+  auto prop2ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"), lv.prop2ID);
 
-  auto nullObj = runtime.makeHandle<JSObject>(nullptr);
-  auto obj1 = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  auto nullObj = Runtime::makeNullHandle<JSObject>();
+  lv.obj1 = JSObject::create(runtime, nullObj);
+  Handle<JSObject> obj1 = lv.obj1;
 
   // Try to get a property which hasn't been defined and expect undefined.
   EXPECT_CALLRESULT_UNDEFINED(JSObject::getNamed_RJS(obj1, runtime, *prop1ID));
 
   // Put obj1.prop1 = 3.14 .
-  cr = JSObject::putNamed_RJS(
-      obj1,
-      runtime,
-      *prop1ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(3.14)));
+  lv.num = HermesValue::encodeTrustedNumberValue(3.14);
+  cr = JSObject::putNamed_RJS(obj1, runtime, *prop1ID, lv.num);
   ASSERT_TRUE(*cr);
 
   // Get obj1.prop1.
@@ -92,10 +112,7 @@ TEST_F(ObjectModelTest, SmokeTest) {
 
   // Set obj1.prop2 = true.
   cr = JSObject::putNamed_RJS(
-      obj1,
-      runtime,
-      *prop2ID,
-      runtime.makeHandle(HermesValue::encodeBoolValue(true)));
+      obj1, runtime, *prop2ID, Runtime::getBoolValue(true));
   ASSERT_TRUE(*cr);
 
   // Get obj1.prop1.
@@ -108,28 +125,34 @@ TEST_F(ObjectModelTest, SmokeTest) {
 
 /// Non-exhaustive test of prototype functionality.
 TEST_F(ObjectModelTest, SimplePrototypeTest) {
-  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
+  struct : public Locals {
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<SymbolID> prop2ID;
+    PinnedValue<JSObject> prototypeObj;
+    PinnedValue<JSObject> obj;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  auto prop1ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID);
+  auto prop2ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"), lv.prop2ID);
 
   // Create and populate a prototype object.
-  auto nullObj = runtime.makeHandle<JSObject>(nullptr);
-  auto prototypeObj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  auto nullObj = Runtime::makeNullHandle<JSObject>();
+  lv.prototypeObj = JSObject::create(runtime, nullObj);
+  Handle<JSObject> prototypeObj = lv.prototypeObj;
 
   // prototypeObj.prop1 = 10;
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      prototypeObj,
-      runtime,
-      *prop1ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10.0))));
+  lv.num = HermesValue::encodeTrustedNumberValue(10.0);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(prototypeObj, runtime, *prop1ID, lv.num));
   // prototypeObj.prop2 = 20;
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      prototypeObj,
-      runtime,
-      *prop2ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(20.0))));
+  lv.num = HermesValue::encodeTrustedNumberValue(20.0);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(prototypeObj, runtime, *prop2ID, lv.num));
 
   // Create a child object.
-  auto obj = runtime.makeHandle(JSObject::create(runtime, prototypeObj));
+  lv.obj = JSObject::create(runtime, prototypeObj);
+  Handle<JSObject> obj = lv.obj;
 
   // Read the inherited properties.
   EXPECT_CALLRESULT_DOUBLE(
@@ -138,11 +161,8 @@ TEST_F(ObjectModelTest, SimplePrototypeTest) {
       20.0, JSObject::getNamed_RJS(obj, runtime, *prop2ID));
 
   // obj.prop1 = 100;
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      obj,
-      runtime,
-      *prop1ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(100.0))));
+  lv.num = HermesValue::encodeTrustedNumberValue(100.0);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(obj, runtime, *prop1ID, lv.num));
 
   // Check the inherited property for the right value.
   EXPECT_CALLRESULT_DOUBLE(
@@ -153,18 +173,30 @@ TEST_F(ObjectModelTest, SimplePrototypeTest) {
 }
 
 TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<SymbolID> prop2ID;
+    PinnedValue<JSObject> obj;
+    PinnedValue<PropertyAccessor> accessor;
+    PinnedValue<PropertyAccessor> accessor2;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   GCScope gcScope{runtime, "ObjectModelTest.DefineOwnPropertyTest", 200};
   auto *runtimeModule = RuntimeModule::createUninitialized(runtime, domain);
   CallResult<bool> cr{false};
 
-  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
+  auto prop1ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID);
+  auto prop2ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"), lv.prop2ID);
 
-  auto nullObj = runtime.makeHandle<JSObject>(nullptr);
+  auto nullObj = Runtime::makeNullHandle<JSObject>();
 
   {
     // Empty flags.
-    auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+    lv.obj = JSObject::create(runtime, nullObj);
+    Handle<JSObject> obj = lv.obj;
     DefinePropertyFlags dpf{};
     ASSERT_TRUE(*JSObject::defineOwnProperty(
         obj, runtime, *prop1ID, dpf, Runtime::getUndefinedValue()));
@@ -176,34 +208,26 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
 
   {
     // Writable property, prevent extensions.
-    auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+    lv.obj = JSObject::create(runtime, nullObj);
+    Handle<JSObject> obj = lv.obj;
     DefinePropertyFlags dpf{};
     dpf.setValue = 1;
     dpf.setWritable = 1;
     dpf.writable = 1;
-    ASSERT_TRUE(*JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        *prop1ID,
-        dpf,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10.0))));
+    lv.num = HermesValue::encodeTrustedNumberValue(10.0);
+    ASSERT_TRUE(
+        *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, lv.num));
     EXPECT_PROPERTY_FLAG(TRUE, obj, *prop1ID, writable);
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, enumerable);
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, configurable);
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, accessor);
     JSObject::preventExtensionsNonProxy(obj, runtime);
-    ASSERT_TRUE(*JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        *prop1ID,
-        dpf,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(20.0))));
-    ASSERT_FALSE(*JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        *prop2ID,
-        dpf,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(20.0))));
+    lv.num = HermesValue::encodeTrustedNumberValue(20.0);
+    ASSERT_TRUE(
+        *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, lv.num));
+    lv.num = HermesValue::encodeTrustedNumberValue(20.0);
+    ASSERT_FALSE(
+        *JSObject::defineOwnProperty(obj, runtime, *prop2ID, dpf, lv.num));
     EXPECT_CALLRESULT_DOUBLE(
         20.0, JSObject::getNamed_RJS(obj, runtime, *prop1ID));
     EXPECT_CALLRESULT_UNDEFINED(JSObject::getNamed_RJS(obj, runtime, *prop2ID));
@@ -211,51 +235,41 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
 
   {
     // Configurable property, change writable.
-    auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+    lv.obj = JSObject::create(runtime, nullObj);
+    Handle<JSObject> obj = lv.obj;
     DefinePropertyFlags dpf{};
     dpf.setValue = 1;
     dpf.setWritable = 1;
     dpf.writable = 1;
     dpf.setConfigurable = 1;
     dpf.configurable = 1;
-    ASSERT_TRUE(*JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        *prop1ID,
-        dpf,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10.0))));
-    ASSERT_TRUE(*JSObject::putNamed_RJS(
-        obj,
-        runtime,
-        *prop1ID,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(11.0))));
+    lv.num = HermesValue::encodeTrustedNumberValue(10.0);
+    ASSERT_TRUE(
+        *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, lv.num));
+    lv.num = HermesValue::encodeTrustedNumberValue(11.0);
+    ASSERT_TRUE(*JSObject::putNamed_RJS(obj, runtime, *prop1ID, lv.num));
     EXPECT_CALLRESULT_DOUBLE(
         11.0, JSObject::getNamed_RJS(obj, runtime, *prop1ID));
     dpf.setWritable = 1;
     dpf.writable = 0;
-    ASSERT_TRUE(*JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        *prop1ID,
-        dpf,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(20.0))));
-    ASSERT_FALSE(*JSObject::putNamed_RJS(
-        obj,
-        runtime,
-        *prop1ID,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(31.0))));
+    lv.num = HermesValue::encodeTrustedNumberValue(20.0);
+    ASSERT_TRUE(
+        *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, lv.num));
+    lv.num = HermesValue::encodeTrustedNumberValue(31.0);
+    ASSERT_FALSE(*JSObject::putNamed_RJS(obj, runtime, *prop1ID, lv.num));
   }
 
   {
     // Accessor property
-    auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+    lv.obj = JSObject::create(runtime, nullObj);
+    Handle<JSObject> obj = lv.obj;
     DefinePropertyFlags dpf{};
     dpf.setGetter = 1;
     dpf.setSetter = 1;
     dpf.setConfigurable = 1;
     dpf.configurable = 1;
 
-    auto accessor = createPropertyAccessor(runtime, runtimeModule);
+    auto accessor = createPropertyAccessor(runtime, runtimeModule, lv.accessor);
     ASSERT_TRUE(
         *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, accessor));
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, writable);
@@ -263,7 +277,8 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
     EXPECT_PROPERTY_FLAG(TRUE, obj, *prop1ID, configurable);
     EXPECT_PROPERTY_FLAG(TRUE, obj, *prop1ID, accessor);
 
-    auto accessor2 = createPropertyAccessor(runtime, runtimeModule);
+    auto accessor2 =
+        createPropertyAccessor(runtime, runtimeModule, lv.accessor2);
     ASSERT_TRUE(
         *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, accessor2));
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, writable);
@@ -274,7 +289,8 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
 
   {
     // Non-configurable property.
-    auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+    lv.obj = JSObject::create(runtime, nullObj);
+    Handle<JSObject> obj = lv.obj;
     DefinePropertyFlags dpf{};
     dpf.setValue = 1;
     dpf.setConfigurable = 1;
@@ -284,12 +300,9 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
     dpf.setEnumerable = 1;
     dpf.enumerable = 1;
 
-    ASSERT_TRUE(*JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        *prop1ID,
-        dpf,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10.0))));
+    lv.num = HermesValue::encodeTrustedNumberValue(10.0);
+    ASSERT_TRUE(
+        *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, lv.num));
     EXPECT_CALLRESULT_DOUBLE(
         10.0, JSObject::getNamed_RJS(obj, runtime, *prop1ID));
     EXPECT_PROPERTY_FLAG(TRUE, obj, *prop1ID, writable);
@@ -297,12 +310,9 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, configurable);
 
     dpf.writable = 0;
-    ASSERT_TRUE(*JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        *prop1ID,
-        dpf,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(20.0))));
+    lv.num = HermesValue::encodeTrustedNumberValue(20.0);
+    ASSERT_TRUE(
+        *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, lv.num));
     EXPECT_CALLRESULT_DOUBLE(
         20.0, JSObject::getNamed_RJS(obj, runtime, *prop1ID));
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, writable);
@@ -311,30 +321,24 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
     dpf.writable = 1;
 
     dpf.enumerable = 0;
-    ASSERT_FALSE(*JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        *prop1ID,
-        dpf,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(20.0))));
+    lv.num = HermesValue::encodeTrustedNumberValue(20.0);
+    ASSERT_FALSE(
+        *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, lv.num));
     EXPECT_CALLRESULT_DOUBLE(
         20.0, JSObject::getNamed_RJS(obj, runtime, *prop1ID));
     dpf.enumerable = 1;
 
     dpf.configurable = 1;
-    ASSERT_FALSE(*JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        *prop1ID,
-        dpf,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(40.0))));
+    lv.num = HermesValue::encodeTrustedNumberValue(40.0);
+    ASSERT_FALSE(
+        *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, lv.num));
     EXPECT_CALLRESULT_DOUBLE(
         20.0, JSObject::getNamed_RJS(obj, runtime, *prop1ID));
 
     dpf.clear();
     dpf.setGetter = 1;
     dpf.setSetter = 1;
-    auto accessor = createPropertyAccessor(runtime, runtimeModule);
+    auto accessor = createPropertyAccessor(runtime, runtimeModule, lv.accessor);
     ASSERT_FALSE(
         *JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, accessor));
 
@@ -349,25 +353,31 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
 
 /// Non-exhaustive test of read-only property.
 TEST_F(ObjectModelTest, SimpleReadOnlyTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<SymbolID> prop2ID;
+    PinnedValue<JSObject> obj;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   CallResult<bool> cr(false);
 
-  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
+  auto prop1ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID);
+  auto prop2ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"), lv.prop2ID);
 
-  auto nullObj = runtime.makeHandle<JSObject>(nullptr);
-  auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  auto nullObj = Runtime::makeNullHandle<JSObject>();
+  lv.obj = JSObject::create(runtime, nullObj);
+  Handle<JSObject> obj = lv.obj;
 
   // Define a read-only property.
   DefinePropertyFlags dpFlags1{};
   dpFlags1.setValue = 1;
   dpFlags1.setWritable = 1;
   dpFlags1.writable = 0;
-  cr = JSObject::defineOwnProperty(
-      obj,
-      runtime,
-      *prop1ID,
-      dpFlags1,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10.0)));
+  lv.num = HermesValue::encodeTrustedNumberValue(10.0);
+  cr = JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpFlags1, lv.num);
   ASSERT_TRUE(*cr);
 
   // Double-check the value of obj.prop1.
@@ -375,11 +385,8 @@ TEST_F(ObjectModelTest, SimpleReadOnlyTest) {
       10.0, JSObject::getNamed_RJS(obj, runtime, *prop1ID));
 
   // Try to modify it with doThrow=false;
-  cr = JSObject::putNamed_RJS(
-      obj,
-      runtime,
-      *prop1ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(11.0)));
+  lv.num = HermesValue::encodeTrustedNumberValue(11.0);
+  cr = JSObject::putNamed_RJS(obj, runtime, *prop1ID, lv.num);
   ASSERT_EQ(ExecutionStatus::RETURNED, cr.getStatus());
   ASSERT_FALSE(cr.getValue());
 
@@ -400,22 +407,15 @@ TEST_F(ObjectModelTest, SimpleReadOnlyTest) {
 
   // Define an ordinary property and then change it to read-only.
   // obj.prop2 = 20;
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      obj,
-      runtime,
-      *prop2ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(20.0))));
+  lv.num = HermesValue::encodeTrustedNumberValue(20.0);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(obj, runtime, *prop2ID, lv.num));
 
   // Make prop2 read-only.
   DefinePropertyFlags dpFlags2{};
   dpFlags2.setWritable = 1;
   dpFlags2.writable = 0;
   cr = JSObject::defineOwnProperty(
-      obj,
-      runtime,
-      *prop2ID,
-      dpFlags2,
-      runtime.makeHandle(HermesValue::encodeUndefinedValue()));
+      obj, runtime, *prop2ID, dpFlags2, Runtime::getUndefinedValue());
   ASSERT_TRUE(*cr);
 
   // Double-check the value of obj.prop2.
@@ -423,11 +423,8 @@ TEST_F(ObjectModelTest, SimpleReadOnlyTest) {
       20.0, JSObject::getNamed_RJS(obj, runtime, *prop2ID));
 
   // Try to modify it with doThrow=false;
-  cr = JSObject::putNamed_RJS(
-      obj,
-      runtime,
-      *prop2ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(21.0)));
+  lv.num = HermesValue::encodeTrustedNumberValue(21.0);
+  cr = JSObject::putNamed_RJS(obj, runtime, *prop2ID, lv.num);
   ASSERT_EQ(ExecutionStatus::RETURNED, cr.getStatus());
   ASSERT_FALSE(cr.getValue());
 
@@ -437,25 +434,36 @@ TEST_F(ObjectModelTest, SimpleReadOnlyTest) {
 }
 
 TEST_F(ObjectModelTest, SimpleDeleteTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<SymbolID> prop2ID;
+    PinnedValue<SymbolID> prop3ID;
+    PinnedValue<SymbolID> prop4ID;
+    PinnedValue<JSObject> obj;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   NamedPropertyDescriptor desc;
 
-  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
-  auto prop3ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop3"));
-  auto prop4ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop4"));
+  auto prop1ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID);
+  auto prop2ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"), lv.prop2ID);
+  auto prop3ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop3"), lv.prop3ID);
+  auto prop4ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop4"), lv.prop4ID);
 
-  auto nullObj = runtime.makeHandle<JSObject>(nullptr);
-  auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  auto nullObj = Runtime::makeNullHandle<JSObject>();
+  lv.obj = JSObject::create(runtime, nullObj);
+  Handle<JSObject> obj = lv.obj;
 
   // Attempt to delete a nonexistent property.
   ASSERT_TRUE(*JSObject::deleteNamed(obj, runtime, *prop1ID));
 
   // ob1.prop1 = 10.0;
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      obj,
-      runtime,
-      *prop1ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10.0))));
+  lv.num = HermesValue::encodeTrustedNumberValue(10.0);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(obj, runtime, *prop1ID, lv.num));
 
   // Validate the property slot.
   ASSERT_TRUE(JSObject::getOwnNamedDescriptor(obj, runtime, *prop1ID, desc));
@@ -469,11 +477,8 @@ TEST_F(ObjectModelTest, SimpleDeleteTest) {
       10.0, JSObject::getNamed_RJS(obj, runtime, *prop1ID));
 
   // obj.prop2 = 20.0;
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      obj,
-      runtime,
-      *prop2ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(20.0))));
+  lv.num = HermesValue::encodeTrustedNumberValue(20.0);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(obj, runtime, *prop2ID, lv.num));
   ASSERT_TRUE(JSObject::getOwnNamedDescriptor(obj, runtime, *prop2ID, desc));
   ASSERT_EQ(1u, desc.slot);
 
@@ -493,11 +498,8 @@ TEST_F(ObjectModelTest, SimpleDeleteTest) {
   ASSERT_EQ(1u, desc.slot);
 
   // obj.prop3 = 30.0;
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      obj,
-      runtime,
-      *prop3ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(30.0))));
+  lv.num = HermesValue::encodeTrustedNumberValue(30.0);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(obj, runtime, *prop3ID, lv.num));
   ASSERT_TRUE(JSObject::getOwnNamedDescriptor(obj, runtime, *prop3ID, desc));
   ASSERT_EQ(0u, desc.slot);
 
@@ -511,19 +513,22 @@ TEST_F(ObjectModelTest, SimpleDeleteTest) {
   EXPECT_CALLRESULT_UNDEFINED(JSObject::getNamed_RJS(obj, runtime, *prop2ID));
 
   // obj.prop4 = 40.0;
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      obj,
-      runtime,
-      *prop4ID,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(40.0))));
+  lv.num = HermesValue::encodeTrustedNumberValue(40.0);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(obj, runtime, *prop4ID, lv.num));
   ASSERT_TRUE(JSObject::getOwnNamedDescriptor(obj, runtime, *prop4ID, desc));
   ASSERT_EQ(1u, desc.slot);
 }
 
 TEST_F(ObjectModelTest, EnvironmentSmokeTest) {
-  auto nullParent = runtime.makeHandle<Environment>(nullptr);
-  auto parentEnv = runtime.makeHandle<Environment>(
+  struct : public Locals {
+    PinnedValue<Environment> parentEnv;
+    PinnedValue<Environment> env;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  auto nullParent = Runtime::makeNullHandle<Environment>();
+  lv.parentEnv.castAndSetHermesValue<Environment>(
       Environment::create(runtime, nullParent, 2));
+  Handle<Environment> parentEnv = lv.parentEnv;
 
   ASSERT_EQ(nullptr, parentEnv->getParentEnvironment(runtime));
   ASSERT_TRUE(parentEnv->slot(0).isUndefined());
@@ -534,8 +539,9 @@ TEST_F(ObjectModelTest, EnvironmentSmokeTest) {
   ASSERT_TRUE(parentEnv->slot(0).getBool());
 
   // Create a child environment.
-  auto env = runtime.makeHandle<Environment>(
+  lv.env.castAndSetHermesValue<Environment>(
       Environment::create(runtime, parentEnv, 2));
+  Handle<Environment> env = lv.env;
 
   ASSERT_EQ(parentEnv.get(), env->getParentEnvironment(runtime));
   ASSERT_TRUE(env->slot(0).isUndefined());
@@ -545,25 +551,40 @@ TEST_F(ObjectModelTest, EnvironmentSmokeTest) {
 /// Test "computed" methods on a non-array object.
 TEST_F(ObjectModelTest, NonArrayComputedTest) {
   struct : Locals {
+    PinnedValue<StringPrimitive> prop1Name;
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<StringPrimitive> prop2Name;
     PinnedValue<SymbolID> tmpPropNameStorage;
     PinnedValue<JSObject> propObj;
+    PinnedValue<> index5;
+    PinnedValue<> index6;
+    PinnedValue<> value10;
+    PinnedValue<> value11;
+    PinnedValue<> value12;
+    PinnedValue<JSObject> obj1;
   } lv;
   LocalsRAII lraii{runtime, &lv};
   GCScope gcScope{runtime, "ObjectModelTest.NonArrayComputedTest", 128};
 
-  auto prop1Name = createNoThrowForTest(runtime, "prop1");
-  auto prop1ID = *stringToSymbolIDForTest(runtime, prop1Name);
-  auto prop2Name = createNoThrowForTest(runtime, "prop2");
-  auto index5 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(5));
-  auto index6 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(6));
+  auto prop1Name = createNoThrowForTest(runtime, "prop1", lv.prop1Name);
+  auto prop1ID = *stringToSymbolIDForTest(runtime, prop1Name, lv.prop1ID);
+  auto prop2Name = createNoThrowForTest(runtime, "prop2", lv.prop2Name);
+  lv.index5 = HermesValue::encodeTrustedNumberValue(5);
+  Handle<> index5 = lv.index5;
+  lv.index6 = HermesValue::encodeTrustedNumberValue(6);
+  Handle<> index6 = lv.index6;
 
-  auto value10 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10));
-  auto value11 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(11));
-  auto value12 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(12));
+  lv.value10 = HermesValue::encodeTrustedNumberValue(10);
+  Handle<> value10 = lv.value10;
+  lv.value11 = HermesValue::encodeTrustedNumberValue(11);
+  Handle<> value11 = lv.value11;
+  lv.value12 = HermesValue::encodeTrustedNumberValue(12);
+  Handle<> value12 = lv.value12;
 
-  auto nullObj = runtime.makeHandle<JSObject>(nullptr);
+  auto nullObj = Runtime::makeNullHandle<JSObject>();
 
-  auto obj1 = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  lv.obj1 = JSObject::create(runtime, nullObj);
+  Handle<JSObject> obj1 = lv.obj1;
 
   DefinePropertyFlags dpf{};
   dpf.setEnumerable = 1;
@@ -644,24 +665,45 @@ TEST_F(ObjectModelTest, NonArrayComputedTest) {
 
 /// Test putNamedOrIndexed / getNamedOrIndexed.
 TEST_F(ObjectModelTest, NamedOrIndexed) {
+  struct : public Locals {
+    PinnedValue<SymbolID> nonIndexID;
+    PinnedValue<SymbolID> indexID1;
+    PinnedValue<SymbolID> indexID2;
+    PinnedValue<JSObject> nonIndexObj;
+    PinnedValue<> value1;
+    PinnedValue<> value2;
+    PinnedValue<> value3;
+    PinnedValue<> indexId1Num;
+    PinnedValue<> indexId2Num;
+    PinnedValue<JSObject> indexObj;
+    PinnedValue<> nonIndexIDString;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   GCScope gcScope{runtime, "ObjectModelTest.NamedOrIndexed", 128};
   CallResult<bool> cr{false};
 
-  auto nonIndexID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
-  auto indexID1 = *getSymbolHandleForTest(runtime, createUTF16Ref(u"2"));
-  auto indexID2 =
-      *getSymbolHandleForTest(runtime, createUTF16Ref(u"100000000"));
+  auto nonIndexID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.nonIndexID);
+  auto indexID1 =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"2"), lv.indexID1);
+  auto indexID2 = *getSymbolHandleForTest(
+      runtime, createUTF16Ref(u"100000000"), lv.indexID2);
 
-  auto nullObj = runtime.makeHandle<JSObject>(nullptr);
-  auto nonIndexObj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  auto nullObj = Runtime::makeNullHandle<JSObject>();
+  lv.nonIndexObj = JSObject::create(runtime, nullObj);
+  Handle<JSObject> nonIndexObj = lv.nonIndexObj;
 
   auto indexObjRes = JSArray::create(runtime, 10, 0);
   ASSERT_EQ(indexObjRes.getStatus(), ExecutionStatus::RETURNED);
-  Handle<JSObject> indexObj = runtime.makeHandle(std::move(*indexObjRes));
+  lv.indexObj = std::move(*indexObjRes);
+  Handle<JSObject> indexObj = lv.indexObj;
 
-  auto value1 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(101));
-  auto value2 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(102));
-  auto value3 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(103));
+  lv.value1 = HermesValue::encodeTrustedNumberValue(101);
+  Handle<> value1 = lv.value1;
+  lv.value2 = HermesValue::encodeTrustedNumberValue(102);
+  Handle<> value2 = lv.value2;
+  lv.value3 = HermesValue::encodeTrustedNumberValue(103);
+  Handle<> value3 = lv.value3;
 
   // Initially nobody should have these properties.
   EXPECT_CALLRESULT_UNDEFINED(
@@ -719,13 +761,13 @@ TEST_F(ObjectModelTest, NamedOrIndexed) {
 
   // Create non-symbol versions of these symbols and then test with
   // getComputed().
-  auto nonIndexIDString = runtime.makeHandle(
-      HermesValue::encodeStringValue(
-          runtime.getIdentifierTable().getStringPrim(runtime, *nonIndexID)));
-  auto indexId1Num =
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(2));
-  auto indexId2Num =
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(100000000));
+  lv.nonIndexIDString = HermesValue::encodeStringValue(
+      runtime.getIdentifierTable().getStringPrim(runtime, *nonIndexID));
+  Handle<> nonIndexIDString = lv.nonIndexIDString;
+  lv.indexId1Num = HermesValue::encodeTrustedNumberValue(2);
+  Handle<> indexId1Num = lv.indexId1Num;
+  lv.indexId2Num = HermesValue::encodeTrustedNumberValue(100000000);
+  Handle<> indexId2Num = lv.indexId2Num;
   EXPECT_CALLRESULT_DOUBLE(
       101, JSObject::getComputed_RJS(indexObj, runtime, nonIndexIDString));
   EXPECT_CALLRESULT_DOUBLE(
@@ -740,21 +782,34 @@ TEST_F(ObjectModelTest, NamedOrIndexed) {
 
 /// Test hasNamed / hasNamedOrIndexed / hasComputed.
 TEST_F(ObjectModelTest, HasProperty) {
+  struct : public Locals {
+    PinnedValue<SymbolID> nonIndexID;
+    PinnedValue<SymbolID> indexID;
+    PinnedValue<SymbolID> indexID2;
+    PinnedValue<> indexIDNum;
+    PinnedValue<> indexID2Num;
+    PinnedValue<> nonIndexIDString;
+    PinnedValue<JSObject> self;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   GCScope gcScope{runtime, "ObjectModelTest.HasProperty", 256};
 
-  auto nonIndexID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
-  auto nonIndexIDString = runtime.makeHandle(
-      HermesValue::encodeStringValue(
-          runtime.getIdentifierTable().getStringPrim(runtime, *nonIndexID)));
-  auto indexID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"5"));
-  auto indexIDNum =
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(5));
-  auto indexID2 = *getSymbolHandleForTest(runtime, createUTF16Ref(u"10"));
-  auto indexID2Num =
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10));
+  auto nonIndexID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.nonIndexID);
+  lv.nonIndexIDString = HermesValue::encodeStringValue(
+      runtime.getIdentifierTable().getStringPrim(runtime, *nonIndexID));
+  Handle<> nonIndexIDString = lv.nonIndexIDString;
+  auto indexID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"5"), lv.indexID);
+  lv.indexIDNum = HermesValue::encodeTrustedNumberValue(5);
+  Handle<> indexIDNum = lv.indexIDNum;
+  auto indexID2 =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"10"), lv.indexID2);
+  lv.indexID2Num = HermesValue::encodeTrustedNumberValue(10);
+  Handle<> indexID2Num = lv.indexID2Num;
 
-  Handle<JSObject> self =
-      runtime.makeHandle(std::move(*JSArray::create(runtime, 0, 0)));
+  lv.self = std::move(*JSArray::create(runtime, 0, 0));
+  Handle<JSObject> self = lv.self;
 
   ASSERT_FALSE(*JSObject::hasComputed(self, runtime, nonIndexIDString));
   ASSERT_FALSE(*JSObject::hasComputed(self, runtime, indexIDNum));
@@ -798,14 +853,22 @@ TEST_F(ObjectModelTest, HasProperty) {
 }
 
 TEST_F(ObjectModelTest, UpdatePropertyFlagsWithoutTransitionsTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> aHnd;
+    PinnedValue<SymbolID> bHnd;
+    PinnedValue<SymbolID> cHnd;
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   GCScope gcScope{
       runtime, "ObjectModelTest.UpdatePropertyFlagsWithoutTransitionsTest", 48};
-  auto aHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"));
-  auto bHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"b"));
-  auto cHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"c"));
+  auto aHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"), lv.aHnd);
+  auto bHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"b"), lv.bHnd);
+  auto cHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"c"), lv.cHnd);
 
-  auto nullObj = runtime.makeHandle<JSObject>(nullptr);
-  auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  auto nullObj = Runtime::makeNullHandle<JSObject>();
+  lv.obj = JSObject::create(runtime, nullObj);
+  Handle<JSObject> obj = lv.obj;
   ASSERT_TRUE(*JSObject::defineOwnProperty(
       obj,
       runtime,
@@ -927,10 +990,12 @@ TEST_F(ObjectModelTest, FastArrayClassSealedNonExtensible) {
 TEST_F(ObjectModelTest, IsFrozenClassFlag) {
   struct : public Locals {
     PinnedValue<JSObject> obj;
+    PinnedValue<SymbolID> propID;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  auto propID = *getSymbolHandleForTest(runtime, createASCIIRef("prop"));
+  auto propID =
+      *getSymbolHandleForTest(runtime, createASCIIRef("prop"), lv.propID);
   lv.obj = JSObject::create(runtime);
 
   DefinePropertyFlags dpf{};
@@ -959,16 +1024,21 @@ TEST_F(ObjectModelTest, ClassFlagsTransitionShared) {
     PinnedValue<JSObject> sibling;
     PinnedValue<HiddenClass> baseClass;
     PinnedValue<HiddenClass> newClass;
+    PinnedValue<SymbolID> propID;
+    PinnedValue<SymbolID> otherID;
+    PinnedValue<> val;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  auto propID = *getSymbolHandleForTest(runtime, createASCIIRef("prop"));
-  auto otherID = *getSymbolHandleForTest(runtime, createASCIIRef("other"));
-  auto val = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(1));
+  auto propID =
+      *getSymbolHandleForTest(runtime, createASCIIRef("prop"), lv.propID);
+  auto otherID =
+      *getSymbolHandleForTest(runtime, createASCIIRef("other"), lv.otherID);
+  lv.val = HermesValue::encodeTrustedNumberValue(1);
+  Handle<> val = lv.val;
 
   enum class Op { Freeze, Seal, PreventExtensions };
   for (Op op : {Op::Freeze, Op::Seal, Op::PreventExtensions}) {
-    GCScopeMarkerRAII marker{runtime};
     PinnedValue<JSObject> *objs[] = {&lv.a, &lv.b, &lv.sibling};
     for (PinnedValue<JSObject> *obj : objs) {
       *obj = JSObject::create(runtime);
@@ -1019,16 +1089,6 @@ TEST_F(ObjectModelTest, ClassFlagsTransitionShared) {
 // storage. Every value reads back. Fails if the helper appends instead of
 // storing in place, on its assertion that the slot is the storage's size.
 TEST_F(ObjectModelTest, AddNewOwnPropertyInSlotLongStorage) {
-  struct : public Locals {
-    PinnedValue<JSObject> obj;
-    PinnedValue<JSObject> ref;
-    PinnedValue<HiddenClass> clazz;
-    PinnedValue<> value;
-  } lv;
-  LocalsRAII lraii{runtime, &lv};
-  // Room for the name handles and the handles the calls below leave.
-  GCScope scope{runtime, "AddNewOwnPropertyInSlotLongStorage", 128};
-
   // The class gets kNumBefore properties by the generic path; then kNumAdded
   // more by the helper. The storage has kNumExtra slots more than the first
   // kNumBefore properties need, so the first kNumExtra adds land in existing
@@ -1037,11 +1097,21 @@ TEST_F(ObjectModelTest, AddNewOwnPropertyInSlotLongStorage) {
   constexpr unsigned kNumExtra = 3;
   constexpr unsigned kNumAdded = kNumExtra + 1;
   constexpr unsigned kNumNames = kNumBefore + kNumAdded;
-  std::vector<SymbolID> names;
+
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+    PinnedValue<JSObject> ref;
+    PinnedValue<HiddenClass> clazz;
+    PinnedValue<> value;
+    PinnedValue<SymbolID> names[kNumNames];
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  SymbolID names[kNumNames];
   for (unsigned i = 0; i < kNumNames; ++i) {
     std::string s = "p" + std::to_string(i);
-    names.push_back(
-        **getSymbolHandleForTest(runtime, createASCIIRef(s.c_str())));
+    names[i] = **getSymbolHandleForTest(
+        runtime, createASCIIRef(s.c_str()), lv.names[i]);
   }
   auto valueOf = [](unsigned i) {
     return HermesValue::encodeTrustedNumberValue(100 + i);
@@ -1130,13 +1200,15 @@ TEST_F(ObjectModelTest, TryGetOwnNamedDescriptorOfKeyFast) {
     PinnedValue<StringPrimitive> uniquedZz;
     PinnedValue<StringPrimitive> builtA;
     PinnedValue<> value;
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
+    PinnedValue<SymbolID> zz;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  GCScope scope{runtime, "TryGetOwnNamedDescriptorOfKeyFast", 32};
 
-  SymbolID a = **getSymbolHandleForTest(runtime, createASCIIRef("a"));
-  SymbolID b = **getSymbolHandleForTest(runtime, createASCIIRef("b"));
-  SymbolID zz = **getSymbolHandleForTest(runtime, createASCIIRef("zz"));
+  SymbolID a = **getSymbolHandleForTest(runtime, createASCIIRef("a"), lv.a);
+  SymbolID b = **getSymbolHandleForTest(runtime, createASCIIRef("b"), lv.b);
+  SymbolID zz = **getSymbolHandleForTest(runtime, createASCIIRef("zz"), lv.zz);
   lv.uniquedA = runtime.getStringPrimFromSymbolID(a);
   lv.uniquedZz = runtime.getStringPrimFromSymbolID(zz);
   lv.builtA.castAndSetHermesValue<StringPrimitive>(

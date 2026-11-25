@@ -203,8 +203,13 @@ TEST_F(SmallHermesValueRuntimeTest, SymbolTest) {
 }
 
 TEST_F(SmallHermesValueRuntimeTest, StringTest) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> message;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // Encode a string.
-  auto message = createNoThrowForTest(runtime, createUTF16Ref(u"hello"));
+  auto message =
+      createNoThrowForTest(runtime, createUTF16Ref(u"hello"), lv.message);
   auto SHV = SmallHermesValue::encodeHermesValue(
       HermesValue::encodeStringValue(message.get()), runtime);
   EXPECT_TRUE(SHV.isPointer());
@@ -272,8 +277,12 @@ TEST_F(
 }
 
 TEST_F(SmallHermesValueRuntimeTest, BigIntTest) {
+  struct : public Locals {
+    PinnedValue<BigIntPrimitive> H;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // Encode a bigint.
-  auto H = fromSignedNoThrowForTest(runtime, 0x123);
+  auto H = fromSignedNoThrowForTest(runtime, 0x123, lv.H);
   auto SHV = SmallHermesValue::encodeHermesValue(
       HermesValue::encodeBigIntValue(H.get()), runtime);
   EXPECT_TRUE(SHV.isPointer());
@@ -352,6 +361,10 @@ TEST_F(SmallHermesValueRuntimeTest, TryEncodeNoAllocNoneForBoxed) {
 #ifdef HERMESVM_BOXED_DOUBLES
 #ifdef HERMESVM_COMPRESSED_POINTERS
 TEST_F(SmallHermesValueRuntimeTest, EncodeDecodeAsHV64) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // SHV of compressible non-Number, e.g., Undefined
   {
     SmallHermesValue SHV = SmallHermesValue::encodeUndefinedValue();
@@ -407,7 +420,8 @@ TEST_F(SmallHermesValueRuntimeTest, EncodeDecodeAsHV64) {
 
   // SHV of String
   {
-    auto str = createNoThrowForTest(runtime, createUTF16Ref(u"I'm a string"));
+    auto str =
+        createNoThrowForTest(runtime, createUTF16Ref(u"I'm a string"), lv.str);
     SmallHermesValue SHV = SmallHermesValue::encodeStringValue(*str, runtime);
     HermesValue HV = SHV.encodeAsHermesValue();
     EXPECT_TRUE(HV.isRawHV32());
@@ -417,6 +431,10 @@ TEST_F(SmallHermesValueRuntimeTest, EncodeDecodeAsHV64) {
 }
 #else
 TEST_F(SmallHermesValueRuntimeTest, EncodeDecodeAsHV64) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // SHV of compressible non-Number, e.g., Undefined
   {
     SmallHermesValue SHV = SmallHermesValue::encodeUndefinedValue();
@@ -475,7 +493,8 @@ TEST_F(SmallHermesValueRuntimeTest, EncodeDecodeAsHV64) {
 
   // SHV of String
   {
-    auto str = createNoThrowForTest(runtime, createUTF16Ref(u"I'm a string"));
+    auto str =
+        createNoThrowForTest(runtime, createUTF16Ref(u"I'm a string"), lv.str);
     SmallHermesValue SHV = SmallHermesValue::encodeStringValue(*str, runtime);
     HermesValue HV = SHV.encodeAsHermesValue();
     EXPECT_TRUE(HV.isRawHV32());

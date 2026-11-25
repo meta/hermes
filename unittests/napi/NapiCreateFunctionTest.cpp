@@ -280,11 +280,12 @@ TEST_F(NapiCreateFunctionTest, CallbackReceivesThisArg) {
 
   // Call it with 'this' = 99.
   GCScope gcScope(env_->runtime);
-  auto res = callFunction(
-      env_->runtime,
-      func,
-      env_->runtime.makeHandle(HermesValue::encodeTrustedNumberValue(99)),
-      {});
+  struct : public Locals {
+    PinnedValue<> thisVal;
+  } lv;
+  LocalsRAII lraii(env_->runtime, &lv);
+  lv.thisVal = HermesValue::encodeTrustedNumberValue(99);
+  auto res = callFunction(env_->runtime, func, lv.thisVal, {});
   ASSERT_NE(ExecutionStatus::EXCEPTION, res.getStatus());
   EXPECT_TRUE(res->get().isNumber());
   EXPECT_EQ(99.0, res->get().getNumber());

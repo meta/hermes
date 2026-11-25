@@ -54,6 +54,13 @@ using HermesValueRuntimeTest = RuntimeTestFixture;
 
 #if HERMESVM_SANITIZE_HANDLES == 0
 TEST_F(HermesValueRuntimeTest, SimpleSmokeTest) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> message;
+    PinnedValue<StringPrimitive> message2;
+    PinnedValue<BigIntPrimitive> H;
+    PinnedValue<BigIntPrimitive> H2;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // Encode the null value.
   {
     auto V = HermesValue::encodeNullValue();
@@ -202,7 +209,8 @@ TEST_F(HermesValueRuntimeTest, SimpleSmokeTest) {
 
   /// Encode strings.
   {
-    auto message = createNoThrowForTest(runtime, createUTF16Ref(u"hello"));
+    auto message =
+        createNoThrowForTest(runtime, createUTF16Ref(u"hello"), lv.message);
     auto V = HermesValue::encodeStringValue(message.get());
     EXPECT_TRUE(V.isString());
     EXPECT_FALSE(V.isBool());
@@ -216,7 +224,8 @@ TEST_F(HermesValueRuntimeTest, SimpleSmokeTest) {
     EXPECT_TRUE(V.isPointer());
     EXPECT_EQ(V.getPointer(), message.get());
 
-    auto message2 = createNoThrowForTest(runtime, createUTF16Ref(u"hi"));
+    auto message2 =
+        createNoThrowForTest(runtime, createUTF16Ref(u"hi"), lv.message2);
     auto V2 = HermesValue::encodeStringValue(message2.get());
     EXPECT_TRUE(V2.isString());
     EXPECT_FALSE(V2.isBool());
@@ -237,7 +246,7 @@ TEST_F(HermesValueRuntimeTest, SimpleSmokeTest) {
 
   /// Encode bigints.
   {
-    auto H = fromSignedNoThrowForTest(runtime, 0);
+    auto H = fromSignedNoThrowForTest(runtime, 0, lv.H);
     auto V = HermesValue::encodeBigIntValue(H.get());
     EXPECT_TRUE(V.isBigInt());
     EXPECT_FALSE(V.isBool());
@@ -251,7 +260,7 @@ TEST_F(HermesValueRuntimeTest, SimpleSmokeTest) {
     EXPECT_TRUE(V.isPointer());
     EXPECT_EQ(V.getPointer(), H.get());
 
-    auto H2 = fromSignedNoThrowForTest(runtime, 0);
+    auto H2 = fromSignedNoThrowForTest(runtime, 0, lv.H2);
     auto V2 = HermesValue::encodeBigIntValue(H2.get());
     EXPECT_TRUE(V2.isBigInt());
     EXPECT_FALSE(V2.isBool());

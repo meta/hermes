@@ -24,8 +24,13 @@ namespace {
 using StringPrimTest = RuntimeTestFixture;
 
 TEST_F(StringPrimTest, CreateTest) {
-  auto str1 = createNoThrowForTest(runtime, "hello");
-  auto str2 = createNoThrowForTest(runtime, "foo");
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str1;
+    PinnedValue<StringPrimitive> str2;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  auto str1 = createNoThrowForTest(runtime, "hello", lv.str1);
+  auto str2 = createNoThrowForTest(runtime, "foo", lv.str2);
 
   EXPECT_EQ(5u, str1->getStringLength());
   EXPECT_TRUE(
@@ -39,22 +44,46 @@ TEST_F(StringPrimTest, CreateTest) {
 }
 
 TEST_F(StringPrimTest, EqualityTest) {
-  auto s1 = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
-  auto s2 = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
-  auto s3 = createNoThrowForTest(runtime, createUTF16Ref(u"abcdef"));
+  struct : public Locals {
+    PinnedValue<StringPrimitive> s1;
+    PinnedValue<StringPrimitive> s2;
+    PinnedValue<StringPrimitive> s3;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  auto s1 = createNoThrowForTest(runtime, createUTF16Ref(u"abc"), lv.s1);
+  auto s2 = createNoThrowForTest(runtime, createUTF16Ref(u"abc"), lv.s2);
+  auto s3 = createNoThrowForTest(runtime, createUTF16Ref(u"abcdef"), lv.s3);
   EXPECT_TRUE(s1->equals(s2.get()));
   EXPECT_FALSE(s1->equals(s3.get()));
 }
 
 TEST_F(StringPrimTest, CreateASCIITest) {
-  auto s1 = createNoThrowForTest(runtime, createUTF16Ref(u"hello"));
-  auto s2 = createNoThrowForTest(runtime, "hello");
+  struct : public Locals {
+    PinnedValue<StringPrimitive> s1;
+    PinnedValue<StringPrimitive> s2;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+  auto s1 = createNoThrowForTest(runtime, createUTF16Ref(u"hello"), lv.s1);
+  auto s2 = createNoThrowForTest(runtime, "hello", lv.s2);
   EXPECT_TRUE(s1->equals(s2.get()));
 }
 
 TEST_F(StringPrimTest, CreateEfficientTest) {
-  auto handlefy = [&](CallResult<HermesValue> cr) {
-    return Handle<StringPrimitive>::vmcast(runtime, *cr);
+  struct : public Locals {
+    PinnedValue<StringPrimitive> s1;
+    PinnedValue<StringPrimitive> s2;
+    PinnedValue<StringPrimitive> s3;
+    PinnedValue<StringPrimitive> s4;
+    PinnedValue<StringPrimitive> e1;
+    PinnedValue<StringPrimitive> e2;
+    PinnedValue<StringPrimitive> e3;
+    PinnedValue<StringPrimitive> e4;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  auto handlefy = [&](CallResult<HermesValue> cr,
+                      PinnedValue<StringPrimitive> &slot) {
+    slot.castAndSetHermesValue<StringPrimitive>(*cr);
+    return Handle<StringPrimitive>(slot);
   };
 
   static_assert(
@@ -64,14 +93,16 @@ TEST_F(StringPrimTest, CreateEfficientTest) {
   std::u16string wideShort(u"foo");
   auto s1 = handlefy(
       StringPrimitive::createEfficient(
-          runtime, createASCIIRef(narrowShort.c_str())));
+          runtime, createASCIIRef(narrowShort.c_str())),
+      lv.s1);
   auto s2 = handlefy(
       StringPrimitive::createEfficient(
-          runtime, createUTF16Ref(wideShort.c_str())));
+          runtime, createUTF16Ref(wideShort.c_str())),
+      lv.s2);
   auto s3 = handlefy(
-      StringPrimitive::createEfficient(runtime, std::move(narrowShort)));
-  auto s4 =
-      handlefy(StringPrimitive::createEfficient(runtime, std::move(wideShort)));
+      StringPrimitive::createEfficient(runtime, std::move(narrowShort)), lv.s3);
+  auto s4 = handlefy(
+      StringPrimitive::createEfficient(runtime, std::move(wideShort)), lv.s4);
   for (auto s : {s1, s2, s3, s4}) {
     EXPECT_TRUE(s->equals(s1.get()));
     EXPECT_EQ(3, s->getStringLength());
@@ -83,14 +114,16 @@ TEST_F(StringPrimTest, CreateEfficientTest) {
   std::u16string wideLong(longLength, u'!');
   auto e1 = handlefy(
       StringPrimitive::createEfficient(
-          runtime, createASCIIRef(narrowLong.c_str())));
+          runtime, createASCIIRef(narrowLong.c_str())),
+      lv.e1);
   auto e2 = handlefy(
       StringPrimitive::createEfficient(
-          runtime, createUTF16Ref(wideLong.c_str())));
+          runtime, createUTF16Ref(wideLong.c_str())),
+      lv.e2);
   auto e3 = handlefy(
-      StringPrimitive::createEfficient(runtime, std::move(narrowLong)));
-  auto e4 =
-      handlefy(StringPrimitive::createEfficient(runtime, std::move(wideLong)));
+      StringPrimitive::createEfficient(runtime, std::move(narrowLong)), lv.e3);
+  auto e4 = handlefy(
+      StringPrimitive::createEfficient(runtime, std::move(wideLong)), lv.e4);
   for (auto s : {e1, e2, e3, e4}) {
     EXPECT_TRUE(s->equals(e1.get()));
     EXPECT_EQ(longLength, s->getStringLength());
@@ -103,11 +136,16 @@ TEST_F(StringPrimTest, CreateEfficientTest) {
 }
 
 TEST_F(StringPrimTest, CompareTest) {
-#define TEST_CMP(v, a, b)                       \
-  {                                             \
-    auto s1 = createNoThrowForTest(runtime, a); \
-    auto s2 = createNoThrowForTest(runtime, b); \
-    EXPECT_EQ(v, s1->compare(s2.get()));        \
+  struct : public Locals {
+    PinnedValue<StringPrimitive> s1;
+    PinnedValue<StringPrimitive> s2;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
+#define TEST_CMP(v, a, b)                              \
+  {                                                    \
+    auto s1 = createNoThrowForTest(runtime, a, lv.s1); \
+    auto s2 = createNoThrowForTest(runtime, b, lv.s2); \
+    EXPECT_EQ(v, s1->compare(s2.get()));               \
   }
 
   TEST_CMP(0, "", "");
@@ -128,25 +166,33 @@ TEST_F(StringPrimTest, CompareTest) {
 }
 
 TEST_F(StringPrimTest, ConcatTest) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> a;
+    PinnedValue<StringPrimitive> b;
+    PinnedValue<StringPrimitive> a2;
+    PinnedValue<StringPrimitive> b2;
+    PinnedValue<StringPrimitive> res;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   {
-    auto a = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
-    auto b = createNoThrowForTest(runtime, createUTF16Ref(u"def"));
+    auto a = createNoThrowForTest(runtime, createUTF16Ref(u"abc"), lv.a);
+    auto b = createNoThrowForTest(runtime, createUTF16Ref(u"def"), lv.b);
     auto strRes = StringPrimitive::concat(runtime, a, b);
     ASSERT_NE(ExecutionStatus::EXCEPTION, strRes.getStatus());
+    lv.res.castAndSetHermesValue<StringPrimitive>(*strRes);
     EXPECT_TRUE(
-        StringPrimitive::createStringView(
-            runtime, runtime.makeHandle<StringPrimitive>(*strRes))
+        StringPrimitive::createStringView(runtime, lv.res)
             .equals(createUTF16Ref(u"abcdef")));
   }
 
   {
-    auto a = createNoThrowForTest(runtime, createUTF16Ref(u""));
-    auto b = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
+    auto a = createNoThrowForTest(runtime, createUTF16Ref(u""), lv.a2);
+    auto b = createNoThrowForTest(runtime, createUTF16Ref(u"abc"), lv.b2);
     auto strRes = StringPrimitive::concat(runtime, a, b);
     ASSERT_NE(ExecutionStatus::EXCEPTION, strRes.getStatus());
+    lv.res.castAndSetHermesValue<StringPrimitive>(*strRes);
     EXPECT_TRUE(
-        StringPrimitive::createStringView(
-            runtime, runtime.makeHandle<StringPrimitive>(*strRes))
+        StringPrimitive::createStringView(runtime, lv.res)
             .equals(createUTF16Ref(u"abc")));
   }
 }
@@ -248,95 +294,109 @@ TEST_F(StringPrimTest, StringsAreMemcpySafeMicrosoftSTL) {
 }
 
 TEST_F(StringPrimTest, FastConcatTest) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> a;
+    PinnedValue<StringPrimitive> b;
+    PinnedValue<StringPrimitive> tmp;
+    PinnedValue<BufferedASCIIStringPrimitive> resASCII_1;
+    PinnedValue<BufferedASCIIStringPrimitive> resASCII_2;
+    PinnedValue<BufferedASCIIStringPrimitive> resASCII_3;
+    PinnedValue<BufferedUTF16StringPrimitive> resUTF_1;
+    PinnedValue<BufferedUTF16StringPrimitive> resUTF_2;
+    PinnedValue<BufferedUTF16StringPrimitive> resUTF_3;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   CallResult<HermesValue> cr{ExecutionStatus::EXCEPTION};
   std::string bigStrA(300, 'a');
   std::string strB("small");
 
   //=======================================
   // ASCII + ASCII
-  auto a = createNoThrowForTest(runtime, bigStrA);
-  auto b = createNoThrowForTest(runtime, strB);
+  auto a = createNoThrowForTest(runtime, bigStrA, lv.a);
+  auto b = createNoThrowForTest(runtime, strB, lv.b);
   cr = StringPrimitive::concat(runtime, a, b);
   ASSERT_NE(ExecutionStatus::EXCEPTION, cr);
-  auto resASCII_1 = runtime.makeHandle<BufferedASCIIStringPrimitive>(*cr);
+  lv.resASCII_1.castAndSetHermesValue<BufferedASCIIStringPrimitive>(*cr);
 
   std::string asciiStr1 = bigStrA + strB;
-  auto asciiRef = resASCII_1->getStringRef<char>();
+  auto asciiRef = lv.resASCII_1->getStringRef<char>();
   EXPECT_TRUE(asciiRef.size() == asciiStr1.size());
   EXPECT_TRUE(std::equal(asciiStr1.begin(), asciiStr1.end(), asciiRef.begin()));
 
   //=======================================
   // Add more ASCII
-  cr = StringPrimitive::concat(runtime, resASCII_1, b);
+  cr = StringPrimitive::concat(runtime, lv.resASCII_1, b);
   ASSERT_NE(ExecutionStatus::EXCEPTION, cr);
-  auto resASCII_2 = runtime.makeHandle<BufferedASCIIStringPrimitive>(*cr);
+  lv.resASCII_2.castAndSetHermesValue<BufferedASCIIStringPrimitive>(*cr);
 
   // The same buffer must have been reused.
   EXPECT_TRUE(
-      resASCII_1->testGetConcatBuffer() == resASCII_2->testGetConcatBuffer());
+      lv.resASCII_1->testGetConcatBuffer() ==
+      lv.resASCII_2->testGetConcatBuffer());
 
   std::string asciiStr2 = asciiStr1 + strB;
-  asciiRef = resASCII_2->getStringRef<char>();
+  asciiRef = lv.resASCII_2->getStringRef<char>();
   EXPECT_TRUE(asciiRef.size() == asciiStr2.size());
   EXPECT_TRUE(std::equal(asciiStr2.begin(), asciiStr2.end(), asciiRef.begin()));
 
   //=======================================
   // Append some the first result again.
-  cr = StringPrimitive::concat(runtime, resASCII_1, b);
+  cr = StringPrimitive::concat(runtime, lv.resASCII_1, b);
   ASSERT_NE(ExecutionStatus::EXCEPTION, cr);
-  auto resASCII_3 = runtime.makeHandle<BufferedASCIIStringPrimitive>(*cr);
+  lv.resASCII_3.castAndSetHermesValue<BufferedASCIIStringPrimitive>(*cr);
 
   // The buffer cannot be reused.
   EXPECT_TRUE(
-      resASCII_3->testGetConcatBuffer() != resASCII_1->testGetConcatBuffer());
+      lv.resASCII_3->testGetConcatBuffer() !=
+      lv.resASCII_1->testGetConcatBuffer());
 
   std::string asciiStr3 = asciiStr1 + strB;
-  asciiRef = resASCII_3->getStringRef<char>();
+  asciiRef = lv.resASCII_3->getStringRef<char>();
   EXPECT_TRUE(asciiRef.size() == asciiStr3.size());
   EXPECT_TRUE(std::equal(asciiStr3.begin(), asciiStr3.end(), asciiRef.begin()));
 
   //=======================================
   // ASCII + UTF16
   std::u16string strC(u"utf16\u1234");
-  b = createNoThrowForTest(runtime, UTF16Ref(strC.data(), strC.size()));
-  cr = StringPrimitive::concat(runtime, resASCII_2, b);
+  b = createNoThrowForTest(runtime, UTF16Ref(strC.data(), strC.size()), lv.tmp);
+  cr = StringPrimitive::concat(runtime, lv.resASCII_2, b);
   ASSERT_NE(ExecutionStatus::EXCEPTION, cr);
-  auto resUTF_1 = runtime.makeHandle<BufferedUTF16StringPrimitive>(*cr);
+  lv.resUTF_1.castAndSetHermesValue<BufferedUTF16StringPrimitive>(*cr);
 
   std::u16string utfStr1;
   utfStr1.append(asciiStr2.begin(), asciiStr2.end());
   utfStr1.append(strC);
-  auto utf16Ref = resUTF_1->getStringRef<char16_t>();
+  auto utf16Ref = lv.resUTF_1->getStringRef<char16_t>();
   EXPECT_TRUE(utf16Ref.size() == utfStr1.size());
   EXPECT_TRUE(std::equal(utfStr1.begin(), utfStr1.end(), utf16Ref.begin()));
 
   //=======================================
   // UTF16 + ASCII
-  cr = StringPrimitive::concat(runtime, resUTF_1, b);
+  cr = StringPrimitive::concat(runtime, lv.resUTF_1, b);
   ASSERT_NE(ExecutionStatus::EXCEPTION, cr);
-  auto resUTF_2 = runtime.makeHandle<BufferedUTF16StringPrimitive>(*cr);
+  lv.resUTF_2.castAndSetHermesValue<BufferedUTF16StringPrimitive>(*cr);
 
   // The same buffer must have been reused.
   EXPECT_TRUE(
-      resUTF_1->testGetConcatBuffer() == resUTF_2->testGetConcatBuffer());
+      lv.resUTF_1->testGetConcatBuffer() == lv.resUTF_2->testGetConcatBuffer());
 
   std::u16string utfStr2 = utfStr1 + strC;
-  utf16Ref = resUTF_2->getStringRef<char16_t>();
+  utf16Ref = lv.resUTF_2->getStringRef<char16_t>();
   EXPECT_TRUE(utf16Ref.size() == utfStr2.size());
   EXPECT_TRUE(std::equal(utfStr2.begin(), utfStr2.end(), utf16Ref.begin()));
 
   //=======================================
-  // Add some more UTF16 to resUTF_1
-  cr = StringPrimitive::concat(runtime, resUTF_1, b);
+  // Add some more UTF16 to lv.resUTF_1
+  cr = StringPrimitive::concat(runtime, lv.resUTF_1, b);
   ASSERT_NE(ExecutionStatus::EXCEPTION, cr);
-  auto resUTF_3 = runtime.makeHandle<BufferedUTF16StringPrimitive>(*cr);
+  lv.resUTF_3.castAndSetHermesValue<BufferedUTF16StringPrimitive>(*cr);
 
   // The buffer cannot be reused.
   EXPECT_TRUE(
-      resUTF_1->testGetConcatBuffer() != resUTF_3->testGetConcatBuffer());
+      lv.resUTF_1->testGetConcatBuffer() != lv.resUTF_3->testGetConcatBuffer());
 
   std::u16string utfStr3 = utfStr1 + strC;
-  utf16Ref = resUTF_3->getStringRef<char16_t>();
+  utf16Ref = lv.resUTF_3->getStringRef<char16_t>();
   EXPECT_TRUE(utf16Ref.size() == utfStr3.size());
   EXPECT_TRUE(std::equal(utfStr3.begin(), utfStr3.end(), utf16Ref.begin()));
 }

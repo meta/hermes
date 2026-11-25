@@ -492,7 +492,7 @@ TEST_F(NapiTestFixture, ThrowErrorWithCode) {
   // Verify the "code" property is set by reading it through VM APIs.
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
 
     // Look up the "code" symbol.
     auto codeSymRes = env_->runtime.getIdentifierTable().getSymbolID(
@@ -530,7 +530,7 @@ TEST_F(NapiTestFixture, ThrowErrorMessageIsCorrect) {
   // Verify the "message" property.
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
 
     auto msgRes = JSObject::getNamed_RJS(
         hermes::vm::Handle<JSObject>::vmcast(errHandle),
@@ -580,7 +580,7 @@ TEST_F(NapiTestFixture, ThrowTypeErrorSetsTypeError) {
   // Verify it has the TypeError prototype chain by checking "name".
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
 
     auto nameRes = JSObject::getNamed_RJS(
         hermes::vm::Handle<JSObject>::vmcast(errHandle),
@@ -610,7 +610,7 @@ TEST_F(NapiTestFixture, ThrowTypeErrorWithCode) {
   // Verify the "code" property.
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
     auto codeSymRes = env_->runtime.getIdentifierTable().getSymbolID(
         env_->runtime, hermes::vm::ASCIIRef{"code", 4});
     ASSERT_NE(hermes::vm::ExecutionStatus::EXCEPTION, codeSymRes.getStatus());
@@ -662,7 +662,7 @@ TEST_F(NapiTestFixture, ThrowRangeErrorSetsRangeError) {
   // Verify it has the RangeError prototype by checking "name".
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
 
     auto nameRes = JSObject::getNamed_RJS(
         hermes::vm::Handle<JSObject>::vmcast(errHandle),
@@ -692,7 +692,7 @@ TEST_F(NapiTestFixture, ThrowRangeErrorWithCode) {
   // Verify both "message" and "code" properties.
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
 
     // Check message.
     auto msgRes = JSObject::getNamed_RJS(
@@ -740,7 +740,7 @@ TEST_F(NapiTestFixture, ThrowErrorWithNullCode) {
   // Verify the "code" property is undefined (not set).
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
     auto codeSymRes = env_->runtime.getIdentifierTable().getSymbolID(
         env_->runtime, hermes::vm::ASCIIRef{"code", 4});
     ASSERT_NE(hermes::vm::ExecutionStatus::EXCEPTION, codeSymRes.getStatus());
@@ -784,7 +784,7 @@ TEST_F(NapiTestFixture, ThrowErrorExceptionSurvivesGC) {
   // Verify the message survived.
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
 
     auto msgRes = JSObject::getNamed_RJS(
         hermes::vm::Handle<JSObject>::vmcast(errHandle),
@@ -1026,7 +1026,7 @@ getStringProperty(napi_env env, napi_value obj, hermes::vm::SymbolID sym) {
   using namespace hermes::vm;
   auto *phv = reinterpret_cast<PinnedHermesValue *>(obj);
   GCScope gcScope(env->runtime);
-  auto handle = env->runtime.makeHandle(*phv);
+  hermes::vm::Handle<> handle(phv);
   auto res = JSObject::getNamed_RJS(
       Handle<JSObject>::vmcast(handle), env->runtime, sym);
   assert(res != ExecutionStatus::EXCEPTION);
@@ -1217,7 +1217,7 @@ TEST_F(NapiTestFixture, CreateErrorWithNullCode) {
         env_->runtime, hermes::vm::ASCIIRef{"code", 4});
     ASSERT_NE(hermes::vm::ExecutionStatus::EXCEPTION, codeSymRes.getStatus());
     auto *phv = reinterpret_cast<hermes::vm::PinnedHermesValue *>(error);
-    auto handle = env_->runtime.makeHandle(*phv);
+    hermes::vm::Handle<> handle(phv);
     auto res = hermes::vm::JSObject::getNamed_RJS(
         hermes::vm::Handle<JSObject>::vmcast(handle),
         env_->runtime,
@@ -1435,7 +1435,7 @@ TEST_F(NapiTestFixture, ThrowSyntaxErrorSetsSyntaxError) {
   // Verify it has the SyntaxError prototype by checking "name".
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
 
     auto nameRes = JSObject::getNamed_RJS(
         hermes::vm::Handle<JSObject>::vmcast(errHandle),
@@ -1466,7 +1466,7 @@ TEST_F(NapiTestFixture, ThrowSyntaxErrorWithCode) {
   // Verify the "code" property.
   {
     hermes::vm::GCScope gcScope(env_->runtime);
-    auto errHandle = env_->runtime.makeHandle(env_->pendingException);
+    auto errHandle = hermes::vm::Handle<>(&env_->pendingException);
     auto codeSymRes = env_->runtime.getIdentifierTable().getSymbolID(
         env_->runtime, hermes::vm::ASCIIRef{"code", 4});
     ASSERT_NE(hermes::vm::ExecutionStatus::EXCEPTION, codeSymRes.getStatus());

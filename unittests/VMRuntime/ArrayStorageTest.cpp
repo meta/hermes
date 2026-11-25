@@ -105,14 +105,24 @@ TEST_F(ArrayStorageTest, RandomResizeTest) {
 }
 
 TEST_F(ArrayStorageTest, PushBackTest) {
-  MutableHandle<ArrayStorage> st(runtime);
+  struct : public Locals {
+    PinnedValue<ArrayStorage> stSlot;
+    PinnedValue<> val;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  MutableHandle<ArrayStorage> st{lv.stSlot};
   st = vmcast<ArrayStorage>(*ArrayStorage::create(runtime, 4));
 
-  (void)ArrayStorage::push_back(st, runtime, runtime.makeHandle(1.0_hd));
-  (void)ArrayStorage::push_back(st, runtime, runtime.makeHandle(2.0_hd));
-  (void)ArrayStorage::push_back(st, runtime, runtime.makeHandle(3.0_hd));
-  (void)ArrayStorage::push_back(st, runtime, runtime.makeHandle(4.0_hd));
-  (void)ArrayStorage::push_back(st, runtime, runtime.makeHandle(5.0_hd));
+  lv.val = 1.0_hd;
+  (void)ArrayStorage::push_back(st, runtime, lv.val);
+  lv.val = 2.0_hd;
+  (void)ArrayStorage::push_back(st, runtime, lv.val);
+  lv.val = 3.0_hd;
+  (void)ArrayStorage::push_back(st, runtime, lv.val);
+  lv.val = 4.0_hd;
+  (void)ArrayStorage::push_back(st, runtime, lv.val);
+  lv.val = 5.0_hd;
+  (void)ArrayStorage::push_back(st, runtime, lv.val);
 
   ASSERT_EQ(5u, st->size());
   ASSERT_EQ(8u, st->capacity());
@@ -246,14 +256,19 @@ TEST_F(ArrayStorageTest, AppendRangeWithinCapacityTest) {
 // ArrayStorage trimming is disabled for now. In the future, we may consider
 // re-enabling it only for specific ArrayStorages (e.g. property storage).
 TEST_F(ArrayStorageTest, DISABLED_AllowTrimming) {
-  MutableHandle<ArrayStorage> st(runtime);
+  struct : public Locals {
+    PinnedValue<ArrayStorage> stSlot;
+    PinnedValue<> val;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  MutableHandle<ArrayStorage> st{lv.stSlot};
   constexpr ArrayStorage::size_type originalCapacity = 8;
   // Create an array and put in an element so its size is 1 and its capacity
   // is 8.
   st = vmcast<ArrayStorage>(*ArrayStorage::create(runtime, originalCapacity));
   EXPECT_LE(st->capacity(), originalCapacity);
-  ASSERT_RETURNED(
-      ArrayStorage::push_back(st, runtime, runtime.makeHandle(0.0_hd)));
+  lv.val = 0.0_hd;
+  ASSERT_RETURNED(ArrayStorage::push_back(st, runtime, lv.val));
   EXPECT_EQ(1, st->size());
 
   // Now force some GCs to happen.

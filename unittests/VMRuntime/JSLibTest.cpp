@@ -45,67 +45,86 @@ TEST_F(JSLibTest, globalObjectConstTest) {
 }
 
 TEST_F(JSLibTest, CreateObjectTest) {
+  struct : public Locals {
+    PinnedValue<Callable> objectCons;
+    PinnedValue<JSObject> prototype;
+    PinnedValue<JSObject> newObj;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
   // Object constructor.
   GET_GLOBAL(Object);
-  auto objectCons = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.objectCons.castAndSetHermesValue<Callable>(propRes->getHermesValue());
 
   // Object.prototype.
-  GET_VALUE(objectCons, prototype);
-  auto prototype = runtime.makeHandle<JSObject>(std::move(*propRes));
+  GET_VALUE(lv.objectCons, prototype);
+  lv.prototype.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
   // NativeConstructor take undefined `this`.
-  auto crtRes =
-      Callable::createThisForConstruct_RJS(objectCons, runtime, objectCons);
+  auto crtRes = Callable::createThisForConstruct_RJS(
+      lv.objectCons, runtime, lv.objectCons);
   // Call the constructor.
   ASSERT_RETURNED(crtRes.getStatus());
   EXPECT_TRUE(crtRes->getHermesValue().isUndefined());
 
   auto callRes = Callable::executeCall0(
-      objectCons, runtime, Runtime::getUndefinedValue(), true);
+      lv.objectCons, runtime, Runtime::getUndefinedValue(), true);
   ASSERT_RETURNED(crtRes.getStatus());
-  auto newObj = runtime.makeHandle<JSObject>(std::move(*callRes));
+  lv.newObj.castAndSetHermesValue<JSObject>(callRes->getHermesValue());
 
   // Make sure the prototype is correct.
-  ASSERT_EQ(prototype.get(), newObj->getParent(runtime));
+  ASSERT_EQ(lv.prototype.get(), lv.newObj->getParent(runtime));
 }
 
-static Handle<JSObject> createObject(Runtime &runtime) {
+/// Create a new Object instance, store it in \p out and return a handle to it.
+static Handle<JSObject> createObject(
+    Runtime &runtime,
+    MutableHandle<JSObject> out) {
+  struct : public Locals {
+    PinnedValue<Callable> objectCons;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // Object constructor.
   auto propRes = JSObject::getNamed_RJS(
       runtime.getGlobal(),
       runtime,
       Predefined::getSymbolID(Predefined::Object));
   assert(propRes == ExecutionStatus::RETURNED);
-  auto objectCons = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.objectCons.castAndSetHermesValue<Callable>(propRes->getHermesValue());
   auto callRes = Callable::executeCall0(
-      objectCons, runtime, Runtime::getUndefinedValue(), true);
+      lv.objectCons, runtime, Runtime::getUndefinedValue(), true);
   assert(callRes == ExecutionStatus::RETURNED);
-  return runtime.makeHandle<JSObject>(std::move(*callRes));
+  out.castAndSetHermesValue<JSObject>(callRes->getHermesValue());
+  return out;
 }
 
 TEST_F(JSLibTest, ObjectToStringTest) {
+  struct : public Locals {
+    PinnedValue<Callable> toStringFn;
+    PinnedValue<JSObject> obj;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   // Check that "(new Object()).toString() is "[object Object]".
-  auto obj = createObject(runtime);
+  auto obj = createObject(runtime, lv.obj);
   auto propRes = JSObject::getNamed_RJS(
       obj, runtime, Predefined::getSymbolID(Predefined::toString));
   ASSERT_RETURNED(propRes.getStatus());
-  auto toStringFn = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.toStringFn.castAndSetHermesValue<Callable>(propRes->getHermesValue());
   EXPECT_CALLRESULT_STRING(
-      "[object Object]", toStringFn->executeCall0(toStringFn, runtime, obj));
+      "[object Object]",
+      lv.toStringFn->executeCall0(lv.toStringFn, runtime, obj));
 
   // Check that Object.prototype.toString.call(10) is "[object Number]".
+  lv.num = HermesValue::encodeTrustedNumberValue(10);
   EXPECT_CALLRESULT_STRING(
       "[object Number]",
-      toStringFn->executeCall0(
-          toStringFn,
-          runtime,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10))));
+      lv.toStringFn->executeCall0(lv.toStringFn, runtime, lv.num));
 
   // Check that toStringFn.call(toStringFn) is "[object Function]".
   EXPECT_CALLRESULT_STRING(
       "[object Function]",
-      toStringFn->executeCall0(toStringFn, runtime, toStringFn));
+      lv.toStringFn->executeCall0(lv.toStringFn, runtime, lv.toStringFn));
 
   // Check that Operations/toString does the right thing.
   EXPECT_STRINGPRIM(
@@ -113,32 +132,40 @@ TEST_F(JSLibTest, ObjectToStringTest) {
 }
 
 TEST_F(JSLibTest, ObjectSealTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<JSObject> objectCons;
+    PinnedValue<Callable> sealFn;
+    PinnedValue<Callable> isSealedFn;
+    PinnedValue<JSObject> obj;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
-  auto obj = createObject(runtime);
+  auto obj = createObject(runtime, lv.obj);
 
   GET_GLOBAL(Object);
-  auto objectCons = runtime.makeHandle<JSObject>((std::move(*propRes)));
+  lv.objectCons.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
   ASSERT_RETURNED(
       (propRes = JSObject::getNamed_RJS(
-           objectCons, runtime, Predefined::getSymbolID(Predefined::seal)))
+           lv.objectCons, runtime, Predefined::getSymbolID(Predefined::seal)))
           .getStatus());
-  auto sealFn = runtime.makeHandle<Callable>((std::move(*propRes)));
+  lv.sealFn.castAndSetHermesValue<Callable>(propRes->getHermesValue());
 
-  ASSERT_RETURNED(
-      (propRes = JSObject::getNamed_RJS(
-           objectCons, runtime, Predefined::getSymbolID(Predefined::isSealed)))
-          .getStatus());
-  auto isSealedFn = runtime.makeHandle<Callable>((std::move(*propRes)));
+  ASSERT_RETURNED((propRes = JSObject::getNamed_RJS(
+                       lv.objectCons,
+                       runtime,
+                       Predefined::getSymbolID(Predefined::isSealed)))
+                      .getStatus());
+  lv.isSealedFn.castAndSetHermesValue<Callable>(propRes->getHermesValue());
 
   // Create a property "obj.prop1".
-  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+  auto prop1ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID);
+  lv.num = HermesValue::encodeTrustedNumberValue(10);
   ASSERT_TRUE(
-      JSObject::putNamed_RJS(
-          obj,
-          runtime,
-          *prop1ID,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10))) !=
+      JSObject::putNamed_RJS(obj, runtime, *prop1ID, lv.num) !=
       ExecutionStatus::EXCEPTION);
 
   // Make sure it is configurable.
@@ -149,21 +176,20 @@ TEST_F(JSLibTest, ObjectSealTest) {
   // Make sure it's not sealed.
   EXPECT_CALLRESULT_BOOL(
       FALSE,
-      isSealedFn->executeCall1(
-          isSealedFn,
+      lv.isSealedFn->executeCall1(
+          lv.isSealedFn,
           runtime,
-          runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+          Runtime::getUndefinedValue(),
           obj.getHermesValue()));
 
   // obj.seal().
-  ASSERT_RETURNED(
-      sealFn
-          ->executeCall1(
-              sealFn,
-              runtime,
-              runtime.makeHandle(HermesValue::encodeUndefinedValue()),
-              obj.getHermesValue())
-          .getStatus());
+  ASSERT_RETURNED(lv.sealFn
+                      ->executeCall1(
+                          lv.sealFn,
+                          runtime,
+                          Runtime::getUndefinedValue(),
+                          obj.getHermesValue())
+                      .getStatus());
 
   // Make sure it is no longer configurable.
   ASSERT_TRUE(JSObject::getNamedDescriptorUnsafe(obj, runtime, *prop1ID, desc));
@@ -176,41 +202,49 @@ TEST_F(JSLibTest, ObjectSealTest) {
   // Make sure isSealed works.
   EXPECT_CALLRESULT_BOOL(
       TRUE,
-      isSealedFn->executeCall1(
-          isSealedFn,
+      lv.isSealedFn->executeCall1(
+          lv.isSealedFn,
           runtime,
-          runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+          Runtime::getUndefinedValue(),
           obj.getHermesValue()));
 }
 
 TEST_F(JSLibTest, ObjectFreezeTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<JSObject> objectCons;
+    PinnedValue<Callable> freezeFn;
+    PinnedValue<Callable> isFrozenFn;
+    PinnedValue<JSObject> obj;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
-  auto obj = createObject(runtime);
+  auto obj = createObject(runtime, lv.obj);
 
   GET_GLOBAL(Object);
-  auto objectCons = runtime.makeHandle<JSObject>(std::move(*propRes));
+  lv.objectCons.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
   ASSERT_RETURNED(
       (propRes = JSObject::getNamed_RJS(
-           objectCons, runtime, Predefined::getSymbolID(Predefined::freeze)))
+           lv.objectCons, runtime, Predefined::getSymbolID(Predefined::freeze)))
           .getStatus());
-  auto freezeFn = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.freezeFn.castAndSetHermesValue<Callable>(propRes->getHermesValue());
 
-  ASSERT_RETURNED(
-      (propRes = JSObject::getNamed_RJS(
-           objectCons, runtime, Predefined::getSymbolID(Predefined::isFrozen)))
-          .getStatus());
-  auto isFrozenFn = runtime.makeHandle<Callable>(std::move(*propRes));
+  ASSERT_RETURNED((propRes = JSObject::getNamed_RJS(
+                       lv.objectCons,
+                       runtime,
+                       Predefined::getSymbolID(Predefined::isFrozen)))
+                      .getStatus());
+  lv.isFrozenFn.castAndSetHermesValue<Callable>(propRes->getHermesValue());
 
   // Create a property "obj.prop1".
-  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+  auto prop1ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID);
+  lv.num = HermesValue::encodeTrustedNumberValue(10);
   ASSERT_TRUE(
-      JSObject::putNamed_RJS(
-          obj,
-          runtime,
-          *prop1ID,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10))) !=
+      JSObject::putNamed_RJS(obj, runtime, *prop1ID, lv.num) !=
       ExecutionStatus::EXCEPTION);
 
   // Make sure it is configurable.
@@ -222,21 +256,20 @@ TEST_F(JSLibTest, ObjectFreezeTest) {
   // Make sure it's not frozen.
   EXPECT_CALLRESULT_BOOL(
       FALSE,
-      isFrozenFn->executeCall1(
-          isFrozenFn,
+      lv.isFrozenFn->executeCall1(
+          lv.isFrozenFn,
           runtime,
-          runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+          Runtime::getUndefinedValue(),
           obj.getHermesValue()));
 
   // obj.freeze().
-  ASSERT_RETURNED(
-      freezeFn
-          ->executeCall1(
-              freezeFn,
-              runtime,
-              runtime.makeHandle(HermesValue::encodeUndefinedValue()),
-              obj.getHermesValue())
-          .getStatus());
+  ASSERT_RETURNED(lv.freezeFn
+                      ->executeCall1(
+                          lv.freezeFn,
+                          runtime,
+                          Runtime::getUndefinedValue(),
+                          obj.getHermesValue())
+                      .getStatus());
 
   // Make sure it is no longer configurable or writable.
   ASSERT_TRUE(JSObject::getNamedDescriptorUnsafe(obj, runtime, *prop1ID, desc));
@@ -250,189 +283,221 @@ TEST_F(JSLibTest, ObjectFreezeTest) {
   // Make sure isFrozen works.
   EXPECT_CALLRESULT_BOOL(
       TRUE,
-      isFrozenFn->executeCall1(
-          isFrozenFn,
+      lv.isFrozenFn->executeCall1(
+          lv.isFrozenFn,
           runtime,
-          runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+          Runtime::getUndefinedValue(),
           obj.getHermesValue()));
 }
 
 TEST_F(JSLibTest, ObjectPreventExtensionsTest) {
+  struct : public Locals {
+    PinnedValue<JSObject> objectCons;
+    PinnedValue<Callable> preventExtensionsFn;
+    PinnedValue<Callable> isExtensibleFn;
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
-  auto obj = createObject(runtime);
+  auto obj = createObject(runtime, lv.obj);
 
   GET_GLOBAL(Object);
 
-  auto objectCons = runtime.makeHandle<JSObject>(std::move(*propRes));
+  lv.objectCons.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
   ASSERT_RETURNED((propRes = JSObject::getNamed_RJS(
-                       objectCons,
+                       lv.objectCons,
                        runtime,
                        Predefined::getSymbolID(Predefined::preventExtensions)))
                       .getStatus());
-  auto preventExtensionsFn = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.preventExtensionsFn.castAndSetHermesValue<Callable>(
+      propRes->getHermesValue());
 
   ASSERT_RETURNED((propRes = JSObject::getNamed_RJS(
-                       objectCons,
+                       lv.objectCons,
                        runtime,
                        Predefined::getSymbolID(Predefined::isExtensible)))
                       .getStatus());
-  auto isExtensibleFn = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.isExtensibleFn.castAndSetHermesValue<Callable>(propRes->getHermesValue());
 
   // Make sure it's extensible.
   EXPECT_CALLRESULT_BOOL(
       TRUE,
-      isExtensibleFn->executeCall1(
-          isExtensibleFn,
+      lv.isExtensibleFn->executeCall1(
+          lv.isExtensibleFn,
           runtime,
-          runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+          Runtime::getUndefinedValue(),
           obj.getHermesValue()));
 
   // obj.preventExtensions().
-  ASSERT_RETURNED(
-      preventExtensionsFn
-          ->executeCall1(
-              preventExtensionsFn,
-              runtime,
-              runtime.makeHandle(HermesValue::encodeUndefinedValue()),
-              obj.getHermesValue())
-          .getStatus());
+  ASSERT_RETURNED(lv.preventExtensionsFn
+                      ->executeCall1(
+                          lv.preventExtensionsFn,
+                          runtime,
+                          Runtime::getUndefinedValue(),
+                          obj.getHermesValue())
+                      .getStatus());
 
   // Make sure isExtensible works.
   EXPECT_CALLRESULT_BOOL(
       FALSE,
-      isExtensibleFn->executeCall1(
-          isExtensibleFn,
+      lv.isExtensibleFn->executeCall1(
+          lv.isExtensibleFn,
           runtime,
-          runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+          Runtime::getUndefinedValue(),
           obj.getHermesValue()));
 }
 
 TEST_F(JSLibTest, ObjectGetPrototypeOfTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<JSObject> objectCons;
+    PinnedValue<Callable> getPrototypeOfFn;
+    PinnedValue<JSObject> objProto;
+    PinnedValue<JSObject> obj2Proto;
+    PinnedValue<JSObject> obj;
+    PinnedValue<JSObject> obj2;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
-  auto obj = createObject(runtime);
+  auto obj = createObject(runtime, lv.obj);
 
   GET_GLOBAL(Object);
-  auto objectCons = runtime.makeHandle<JSObject>(std::move(*propRes));
+  lv.objectCons.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
   ASSERT_RETURNED((propRes = JSObject::getNamed_RJS(
-                       objectCons,
+                       lv.objectCons,
                        runtime,
                        Predefined::getSymbolID(Predefined::getPrototypeOf)))
                       .getStatus());
-  auto getPrototypeOfFn = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.getPrototypeOfFn.castAndSetHermesValue<Callable>(
+      propRes->getHermesValue());
 
   // Object.getPrototypeOf(obj).
-  auto callRes = getPrototypeOfFn->executeCall1(
-      getPrototypeOfFn,
+  auto callRes = lv.getPrototypeOfFn->executeCall1(
+      lv.getPrototypeOfFn,
       runtime,
-      runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+      Runtime::getUndefinedValue(),
       obj.getHermesValue());
   ASSERT_RETURNED(callRes.getStatus());
-  auto objProto = runtime.makeHandle<JSObject>(std::move(*callRes));
+  lv.objProto.castAndSetHermesValue<JSObject>(callRes->getHermesValue());
 
   // Create a property "objProto.prop1".
-  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+  auto prop1ID =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID);
+  lv.num = HermesValue::encodeTrustedNumberValue(10);
   ASSERT_TRUE(
-      JSObject::putNamed_RJS(
-          objProto,
-          runtime,
-          *prop1ID,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10))) !=
+      JSObject::putNamed_RJS(lv.objProto, runtime, *prop1ID, lv.num) !=
       ExecutionStatus::EXCEPTION);
 
-  auto obj2 = createObject(runtime);
+  auto obj2 = createObject(runtime, lv.obj2);
 
   // Object.getPrototypeOf(obj2).
-  ASSERT_RETURNED((callRes = getPrototypeOfFn->executeCall1(
-                       getPrototypeOfFn,
+  ASSERT_RETURNED((callRes = lv.getPrototypeOfFn->executeCall1(
+                       lv.getPrototypeOfFn,
                        runtime,
-                       runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+                       Runtime::getUndefinedValue(),
                        obj2.getHermesValue()))
                       .getStatus());
-  auto obj2Proto = runtime.makeHandle<JSObject>(std::move(*callRes));
+  lv.obj2Proto.castAndSetHermesValue<JSObject>(callRes->getHermesValue());
 
   // Make sure that the new object's prototype is correct.
   EXPECT_CALLRESULT_DOUBLE(
-      10, JSObject::getNamed_RJS(obj2Proto, runtime, *prop1ID));
+      10, JSObject::getNamed_RJS(lv.obj2Proto, runtime, *prop1ID));
 }
 
 TEST_F(JSLibTest, ObjectGetOwnPropertyDescriptorTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> prop1ID;
+    PinnedValue<SymbolID> prop1ID2;
+    PinnedValue<Domain> domain;
+    PinnedValue<JSFunction> getter;
+    PinnedValue<JSFunction> setter;
+    PinnedValue<PropertyAccessor> accessor;
+    PinnedValue<JSObject> objectCons;
+    PinnedValue<Callable> getOwnPropertyDescriptorFn;
+    PinnedValue<JSObject> desc;
+    PinnedValue<JSObject> obj;
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   GCScope scope{runtime, "JSLibTest.ObjectGetOwnPropertyDescriptorTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
   {
-    auto obj = createObject(runtime);
+    auto obj = createObject(runtime, lv.obj);
 
     GET_GLOBAL(Object);
-    auto objectCons = runtime.makeHandle<JSObject>(std::move(*propRes));
+    lv.objectCons.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
     ASSERT_RETURNED(
         (propRes = JSObject::getNamed_RJS(
-             objectCons,
+             lv.objectCons,
              runtime,
              Predefined::getSymbolID(Predefined::getOwnPropertyDescriptor)))
             .getStatus());
-    auto getOwnPropertyDescriptorFn =
-        runtime.makeHandle<Callable>(std::move(*propRes));
+    lv.getOwnPropertyDescriptorFn.castAndSetHermesValue<Callable>(
+        propRes->getHermesValue());
 
     // Create a property "objProto.prop1".
-    auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+    auto prop1ID =
+        *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID);
+    lv.num = HermesValue::encodeTrustedNumberValue(10);
     ASSERT_TRUE(
-        JSObject::putNamed_RJS(
-            obj,
-            runtime,
-            *prop1ID,
-            runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10))) !=
+        JSObject::putNamed_RJS(obj, runtime, *prop1ID, lv.num) !=
         ExecutionStatus::EXCEPTION);
 
     // Object.getOwnPropertyDescriptor(obj).
     auto callRes = Callable::executeCall2(
-        getOwnPropertyDescriptorFn,
+        lv.getOwnPropertyDescriptorFn,
         runtime,
-        runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+        Runtime::getUndefinedValue(),
         obj.getHermesValue(),
         HermesValue::encodeStringValue(
             runtime.getStringPrimFromSymbolID(*prop1ID)));
     ASSERT_RETURNED(callRes.getStatus());
-    auto desc = runtime.makeHandle<JSObject>(std::move(*callRes));
+    lv.desc.castAndSetHermesValue<JSObject>(callRes->getHermesValue());
 
     EXPECT_CALLRESULT_BOOL(
         TRUE,
         JSObject::getNamed_RJS(
-            desc, runtime, Predefined::getSymbolID(Predefined::writable)));
+            lv.desc, runtime, Predefined::getSymbolID(Predefined::writable)));
     EXPECT_CALLRESULT_BOOL(
         TRUE,
         JSObject::getNamed_RJS(
-            desc, runtime, Predefined::getSymbolID(Predefined::enumerable)));
+            lv.desc, runtime, Predefined::getSymbolID(Predefined::enumerable)));
     EXPECT_CALLRESULT_BOOL(
         TRUE,
         JSObject::getNamed_RJS(
-            desc, runtime, Predefined::getSymbolID(Predefined::configurable)));
+            lv.desc,
+            runtime,
+            Predefined::getSymbolID(Predefined::configurable)));
     EXPECT_CALLRESULT_DOUBLE(
         10,
         JSObject::getNamed_RJS(
-            desc, runtime, Predefined::getSymbolID(Predefined::value)));
+            lv.desc, runtime, Predefined::getSymbolID(Predefined::value)));
   }
 
   {
-    auto obj = createObject(runtime);
+    auto obj = createObject(runtime, lv.obj);
 
     GET_GLOBAL(Object);
-    auto objectCons = runtime.makeHandle<JSObject>(std::move(*propRes));
+    lv.objectCons.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
     ASSERT_RETURNED(
         (propRes = JSObject::getNamed_RJS(
-             objectCons,
+             lv.objectCons,
              runtime,
              Predefined::getSymbolID(Predefined::getOwnPropertyDescriptor)))
             .getStatus());
-    auto getOwnPropertyDescriptorFn =
-        runtime.makeHandle<Callable>(std::move(*propRes));
+    lv.getOwnPropertyDescriptorFn.castAndSetHermesValue<Callable>(
+        propRes->getHermesValue());
 
     // Create a property "objProto.prop1".
-    auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+    auto prop1ID =
+        *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"), lv.prop1ID2);
 
     DefinePropertyFlags dpf{};
     dpf.setGetter = 1;
@@ -449,82 +514,99 @@ TEST_F(JSLibTest, ObjectGetOwnPropertyDescriptorTest) {
     BFG.emitRet(0);
     BMG.addFunction(1, 1, BFG.acquireBytecode());
     auto *codeBlock = createSimpleCodeBlock(runtimeModule, runtime, BMG);
-    auto getter = runtime.makeHandle<JSFunction>(JSFunction::create(
+    lv.domain = runtimeModule->getDomainUnsafe(runtime);
+    lv.getter = JSFunction::create(
         runtime,
-        runtime.makeHandle(runtimeModule->getDomainUnsafe(runtime)),
+        lv.domain,
         runtime.makeNullHandle<JSObject>(),
         runtime.makeNullHandle<Environment>(),
-        codeBlock));
-    auto setter = runtime.makeHandle<JSFunction>(JSFunction::create(
+        codeBlock);
+    lv.setter = JSFunction::create(
         runtime,
-        runtime.makeHandle(runtimeModule->getDomainUnsafe(runtime)),
+        lv.domain,
         runtime.makeNullHandle<JSObject>(),
         runtime.makeNullHandle<Environment>(),
-        codeBlock));
-    auto accessor = runtime.makeHandle<PropertyAccessor>(
-        PropertyAccessor::create(runtime, getter, setter));
+        codeBlock);
+    lv.accessor = PropertyAccessor::create(runtime, lv.getter, lv.setter);
     ASSERT_TRUE(
-        JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, accessor) !=
+        JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, lv.accessor) !=
         ExecutionStatus::EXCEPTION);
 
     // Object.getOwnPropertyDescriptor(obj).
     auto callRes = Callable::executeCall2(
-        getOwnPropertyDescriptorFn,
+        lv.getOwnPropertyDescriptorFn,
         runtime,
-        runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+        Runtime::getUndefinedValue(),
         obj.getHermesValue(),
         HermesValue::encodeStringValue(
             runtime.getStringPrimFromSymbolID(*prop1ID)));
     ASSERT_RETURNED(callRes.getStatus());
-    auto desc = runtime.makeHandle<JSObject>(std::move(*callRes));
+    lv.desc.castAndSetHermesValue<JSObject>(callRes->getHermesValue());
 
     EXPECT_CALLRESULT_BOOL(
         TRUE,
         JSObject::getNamed_RJS(
-            desc, runtime, Predefined::getSymbolID(Predefined::enumerable)));
+            lv.desc, runtime, Predefined::getSymbolID(Predefined::enumerable)));
     EXPECT_CALLRESULT_BOOL(
         TRUE,
         JSObject::getNamed_RJS(
-            desc, runtime, Predefined::getSymbolID(Predefined::configurable)));
+            lv.desc,
+            runtime,
+            Predefined::getSymbolID(Predefined::configurable)));
     ASSERT_RETURNED(
         (propRes = JSObject::getNamed_RJS(
-             desc, runtime, Predefined::getSymbolID(Predefined::get)))
+             lv.desc, runtime, Predefined::getSymbolID(Predefined::get)))
             .getStatus());
-    EXPECT_EQ(getter.get(), (*propRes)->getPointer());
+    EXPECT_EQ(lv.getter.get(), (*propRes)->getPointer());
     ASSERT_RETURNED(
         (propRes = JSObject::getNamed_RJS(
-             desc, runtime, Predefined::getSymbolID(Predefined::set)))
+             lv.desc, runtime, Predefined::getSymbolID(Predefined::set)))
             .getStatus());
-    EXPECT_EQ(setter.get(), (*propRes)->getPointer());
+    EXPECT_EQ(lv.setter.get(), (*propRes)->getPointer());
   }
 }
 
 TEST_F(JSLibTest, ObjectDefinePropertyTest) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> propHandle;
+    PinnedValue<SymbolID> propID;
+    PinnedValue<StringPrimitive> tmp;
+    PinnedValue<SymbolID> propID2;
+    PinnedValue<JSObject> objectCons;
+    PinnedValue<Callable> definePropertyFn;
+    PinnedValue<Callable> toStringFn;
+    PinnedValue<JSObject> attributes;
+    PinnedValue<JSObject> accessorAttributes;
+    PinnedValue<> value;
+    PinnedValue<> prop;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   GCScope scope{runtime, "JSLibTest.ObjectDefinePropertyTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
   // Get global object.
   GET_GLOBAL(Object);
-  auto objectCons = runtime.makeHandle<JSObject>(std::move(*propRes));
+  lv.objectCons.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
   // Get Object.defineProperty() function.
   ASSERT_RETURNED((propRes = JSObject::getNamed_RJS(
-                       objectCons,
+                       lv.objectCons,
                        runtime,
                        Predefined::getSymbolID(Predefined::defineProperty),
                        PropOpFlags().plusMustExist()))
                       .getStatus());
-  auto definePropertyFn = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.definePropertyFn.castAndSetHermesValue<Callable>(
+      propRes->getHermesValue());
 
   {
     // Create a PropertyDescriptor object with enumerable and configurable set.
-    auto attributes = createObject(runtime);
+    auto attributes = createObject(runtime, lv.attributes);
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             attributes,
             runtime,
             Predefined::getSymbolID(Predefined::enumerable),
-            runtime.makeHandle(HermesValue::encodeBoolValue(true)),
+            Runtime::getBoolValue(true),
             PropOpFlags().plusThrowOnError())
             .getValue());
     ASSERT_TRUE(
@@ -532,39 +614,40 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
             attributes,
             runtime,
             Predefined::getSymbolID(Predefined::configurable),
-            runtime.makeHandle(HermesValue::encodeBoolValue(true)),
+            Runtime::getBoolValue(true),
             PropOpFlags().plusThrowOnError())
             .getValue());
 
     // Add value to the PropertyDescriptor.
-    auto value = HermesValue::encodeTrustedNumberValue(123);
+    lv.value = HermesValue::encodeTrustedNumberValue(123);
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             attributes,
             runtime,
             Predefined::getSymbolID(Predefined::value),
-            runtime.makeHandle(value),
+            lv.value,
             PropOpFlags().plusThrowOnError())
             .getValue());
 
     // Call Object.defineProperty() with prop.
-    auto propHandle = createNoThrowForTest(runtime, createUTF16Ref(u"newkey"));
-    ASSERT_RETURNED(
-        definePropertyFn
-            ->executeCall3(
-                definePropertyFn,
-                runtime,
-                runtime.makeHandle(HermesValue::encodeUndefinedValue()),
-                objectCons.getHermesValue(),
-                propHandle.getHermesValue(),
-                attributes.getHermesValue(),
-                false)
-            .getStatus());
+    auto propHandle =
+        createNoThrowForTest(runtime, createUTF16Ref(u"newkey"), lv.propHandle);
+    ASSERT_RETURNED(lv.definePropertyFn
+                        ->executeCall3(
+                            lv.definePropertyFn,
+                            runtime,
+                            Runtime::getUndefinedValue(),
+                            lv.objectCons.getHermesValue(),
+                            propHandle.getHermesValue(),
+                            attributes.getHermesValue(),
+                            false)
+                        .getStatus());
 
     // Now fetch the property/value and verify it matches the setup.
     NamedPropertyDescriptor desc;
-    auto propID = valueToSymbolIDForTest(runtime, propHandle).getValue();
-    JSObject::getNamedDescriptorUnsafe(objectCons, runtime, *propID, desc);
+    auto propID =
+        valueToSymbolIDForTest(runtime, propHandle, lv.propID).getValue();
+    JSObject::getNamedDescriptorUnsafe(lv.objectCons, runtime, *propID, desc);
     EXPECT_TRUE(desc.flags.enumerable);
     EXPECT_TRUE(desc.flags.configurable);
     EXPECT_FALSE(desc.flags.writable);
@@ -572,25 +655,25 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
     EXPECT_CALLRESULT_DOUBLE(
         123,
         JSObject::getNamed_RJS(
-            objectCons, runtime, *propID, PropOpFlags().plusMustExist()));
+            lv.objectCons, runtime, *propID, PropOpFlags().plusMustExist()));
   }
 
   {
     // Test getter and setters in the attributes.
     // Use toString() as the setter and the getter.
-    auto accessorAttributes = createObject(runtime);
+    auto accessorAttributes = createObject(runtime, lv.accessorAttributes);
     auto propRes = JSObject::getNamed_RJS(
         accessorAttributes,
         runtime,
         Predefined::getSymbolID(Predefined::toString));
     ASSERT_RETURNED(propRes.getStatus());
-    auto toStringFn = runtime.makeHandle<Callable>(std::move(*propRes));
+    lv.toStringFn.castAndSetHermesValue<Callable>(propRes->getHermesValue());
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             accessorAttributes,
             runtime,
             Predefined::getSymbolID(Predefined::set),
-            toStringFn,
+            lv.toStringFn,
             PropOpFlags().plusThrowOnError())
             .getValue());
 
@@ -599,36 +682,36 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
             accessorAttributes,
             runtime,
             Predefined::getSymbolID(Predefined::get),
-            toStringFn,
+            lv.toStringFn,
             PropOpFlags().plusThrowOnError())
             .getValue());
 
     // Call Object.defineProperty() with prop.
-    auto prop = runtime.makeHandle(
-        HermesValue::encodeStringValue(
-            createNoThrowForTest(runtime, createUTF16Ref(u"newkey1")).get()));
-    ASSERT_RETURNED(
-        definePropertyFn
-            ->executeCall3(
-                definePropertyFn,
-                runtime,
-                runtime.makeHandle(HermesValue::encodeUndefinedValue()),
-                objectCons.getHermesValue(),
-                prop.get(),
-                accessorAttributes.getHermesValue(),
-                false)
-            .getStatus());
+    lv.prop = HermesValue::encodeStringValue(
+        createNoThrowForTest(runtime, createUTF16Ref(u"newkey1"), lv.tmp)
+            .get());
+    ASSERT_RETURNED(lv.definePropertyFn
+                        ->executeCall3(
+                            lv.definePropertyFn,
+                            runtime,
+                            Runtime::getUndefinedValue(),
+                            lv.objectCons.getHermesValue(),
+                            lv.prop.get(),
+                            accessorAttributes.getHermesValue(),
+                            false)
+                        .getStatus());
 
     // Now fetch the property/value and verify it matches the setup.
     NamedPropertyDescriptor desc;
-    auto propID = valueToSymbolIDForTest(runtime, prop).getValue();
-    JSObject::getNamedDescriptorUnsafe(objectCons, runtime, *propID, desc);
+    auto propID =
+        valueToSymbolIDForTest(runtime, lv.prop, lv.propID2).getValue();
+    JSObject::getNamedDescriptorUnsafe(lv.objectCons, runtime, *propID, desc);
     EXPECT_TRUE(desc.flags.accessor);
     EXPECT_FALSE(desc.flags.writable);
 
     // Get the accessor and verify it has the correct setter and getter.
     PseudoHandle<> accessor = std::move(
-        JSObject::getNamedSlotValue(objectCons, runtime, desc).getValue());
+        JSObject::getNamedSlotValue(lv.objectCons, runtime, desc).getValue());
     ASSERT_TRUE(accessor->isPointer());
     ASSERT_TRUE(accessor->getPointer() != nullptr);
 
@@ -637,47 +720,56 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
     ASSERT_TRUE(accessorPtr.get() != nullptr);
     EXPECT_EQ(
         accessorPtr->getter.get(runtime),
-        vmcast<Callable>(toStringFn.getHermesValue()));
+        vmcast<Callable>(lv.toStringFn.getHermesValue()));
     EXPECT_EQ(
         accessorPtr->setter.get(runtime),
-        vmcast<Callable>(toStringFn.getHermesValue()));
+        vmcast<Callable>(lv.toStringFn.getHermesValue()));
 
     // Call the getter, it should return a string.
     ASSERT_RETURNED(
         (propRes = JSObject::getNamed_RJS(
-             objectCons, runtime, *propID, PropOpFlags().plusMustExist()))
+             lv.objectCons, runtime, *propID, PropOpFlags().plusMustExist()))
             .getStatus());
     EXPECT_TRUE((*propRes)->isString());
   }
 }
 
 TEST_F(JSLibTest, ObjectDefinePropertiesTest) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str1;
+    PinnedValue<SymbolID> id1;
+    PinnedValue<StringPrimitive> str2;
+    PinnedValue<SymbolID> id2;
+    PinnedValue<JSObject> objectCons;
+    PinnedValue<Callable> definePropertiesFn;
+    PinnedValue<JSObject> properties;
+    PinnedValue<JSObject> property1;
+    PinnedValue<JSObject> property2;
+    PinnedValue<JSObject> obj;
+    PinnedValue<> value1;
+    PinnedValue<> value2;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   GCScope scope{runtime, "JSLibTest.ObjectDefinePropertiesTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
-  auto str1 = createNoThrowForTest(runtime, createUTF16Ref(u"key1")).get();
-  auto id1 =
-      valueToSymbolIDForTest(
-          runtime, runtime.makeHandle(HermesValue::encodeStringValue(str1)))
-          .getValue();
+  createNoThrowForTest(runtime, createUTF16Ref(u"key1"), lv.str1);
+  auto id1 = valueToSymbolIDForTest(runtime, lv.str1, lv.id1).getValue();
 
-  auto str2 = createNoThrowForTest(runtime, createUTF16Ref(u"key2")).get();
-  auto id2 =
-      valueToSymbolIDForTest(
-          runtime, runtime.makeHandle(HermesValue::encodeStringValue(str2)))
-          .getValue();
+  createNoThrowForTest(runtime, createUTF16Ref(u"key2"), lv.str2);
+  auto id2 = valueToSymbolIDForTest(runtime, lv.str2, lv.id2).getValue();
 
-  auto properties = createObject(runtime);
+  auto properties = createObject(runtime, lv.properties);
 
   // Create the first property descriptor object.
   {
-    auto property1 = createObject(runtime);
+    auto property1 = createObject(runtime, lv.property1);
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             property1,
             runtime,
             Predefined::getSymbolID(Predefined::enumerable),
-            runtime.makeHandle(HermesValue::encodeBoolValue(true)),
+            Runtime::getBoolValue(true),
             PropOpFlags().plusThrowOnError())
             .getValue());
     ASSERT_TRUE(
@@ -685,16 +777,16 @@ TEST_F(JSLibTest, ObjectDefinePropertiesTest) {
             property1,
             runtime,
             Predefined::getSymbolID(Predefined::configurable),
-            runtime.makeHandle(HermesValue::encodeBoolValue(true)),
+            Runtime::getBoolValue(true),
             PropOpFlags().plusThrowOnError())
             .getValue());
-    auto value1 = HermesValue::encodeTrustedNumberValue(123);
+    lv.value1 = HermesValue::encodeTrustedNumberValue(123);
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             property1,
             runtime,
             Predefined::getSymbolID(Predefined::value),
-            runtime.makeHandle(value1),
+            lv.value1,
             PropOpFlags().plusThrowOnError())
             .getValue());
     ASSERT_TRUE(
@@ -708,22 +800,22 @@ TEST_F(JSLibTest, ObjectDefinePropertiesTest) {
   }
   // Create the second property descriptor object.
   {
-    auto property2 = createObject(runtime);
+    auto property2 = createObject(runtime, lv.property2);
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             property2,
             runtime,
             Predefined::getSymbolID(Predefined::writable),
-            runtime.makeHandle(HermesValue::encodeBoolValue(true)),
+            Runtime::getBoolValue(true),
             PropOpFlags().plusThrowOnError())
             .getValue());
-    auto value2 = HermesValue::encodeNullValue();
+    lv.value2 = HermesValue::encodeNullValue();
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             property2,
             runtime,
             Predefined::getSymbolID(Predefined::value),
-            runtime.makeHandle(value2),
+            lv.value2,
             PropOpFlags().plusThrowOnError())
             .getValue());
     ASSERT_TRUE(
@@ -737,29 +829,29 @@ TEST_F(JSLibTest, ObjectDefinePropertiesTest) {
   }
   // Get global object.
   GET_GLOBAL(Object);
-  auto objectCons = runtime.makeHandle<JSObject>(std::move(*propRes));
+  lv.objectCons.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
   // Get Object.defineProperties() function.
   ASSERT_RETURNED((propRes = JSObject::getNamed_RJS(
-                       objectCons,
+                       lv.objectCons,
                        runtime,
                        Predefined::getSymbolID(Predefined::defineProperties),
                        PropOpFlags().plusMustExist()))
                       .getStatus());
-  auto definePropertiesFn = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.definePropertiesFn.castAndSetHermesValue<Callable>(
+      propRes->getHermesValue());
 
   // Define the properties.
-  auto obj = createObject(runtime);
-  ASSERT_RETURNED(
-      definePropertiesFn
-          ->executeCall2(
-              definePropertiesFn,
-              runtime,
-              runtime.makeHandle(HermesValue::encodeUndefinedValue()),
-              obj.getHermesValue(),
-              properties.getHermesValue(),
-              false)
-          .getStatus());
+  auto obj = createObject(runtime, lv.obj);
+  ASSERT_RETURNED(lv.definePropertiesFn
+                      ->executeCall2(
+                          lv.definePropertiesFn,
+                          runtime,
+                          Runtime::getUndefinedValue(),
+                          obj.getHermesValue(),
+                          properties.getHermesValue(),
+                          false)
+                      .getStatus());
 
   // Verify the first property.
   {
@@ -786,32 +878,42 @@ TEST_F(JSLibTest, ObjectDefinePropertiesTest) {
 }
 
 TEST_F(JSLibTest, ObjectCreateTest) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str1;
+    PinnedValue<SymbolID> id1;
+    PinnedValue<StringPrimitive> str2;
+    PinnedValue<SymbolID> id2;
+    PinnedValue<JSObject> objectCons;
+    PinnedValue<Callable> createFn;
+    PinnedValue<JSObject> obj;
+    PinnedValue<JSObject> properties;
+    PinnedValue<JSObject> property1;
+    PinnedValue<JSObject> property2;
+    PinnedValue<JSObject> prototype;
+    PinnedValue<> value1;
+    PinnedValue<> value2;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   GCScope scope{runtime, "JSLibTest.ObjectCreateTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
-  auto str1 = createNoThrowForTest(runtime, createUTF16Ref(u"key1")).get();
-  auto id1 =
-      valueToSymbolIDForTest(
-          runtime, runtime.makeHandle(HermesValue::encodeStringValue(str1)))
-          .getValue();
+  createNoThrowForTest(runtime, createUTF16Ref(u"key1"), lv.str1);
+  auto id1 = valueToSymbolIDForTest(runtime, lv.str1, lv.id1).getValue();
 
-  auto str2 = createNoThrowForTest(runtime, createUTF16Ref(u"key2")).get();
-  auto id2 =
-      valueToSymbolIDForTest(
-          runtime, runtime.makeHandle(HermesValue::encodeStringValue(str2)))
-          .getValue();
+  createNoThrowForTest(runtime, createUTF16Ref(u"key2"), lv.str2);
+  auto id2 = valueToSymbolIDForTest(runtime, lv.str2, lv.id2).getValue();
 
-  auto properties = createObject(runtime);
+  auto properties = createObject(runtime, lv.properties);
 
   // Create the first property descriptor object.
   {
-    auto property1 = createObject(runtime);
+    auto property1 = createObject(runtime, lv.property1);
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             property1,
             runtime,
             Predefined::getSymbolID(Predefined::enumerable),
-            runtime.makeHandle(HermesValue::encodeBoolValue(true)),
+            Runtime::getBoolValue(true),
             PropOpFlags().plusThrowOnError())
             .getValue());
     ASSERT_TRUE(
@@ -819,16 +921,16 @@ TEST_F(JSLibTest, ObjectCreateTest) {
             property1,
             runtime,
             Predefined::getSymbolID(Predefined::configurable),
-            runtime.makeHandle(HermesValue::encodeBoolValue(true)),
+            Runtime::getBoolValue(true),
             PropOpFlags().plusThrowOnError())
             .getValue());
-    auto value1 = HermesValue::encodeTrustedNumberValue(123);
+    lv.value1 = HermesValue::encodeTrustedNumberValue(123);
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             property1,
             runtime,
             Predefined::getSymbolID(Predefined::value),
-            runtime.makeHandle(value1),
+            lv.value1,
             PropOpFlags().plusThrowOnError())
             .getValue());
     ASSERT_TRUE(
@@ -842,22 +944,22 @@ TEST_F(JSLibTest, ObjectCreateTest) {
   }
   // Create the second property descriptor object.
   {
-    auto property2 = createObject(runtime);
+    auto property2 = createObject(runtime, lv.property2);
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             property2,
             runtime,
             Predefined::getSymbolID(Predefined::writable),
-            runtime.makeHandle(HermesValue::encodeBoolValue(true)),
+            Runtime::getBoolValue(true),
             PropOpFlags().plusThrowOnError())
             .getValue());
-    auto value2 = HermesValue::encodeNullValue();
+    lv.value2 = HermesValue::encodeNullValue();
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             property2,
             runtime,
             Predefined::getSymbolID(Predefined::value),
-            runtime.makeHandle(value2),
+            lv.value2,
             PropOpFlags().plusThrowOnError())
             .getValue());
     ASSERT_TRUE(
@@ -871,74 +973,84 @@ TEST_F(JSLibTest, ObjectCreateTest) {
   }
   // Get global object.
   GET_GLOBAL(Object);
-  auto objectCons = runtime.makeHandle<JSObject>(std::move(*propRes));
+  lv.objectCons.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
   // Get Object.create() function.
   ASSERT_RETURNED((propRes = JSObject::getNamed_RJS(
-                       objectCons,
+                       lv.objectCons,
                        runtime,
                        Predefined::getSymbolID(Predefined::create),
                        PropOpFlags().plusMustExist()))
                       .getStatus());
-  auto createFn = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.createFn.castAndSetHermesValue<Callable>(propRes->getHermesValue());
 
   // Call Object.create().
-  auto prototype = createObject(runtime);
-  auto callRes = createFn->executeCall2(
-      createFn,
+  auto prototype = createObject(runtime, lv.prototype);
+  auto callRes = lv.createFn->executeCall2(
+      lv.createFn,
       runtime,
-      runtime.makeHandle(HermesValue::encodeUndefinedValue()),
+      Runtime::getUndefinedValue(),
       prototype.getHermesValue(),
       properties.getHermesValue(),
       false);
   ASSERT_RETURNED(callRes.getStatus());
 
-  auto obj = runtime.makeHandle<JSObject>(std::move(*callRes));
+  lv.obj.castAndSetHermesValue<JSObject>(callRes->getHermesValue());
 
   // Verify the first property.
   {
     NamedPropertyDescriptor desc;
-    JSObject::getNamedDescriptorUnsafe(obj, runtime, *id1, desc);
+    JSObject::getNamedDescriptorUnsafe(lv.obj, runtime, *id1, desc);
     EXPECT_TRUE(desc.flags.enumerable);
     EXPECT_TRUE(desc.flags.configurable);
     EXPECT_FALSE(desc.flags.writable);
     EXPECT_EQ(
-        JSObject::getNamedSlotValue(obj, runtime, desc).getValue()->getDouble(),
+        JSObject::getNamedSlotValue(lv.obj, runtime, desc)
+            .getValue()
+            ->getDouble(),
         123);
   }
 
   // Verify the second property.
   {
     NamedPropertyDescriptor desc;
-    JSObject::getNamedDescriptorUnsafe(obj, runtime, *id2, desc);
+    JSObject::getNamedDescriptorUnsafe(lv.obj, runtime, *id2, desc);
     EXPECT_TRUE(desc.flags.writable);
     EXPECT_FALSE(desc.flags.enumerable);
     EXPECT_FALSE(desc.flags.configurable);
     EXPECT_TRUE(
-        JSObject::getNamedSlotValue(obj, runtime, desc).getValue()->isNull());
+        JSObject::getNamedSlotValue(lv.obj, runtime, desc)
+            .getValue()
+            ->isNull());
   }
 }
 
 TEST_F(JSLibTest, CreateStringTest) {
+  struct : public Locals {
+    PinnedValue<Callable> stringCons;
+    PinnedValue<JSObject> prototype;
+    PinnedValue<JSObject> newStr;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   GCScope scope(runtime);
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
   // String constructor.
   GET_GLOBAL(String);
-  auto stringCons = runtime.makeHandle<Callable>(std::move(*propRes));
+  lv.stringCons.castAndSetHermesValue<Callable>(propRes->getHermesValue());
 
   // String.prototype.
-  GET_VALUE(stringCons, prototype);
-  auto prototype = runtime.makeHandle<JSObject>(std::move(*propRes));
+  GET_VALUE(lv.stringCons, prototype);
+  lv.prototype.castAndSetHermesValue<JSObject>(propRes->getHermesValue());
 
   // create a new instance.
   auto crtRes = Callable::executeCall0(
-      stringCons, runtime, Runtime::getUndefinedValue(), true);
+      lv.stringCons, runtime, Runtime::getUndefinedValue(), true);
   ASSERT_RETURNED(crtRes.getStatus());
-  auto newStr = runtime.makeHandle<JSObject>(std::move(*crtRes));
+  lv.newStr.castAndSetHermesValue<JSObject>(crtRes->getHermesValue());
 
   // Make sure the prototype is correct.
-  ASSERT_EQ(prototype.get(), newStr->getParent(runtime));
+  ASSERT_EQ(lv.prototype.get(), lv.newStr->getParent(runtime));
 }
 
 TEST_F(JSLibTest, SmallSortTest) {

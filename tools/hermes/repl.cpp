@@ -333,6 +333,14 @@ int repl(const vm::RuntimeConfig &config) {
           ->getVMRuntimeUnsafe());
 
   vm::GCScope gcScope(*runtime);
+  struct : public vm::Locals {
+    vm::PinnedValue<> thrown;
+    vm::PinnedValue<vm::Callable> evalFn;
+    vm::PinnedValue<vm::JSFunction> evaluateLineFn;
+    vm::PinnedValue<> resHandle;
+    vm::PinnedValue<vm::Callable> task;
+  } lv;
+  vm::LocalsRAII lraii(*runtime, &lv);
   ConsoleHostContext ctx{*runtime};
   installConsoleBindings(*runtime, ctx);
 
@@ -343,19 +351,20 @@ int repl(const vm::RuntimeConfig &config) {
   auto propRes = vm::JSObject::getNamed_RJS(
       global, *runtime, vm::Predefined::getSymbolID(vm::Predefined::eval));
   if (propRes == vm::ExecutionStatus::EXCEPTION) {
-    runtime->printException(
-        llvh::outs(), runtime->makeHandle(runtime->getThrownValue()));
+    lv.thrown = runtime->getThrownValue();
+    runtime->printException(llvh::outs(), lv.thrown);
+    lv.thrown = vm::HermesValue::encodeUndefinedValue();
     return 1;
   }
-  auto evalFn = runtime->makeHandle<vm::Callable>(std::move(*propRes));
+  lv.evalFn.castAndSetHermesValue<vm::Callable>(propRes->get());
 
   llvh::StringRef evaluateLineString =
 #include "evaluate-line.js"
       ;
   bool hasColors = oscompat::should_color(STDOUT_FILENO);
 
-  auto callRes = evalFn->executeCall1(
-      evalFn,
+  auto callRes = lv.evalFn->executeCall1(
+      lv.evalFn,
       *runtime,
       global,
       vm::StringPrimitive::createNoThrow(*runtime, evaluateLineString)
@@ -365,12 +374,12 @@ int repl(const vm::RuntimeConfig &config) {
     llvh::raw_ostream &outs = hasColors
         ? llvh::outs().changeColor(llvh::raw_ostream::Colors::RED)
         : llvh::outs();
-    runtime->printException(
-        outs, runtime->makeHandle(runtime->getThrownValue()));
+    lv.thrown = runtime->getThrownValue();
+    runtime->printException(outs, lv.thrown);
+    lv.thrown = vm::HermesValue::encodeUndefinedValue();
     return 1;
   }
-  auto evaluateLineFn =
-      runtime->makeHandle<vm::JSFunction>(std::move(*callRes));
+  lv.evaluateLineFn.castAndSetHermesValue<vm::JSFunction>(callRes->get());
 
   runtime->getHeap().runtimeWillExecute();
 
@@ -383,7 +392,6 @@ int repl(const vm::RuntimeConfig &config) {
   }
 #endif
 
-  vm::MutableHandle<> resHandle{*runtime};
   // SetUnbuffered because there is no explicit flush after prompt (>>).
   // There is also no explicitly flush at end of line. (An automatic flush
   // mechanism is not guaranteed to be present, from my experiment on Windows)
@@ -432,23 +440,25 @@ int repl(const vm::RuntimeConfig &config) {
 
     bool threwException = false;
 
-    if ((callRes = evaluateLineFn->executeCall2(
-             evaluateLineFn,
+    if ((callRes = lv.evaluateLineFn->executeCall2(
+             lv.evaluateLineFn,
              *runtime,
              global,
              vm::StringPrimitive::createNoThrow(*runtime, utf16Code)
                  .getHermesValue(),
              vm::HermesValue::encodeBoolValue(hasColors))) ==
         vm::ExecutionStatus::EXCEPTION) {
+      lv.thrown = runtime->getThrownValue();
       runtime->printException(
           hasColors ? llvh::outs().changeColor(llvh::raw_ostream::Colors::RED)
                     : llvh::outs(),
-          runtime->makeHandle(runtime->getThrownValue()));
+          lv.thrown);
+      lv.thrown = vm::HermesValue::encodeUndefinedValue();
       llvh::outs().resetColor();
       code.clear();
       threwException = true;
     } else {
-      resHandle = std::move(*callRes);
+      lv.resHandle = std::move(*callRes);
     }
 
     // Perform a microtask checkpoint after running script.
@@ -456,24 +466,26 @@ int repl(const vm::RuntimeConfig &config) {
 
     if (!ctx.tasksEmpty()) {
       // Run the tasks until there are no more.
-      vm::MutableHandle<vm::Callable> task{*runtime};
       while (auto optTask = ctx.dequeueTask()) {
-        task = std::move(*optTask);
+        lv.task = std::move(*optTask);
         auto taskCallRes = vm::Callable::executeCall0(
-            task, *runtime, vm::Runtime::getUndefinedValue(), false);
+            lv.task, *runtime, vm::Runtime::getUndefinedValue(), false);
         if (LLVM_UNLIKELY(taskCallRes == vm::ExecutionStatus::EXCEPTION)) {
           threwException = true;
+          lv.thrown = runtime->getThrownValue();
           runtime->printException(
               hasColors
                   ? llvh::outs().changeColor(llvh::raw_ostream::Colors::RED)
                   : llvh::outs(),
-              runtime->makeHandle(runtime->getThrownValue()));
+              lv.thrown);
+          lv.thrown = vm::HermesValue::encodeUndefinedValue();
           llvh::outs().resetColor();
           code.clear();
         }
 
         // Perform a microtask checkpoint at the end of every task tick.
         microtask::performCheckpoint(*runtime);
+        lv.task = nullptr;
       }
     }
 
@@ -481,7 +493,7 @@ int repl(const vm::RuntimeConfig &config) {
       continue;
     }
 
-    if (resHandle->isUndefined()) {
+    if (lv.resHandle.getHermesValue().isUndefined()) {
       code.clear();
       continue;
     }
@@ -491,7 +503,7 @@ int repl(const vm::RuntimeConfig &config) {
     vm::operator<<(
         llvh::outs(),
         vm::StringPrimitive::createStringView(
-            *runtime, vm::Handle<vm::StringPrimitive>::vmcast(resHandle))
+            *runtime, vm::Handle<vm::StringPrimitive>::vmcast(&lv.resHandle))
             .getUTF16Ref(tmp))
         << "\n";
     code.clear();

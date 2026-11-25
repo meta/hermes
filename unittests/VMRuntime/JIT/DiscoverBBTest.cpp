@@ -21,6 +21,10 @@ namespace {
 TEST(DiscoverBBTest, SmokeTest) {
   auto rt = Runtime::create(kTestRTConfigLargeHeap);
   Runtime &runtime = *rt;
+  struct : public Locals {
+    PinnedValue<SymbolID> benchSym;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
 
   hermes::hbc::CompileFlags runFlags;
   (void)runtime.run(
@@ -41,7 +45,8 @@ TEST(DiscoverBBTest, SmokeTest) {
       runFlags);
 
   GCScope gcScope{runtime};
-  auto benchSym = getSymbolHandleForTest(runtime, createASCIIRef("bench"));
+  auto benchSym =
+      getSymbolHandleForTest(runtime, createASCIIRef("bench"), lv.benchSym);
   ASSERT_EQ(ExecutionStatus::RETURNED, benchSym);
 
   auto propRes = JSObject::getNamed_RJS(

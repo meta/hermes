@@ -24,7 +24,7 @@ using InternalPropertiesTest = RuntimeTestFixture;
             obj,                                                         \
             runtime,                                                     \
             Predefined::getSymbolID(Predefined::Object),                 \
-            runtime.makeHandle(HermesValue::encodeUndefinedValue())));   \
+            HandleRootOwner::getUndefinedValue()));                      \
     EXPECT_CALLRESULT_BOOL_RAW(                                          \
         TRUE,                                                            \
         JSObject::deleteNamed(                                           \
@@ -32,10 +32,16 @@ using InternalPropertiesTest = RuntimeTestFixture;
   } while (0)
 
 TEST_F(InternalPropertiesTest, NamedInternalPropertyTest) {
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+    PinnedValue<> val;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
-  auto nullObj = runtime.makeHandle<JSObject>(nullptr);
-  auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  lv.obj =
+      JSObject::create(runtime, HandleRootOwner::makeNullHandle<JSObject>());
+  Handle<JSObject> obj = lv.obj;
 
   // A key feature of named internal properties is that they may be added to
   // any object at any point. Let's put the object in dictionary mode to test
@@ -47,14 +53,9 @@ TEST_F(InternalPropertiesTest, NamedInternalPropertyTest) {
   auto propID = Predefined::getSymbolID(
       Predefined::InternalPropertyNamedPropForUnitTestOnly);
 
+  lv.val = HermesValue::encodeTrustedNumberValue(10.0);
   EXPECT_CALLRESULT_BOOL_RAW(
-      TRUE,
-      JSObject::defineOwnProperty(
-          obj,
-          runtime,
-          propID,
-          dpf,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10.0))));
+      TRUE, JSObject::defineOwnProperty(obj, runtime, propID, dpf, lv.val));
 
   EXPECT_CALLRESULT_DOUBLE(10.0, JSObject::getNamed_RJS(obj, runtime, propID));
 

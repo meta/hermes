@@ -71,17 +71,24 @@ TEST(GCOOMDeathTest, WeakMapMarking) {
         RuntimeConfig::Builder().withGCConfig(kTestGCConfig).build());
     auto &runtime = *rt;
     GCScope scope{runtime};
+    struct : public Locals {
+      PinnedValue<JSWeakMap> map;
+      PinnedValue<ArrayStorage> keysSlot;
+      PinnedValue<JSObject> key;
+      PinnedValue<JSObject> value;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     auto mapResult = JSWeakMap::create(
         runtime, Handle<JSObject>::vmcast(&runtime.weakMapPrototype));
-    auto map = runtime.makeHandle(std::move(*mapResult));
-    MutableHandle<ArrayStorage> keys{runtime};
+    lv.map = std::move(*mapResult);
+    MutableHandle<ArrayStorage> keys{lv.keysSlot};
     keys = vmcast<ArrayStorage>(*ArrayStorage::create(runtime, 5));
     while (true) {
       GCScopeMarkerRAII marker(runtime);
-      auto key = runtime.makeHandle(JSObject::create(runtime));
-      ArrayStorage::push_back(keys, runtime, key);
-      auto value = runtime.makeHandle(JSObject::create(runtime));
-      JSWeakMap::setValue(map, runtime, key, value);
+      lv.key = JSObject::create(runtime);
+      ArrayStorage::push_back(keys, runtime, lv.key);
+      lv.value = JSObject::create(runtime);
+      JSWeakMap::setValue(lv.map, runtime, lv.key, lv.value);
     }
   };
   EXPECT_OOM(fn());

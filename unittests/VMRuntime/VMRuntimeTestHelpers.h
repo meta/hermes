@@ -97,6 +97,19 @@ template <typename T>
 
 /// A RuntimeTestFixture should be used by any test that requires a Runtime.
 /// For different heap sizes, use the different subclasses.
+///
+/// Rooting values in a test body: declare one Locals at the top of the body
+/// and hold values in PinnedValue fields (the fixture's \c runtime member is
+/// a Runtime &):
+/// \code
+///   struct : public Locals {
+///     PinnedValue<JSObject> obj;
+///     PinnedValue<StringPrimitive> str;
+///   } lv;
+///   LocalsRAII lraii(runtime, &lv);
+/// \endcode
+/// The "...ForTest" helpers below take a MutableHandle<T> slot (e.g. a
+/// PinnedValue<T> field of that Locals) to write their result into.
 class RuntimeTestFixtureBase : public ::testing::Test {
   std::shared_ptr<Runtime> rt;
 
@@ -108,6 +121,13 @@ class RuntimeTestFixtureBase : public ::testing::Test {
 
   GCScope gcScope;
 
+  /// Roots for the fixture's own values.
+  struct FixtureLocals : public Locals {
+    PinnedValue<Domain> domain;
+  } fixtureLocals_;
+  LocalsRAII fixtureLocalsRAII_;
+
+  /// A fresh Domain, rooted in the fixture.
   Handle<Domain> domain;
 
   RuntimeTestFixtureBase(const RuntimeConfig &runtimeConfig)
@@ -115,7 +135,10 @@ class RuntimeTestFixtureBase : public ::testing::Test {
         runtime(*rt),
         rtConfig(runtimeConfig),
         gcScope(runtime),
-        domain(runtime.makeHandle(Domain::create(runtime))) {}
+        fixtureLocalsRAII_(runtime, &fixtureLocals_),
+        domain(fixtureLocals_.domain) {
+    fixtureLocals_.domain = Domain::create(runtime);
+  }
 
   /// Can't copy due to internal pointer.
   RuntimeTestFixtureBase(const RuntimeTestFixtureBase &) = delete;
@@ -179,13 +202,19 @@ inline const GCConfig TestGCConfigFixedSize(
 #define ASSERT_RETURNED(x) ASSERT_EQ(ExecutionStatus::RETURNED, x)
 
 /// Expect that 'x' is a string primitive with value 'str'
-#define EXPECT_STRINGPRIM(str, x)                                           \
-  do {                                                                      \
-    GCScopeMarkerRAII marker{runtime};                                      \
-    auto xHandle = runtime.makeHandle(x);                                   \
-    Handle<StringPrimitive> strHandle = createNoThrowForTest(runtime, str); \
-    EXPECT_TRUE(                                                            \
-        isSameValue(strHandle.getHermesValue(), xHandle.getHermesValue())); \
+#define EXPECT_STRINGPRIM(str, x)                               \
+  do {                                                          \
+    struct : public Locals {                                    \
+      PinnedValue<> expectStrPrimX_;                            \
+      PinnedValue<StringPrimitive> expectStrPrimStr_;           \
+    } expectStrPrimLv_;                                         \
+    LocalsRAII expectStrPrimLraii_(runtime, &expectStrPrimLv_); \
+    expectStrPrimLv_.expectStrPrimX_ = (x);                     \
+    Handle<StringPrimitive> strHandle = createNoThrowForTest(   \
+        runtime, str, expectStrPrimLv_.expectStrPrimStr_);      \
+    EXPECT_TRUE(isSameValue(                                    \
+        strHandle.getHermesValue(),                             \
+        expectStrPrimLv_.expectStrPrimX_.getHermesValue()));    \
   } while (0)
 
 /// Assert that execution of 'x' didn't throw and returned the expected bool.
@@ -477,52 +506,51 @@ inline CodeBlock *createSimpleCodeBlock(
   return runtimeModule->getCodeBlockMayAllocate(0);
 }
 
-/// Test-only convenience: uniqued SymbolID of \p str, as a Handle in the
-/// topmost GCScope.
+/// Test-only convenience: uniqued SymbolID of \p str, written to the slot
+/// \p out. Returns a Handle viewing \p out.
 inline CallResult<Handle<SymbolID>> stringToSymbolIDForTest(
     Runtime &runtime,
-    PseudoHandle<StringPrimitive> str) {
-  MutableHandle<SymbolID> handle{runtime};
+    PseudoHandle<StringPrimitive> str,
+    MutableHandle<SymbolID> out) {
   if (LLVM_UNLIKELY(
-          stringToSymbolID(runtime, std::move(str), handle) ==
+          stringToSymbolID(runtime, std::move(str), out) ==
           ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
-  return Handle<SymbolID>(handle);
+  return Handle<SymbolID>(out);
 }
 
-/// Test-only convenience: SymbolID of \p value, as a Handle in the topmost
-/// GCScope.
+/// Test-only convenience: SymbolID of \p value, written to the slot \p out.
+/// Returns a Handle viewing \p out.
 inline CallResult<Handle<SymbolID>> valueToSymbolIDForTest(
     Runtime &runtime,
-    Handle<> value) {
-  MutableHandle<SymbolID> handle{runtime};
+    Handle<> value,
+    MutableHandle<SymbolID> out) {
   if (LLVM_UNLIKELY(
-          valueToSymbolID(runtime, value, handle) ==
-          ExecutionStatus::EXCEPTION))
+          valueToSymbolID(runtime, value, out) == ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
-  return Handle<SymbolID>(handle);
+  return Handle<SymbolID>(out);
 }
 
-/// Test-only convenience: intern \p str and return a Handle<SymbolID> that
-/// lives in the topmost GCScope.
+/// Test-only convenience: intern \p str and write the SymbolID to the slot
+/// \p out. Returns a Handle viewing \p out.
 template <typename Ref>
-inline CallResult<Handle<SymbolID>> getSymbolHandleForTest(
-    Runtime &runtime,
-    Ref str) {
+inline CallResult<Handle<SymbolID>>
+getSymbolHandleForTest(Runtime &runtime, Ref str, MutableHandle<SymbolID> out) {
   auto res = runtime.getIdentifierTable().getSymbolID(runtime, str);
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
-  return runtime.makeHandle(*res);
+  out.set(*res);
+  return Handle<SymbolID>(out);
 }
 
-/// Test-only convenience: HiddenClass::addProperty returning the new class as
-/// a Handle that lives in the topmost GCScope.
+/// Test-only convenience: HiddenClass::addProperty writing the new class to
+/// the slot \p out. Returns a Handle viewing \p out.
 inline CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> addPropertyForTest(
     Handle<HiddenClass> selfHandle,
     Runtime &runtime,
     SymbolID name,
-    PropertyFlags propertyFlags) {
-  auto out = runtime.makeMutableHandle<HiddenClass>(nullptr);
+    PropertyFlags propertyFlags,
+    MutableHandle<HiddenClass> out) {
   auto res =
       HiddenClass::addProperty(selfHandle, runtime, name, propertyFlags, out);
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
@@ -530,8 +558,26 @@ inline CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> addPropertyForTest(
   return std::make_pair(Handle<HiddenClass>(out), *res);
 }
 
-/// Test-only convenience: StringPrimitive::createNoThrow returning a Handle
-/// in the topmost GCScope.
+/// Test-only convenience: StringPrimitive::createNoThrow writing the string to
+/// the slot \p out. Returns a Handle viewing \p out.
+inline Handle<StringPrimitive> createNoThrowForTest(
+    Runtime &runtime,
+    UTF16Ref str,
+    MutableHandle<StringPrimitive> out) {
+  out = StringPrimitive::createNoThrow(runtime, str);
+  return out;
+}
+inline Handle<StringPrimitive> createNoThrowForTest(
+    Runtime &runtime,
+    llvh::StringRef ascii,
+    MutableHandle<StringPrimitive> out) {
+  out = StringPrimitive::createNoThrow(runtime, ascii);
+  return out;
+}
+
+/// Legacy allocating forms of createNoThrowForTest, kept only for
+/// HandleTest.cpp (which tests the GCScope machinery itself). Do not use in
+/// new code.
 inline Handle<StringPrimitive> createNoThrowForTest(
     Runtime &runtime,
     UTF16Ref str) {
@@ -543,23 +589,30 @@ inline Handle<StringPrimitive> createNoThrowForTest(
   return runtime.makeHandle(StringPrimitive::createNoThrow(runtime, ascii));
 }
 
-/// Test-only convenience: a new BigIntPrimitive for a signed integer, as a
-/// Handle in the topmost GCScope. Brings down the VM on OOM.
+/// Test-only convenience: a new BigIntPrimitive for a signed integer, written
+/// to the slot \p out. Returns a Handle viewing \p out. Brings down the VM on
+/// OOM.
 template <typename T>
 inline Handle<BigIntPrimitive> fromSignedNoThrowForTest(
     Runtime &runtime,
-    T value) {
-  return runtime.makeHandle<BigIntPrimitive>(runtime.ignoreAllocationFailure(
-      BigIntPrimitive::fromSigned(runtime, value)));
+    T value,
+    MutableHandle<BigIntPrimitive> out) {
+  out.set(
+      vmcast<BigIntPrimitive>(runtime.ignoreAllocationFailure(
+          BigIntPrimitive::fromSigned(runtime, value))));
+  return out;
 }
 
-/// Test-only convenience: a new BigIntPrimitive from \p bytes, as a Handle in
-/// the topmost GCScope. Brings down the VM on OOM.
+/// Test-only convenience: a new BigIntPrimitive from \p bytes, written to the
+/// slot \p out. Returns a Handle viewing \p out. Brings down the VM on OOM.
 inline Handle<BigIntPrimitive> fromBytesNoThrowForTest(
     Runtime &runtime,
-    llvh::ArrayRef<uint8_t> bytes) {
-  return runtime.makeHandle<BigIntPrimitive>(runtime.ignoreAllocationFailure(
-      BigIntPrimitive::fromBytes(runtime, bytes)));
+    llvh::ArrayRef<uint8_t> bytes,
+    MutableHandle<BigIntPrimitive> out) {
+  out.set(
+      vmcast<BigIntPrimitive>(runtime.ignoreAllocationFailure(
+          BigIntPrimitive::fromBytes(runtime, bytes))));
+  return out;
 }
 
 } // namespace vm

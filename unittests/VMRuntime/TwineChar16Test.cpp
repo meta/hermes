@@ -32,6 +32,10 @@ namespace {
 using TwineChar16Test = RuntimeTestFixture;
 
 TEST_F(TwineChar16Test, ConstructTest) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> tmp;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   EXPECT_TWINE_OUTPUT(0u, u"", TwineChar16::createNull());
   EXPECT_TWINE_OUTPUT(4u, u"abcd", TwineChar16("abcd"));
   EXPECT_TWINE_OUTPUT(4u, u"abcd", TwineChar16(u"abcd"));
@@ -48,11 +52,17 @@ TEST_F(TwineChar16Test, ConstructTest) {
 
   {
     EXPECT_TWINE_OUTPUT(
-        4u, u"abcd", TwineChar16(createNoThrowForTest(runtime, "abcd").get()));
+        4u,
+        u"abcd",
+        TwineChar16(createNoThrowForTest(runtime, "abcd", lv.tmp).get()));
   }
 }
 
 TEST_F(TwineChar16Test, ConcatTest) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> tmp;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   EXPECT_TWINE_OUTPUT(4u, u"abcd", TwineChar16(u"ab", u"cd"));
   EXPECT_TWINE_OUTPUT(2u, u"ab", TwineChar16(u"ab", u""));
   EXPECT_TWINE_OUTPUT(2u, u"ab", TwineChar16(u"", u"ab"));
@@ -78,7 +88,7 @@ TEST_F(TwineChar16Test, ConcatTest) {
         u"abcdefgh",
         ((TwineChar16(u"ab") + TwineChar16(createUTF16Ref(u"cd"))) +
          (TwineChar16("ef") +
-          TwineChar16(createNoThrowForTest(runtime, "gh").get()))));
+          TwineChar16(createNoThrowForTest(runtime, "gh", lv.tmp).get()))));
   }
 
   {

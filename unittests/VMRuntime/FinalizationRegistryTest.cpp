@@ -35,6 +35,7 @@ TEST_F(FinalizationRegistryTest, RegisterAndUnregisterTest) {
   });
 
   struct : Locals {
+    PinnedValue<StringPrimitive> desc;
     PinnedValue<JSFinalizationRegistry> fr;
     PinnedValue<Callable> callable;
     PinnedValue<JSObject> heldValue;
@@ -83,7 +84,7 @@ TEST_F(FinalizationRegistryTest, RegisterAndUnregisterTest) {
   // Test with Symbol Target
   lv.heldValue = JSObject::create(runtime);
   heldValue.set(SmallHermesValue::encodeObjectValue(*lv.heldValue, runtime));
-  auto desc = createNoThrowForTest(runtime, "test");
+  auto desc = createNoThrowForTest(runtime, "test", lv.desc);
   auto sym = runtime.getIdentifierTable().createNotUniquedSymbol(runtime, desc);
   lv.target = HermesValue::encodeSymbolValue(*sym);
   lv.unregisterToken = JSObject::create(runtime);
@@ -110,6 +111,9 @@ TEST_F(FinalizationRegistryTest, RegisterAndUnregisterTest) {
 
 TEST_F(FinalizationRegistryTest, CleanupTest) {
   struct : Locals {
+    PinnedValue<SymbolID> counterSym;
+    PinnedValue<StringPrimitive> desc;
+    PinnedValue<StringPrimitive> desc2;
     PinnedValue<JSFinalizationRegistry> fr;
     PinnedValue<Callable> callable;
     PinnedValue<JSObject> heldValue;
@@ -127,7 +131,8 @@ TEST_F(FinalizationRegistryTest, CleanupTest) {
   )#");
   lv.callable.castAndSetHermesValue<Callable>(*callableRes);
 
-  auto counterSym = *getSymbolHandleForTest(runtime, createASCIIRef("counter"));
+  auto counterSym = *getSymbolHandleForTest(
+      runtime, createASCIIRef("counter"), lv.counterSym);
   auto getCounter = [this, counterSym]() {
     auto result =
         JSObject::getNamed_RJS(runtime.getGlobal(), runtime, *counterSym);
@@ -151,7 +156,7 @@ TEST_F(FinalizationRegistryTest, CleanupTest) {
   ASSERT_EQ(getCounter(), 2);
 
   for (size_t i = 0; i < 3; ++i) {
-    auto desc = createNoThrowForTest(runtime, "test");
+    auto desc = createNoThrowForTest(runtime, "test", lv.desc);
     auto sym =
         runtime.getIdentifierTable().createNotUniquedSymbol(runtime, desc);
     lv.target = HermesValue::encodeSymbolValue(*sym);
@@ -170,7 +175,7 @@ TEST_F(FinalizationRegistryTest, CleanupTest) {
       lv.fr, runtime, lv.target, lv.heldValue, lv.unregisterToken);
   ASSERT_TRUE(lv.fr->unregisterCells(runtime, lv.unregisterToken));
 
-  auto desc = createNoThrowForTest(runtime, "test");
+  auto desc = createNoThrowForTest(runtime, "test", lv.desc2);
   auto sym = runtime.getIdentifierTable().createNotUniquedSymbol(runtime, desc);
   lv.target = HermesValue::encodeSymbolValue(*sym);
   JSFinalizationRegistry::registerCell(
@@ -189,6 +194,7 @@ TEST_F(FinalizationRegistryTest, IndexReuseTest) {
   // 2. Interleaved register/unregister operations
 
   struct : Locals {
+    PinnedValue<SymbolID> counterSym;
     PinnedValue<JSFinalizationRegistry> fr;
     PinnedValue<Callable> callable;
     PinnedValue<JSObject> heldValue;
@@ -211,7 +217,8 @@ TEST_F(FinalizationRegistryTest, IndexReuseTest) {
   ASSERT_FALSE(isException(callableRes));
   lv.callable.castAndSetHermesValue<Callable>(*callableRes);
 
-  auto counterSym = *getSymbolHandleForTest(runtime, createASCIIRef("counter"));
+  auto counterSym = *getSymbolHandleForTest(
+      runtime, createASCIIRef("counter"), lv.counterSym);
   auto getCounter = [this, counterSym]() {
     auto result =
         JSObject::getNamed_RJS(runtime.getGlobal(), runtime, *counterSym);

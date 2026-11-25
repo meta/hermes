@@ -32,6 +32,11 @@ using IdentifierTableLargeHeapTest = LargeHeapRuntimeTestFixture;
 #if HERMESVM_SANITIZE_HANDLES == 0
 TEST_F(IdentifierTableLargeHeapTest, LookupTest) {
   struct : public Locals {
+    PinnedValue<StringPrimitive> storageSlot;
+    PinnedValue<StringPrimitive> d;
+    PinnedValue<SymbolID> tmp;
+    PinnedValue<StringPrimitive> e;
+    PinnedValue<SymbolID> tmp2;
     PinnedValue<SymbolID> sa;
     PinnedValue<SymbolID> sb;
   } lv;
@@ -62,19 +67,25 @@ TEST_F(IdentifierTableLargeHeapTest, LookupTest) {
       table.getSymbolID(runtime, c).getValue().unsafeGetIndex() -
           predefinedCount);
 
-  auto d = createNoThrowForTest(runtime, llvh::StringRef("foo"));
+  auto d = createNoThrowForTest(runtime, llvh::StringRef("foo"), lv.d);
   EXPECT_EQ(
       0u,
-      stringToSymbolIDForTest(runtime, d).getValue().get().unsafeGetIndex() -
+      stringToSymbolIDForTest(runtime, d, lv.tmp)
+              .getValue()
+              .get()
+              .unsafeGetIndex() -
           predefinedCount);
 
-  auto e = createNoThrowForTest(runtime, llvh::StringRef("ab"));
+  auto e = createNoThrowForTest(runtime, llvh::StringRef("ab"), lv.e);
   EXPECT_EQ(
       1u,
-      stringToSymbolIDForTest(runtime, e).getValue().get().unsafeGetIndex() -
+      stringToSymbolIDForTest(runtime, e, lv.tmp2)
+              .getValue()
+              .get()
+              .unsafeGetIndex() -
           predefinedCount);
 
-  MutableHandle<StringPrimitive> storage{runtime};
+  MutableHandle<StringPrimitive> storage{lv.storageSlot};
   EXPECT_TRUE(table.getStringView(sa, storage).equals(a));
   EXPECT_TRUE(table.getStringView(sb, storage).equals(b));
   SmallU16String<8> tmp;
@@ -179,17 +190,23 @@ TEST_F(IdentifierTableTest, DeletedEntryReuseDoesNotGrowHashTable) {
 }
 
 TEST_F(IdentifierTableTest, NotUniquedSymbol) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> storageSlot;
+    PinnedValue<StringPrimitive> id1;
+    PinnedValue<SymbolID> sym;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto &idTable = runtime.getIdentifierTable();
 
   {
     ASCIIRef asdf{"asdf", 4};
-    Handle<StringPrimitive> id1 = runtime.makeHandle<StringPrimitive>(
+    lv.id1.castAndSetHermesValue<StringPrimitive>(
         *StringPrimitive::create(runtime, asdf));
-    Handle<SymbolID> sym =
-        runtime.makeHandle(*idTable.createNotUniquedSymbol(runtime, id1));
+    lv.sym = *idTable.createNotUniquedSymbol(runtime, lv.id1);
+    Handle<SymbolID> sym = lv.sym;
     EXPECT_TRUE((*sym).isNotUniqued());
     EXPECT_FALSE((*sym).isUniqued());
-    MutableHandle<StringPrimitive> storage{runtime};
+    MutableHandle<StringPrimitive> storage{lv.storageSlot};
     EXPECT_TRUE(idTable.getStringView(*sym, storage).equals(asdf));
   }
 }
