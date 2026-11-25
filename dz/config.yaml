@@ -3,4 +3,5 @@ components:
   - compiler
   - gc
   - jit
+  - jslib
   - vm
