@@ -4,4 +4,5 @@ components:
   - gc
   - jit
   - jslib
+  - sandbox
   - vm
