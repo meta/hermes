@@ -59,6 +59,84 @@ lengthOfArrayLike(Runtime &runtime, Handle<JSObject> O, Handle<JSArray> jsArr) {
   return lenRes->getNumber();
 }
 
+/// Try to perform the HasProperty(O, k) and Get(O, k) steps of the array
+/// iteration methods without calling into JS. This succeeds if \p O is a
+/// JSArray with fast index properties and its indexed storage holds a value
+/// at index \p k. Such an element is an own data property, so it is present
+/// and Get returns the stored value.
+/// \p k must be below the length of \p O when the caller read it. A JSArray's
+/// length is at most 2^32 - 1, so \p k then fits in the storage's index type.
+/// This function does not allocate, so the caller can pass the result to a
+/// function without rooting it, as long as nothing allocates in between.
+/// \return the value of the element, or empty if the caller must use
+///   getElementGeneric() instead, for example for a hole or a non-array \p O.
+static inline HermesValue
+tryGetFastArrayElement(Runtime &runtime, JSObject *O, uint64_t k) {
+  auto *arr = dyn_vmcast<JSArray>(O);
+  // An array without fast index properties has index-like named properties
+  // (accessors, or elements with non-default attributes). Its non-empty slots
+  // would still be own data properties, since no element is stored both in
+  // the indexed storage and as a named property, but such arrays are rare, so
+  // leave them to the generic lookup. The check only reads the hidden class,
+  // and it matches the condition under which the generic lookup reads only the
+  // indexed storage.
+  if (LLVM_UNLIKELY(!arr || !arr->hasFastIndexProperties(runtime)))
+    return HermesValue::encodeEmptyValue();
+  assert(k < UINT32_MAX && "k must be below the length of a JSArray");
+  // An empty slot (a hole) unboxes to empty.
+  return arr->at(runtime, static_cast<uint32_t>(k)).unboxToHV(runtime);
+}
+
+/// Perform the HasProperty(O, k) and Get(O, k) steps of the array iteration
+/// methods for any object \p O: look up property \p k on \p O and its
+/// prototype chain, invoking getters and Proxy traps as needed. This is the
+/// fallback for tryGetFastArrayElement(). It is not inlined, so that the
+/// callers' loops stay small and do not reserve stack for its Locals.
+/// The handles that the lookup allocates, for example for a getter or a Proxy
+/// key, are released before returning. So they do not accumulate in the
+/// caller's GCScope, even when a callback re-enters the caller through native
+/// frames only, for example a forEach bound to an array.
+/// \return the value of the property, or empty if it is not present. The
+///   value is not rooted.
+LLVM_ATTRIBUTE_NOINLINE
+static CallResult<HermesValue>
+getElementGeneric(Runtime &runtime, Handle<JSObject> O, uint64_t k) {
+  struct : Locals {
+    PinnedValue<> key;
+    PinnedValue<JSObject> propObj;
+    PinnedValue<SymbolID> tmpPropNameStorage;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  // Flushed on return. The result is a plain HermesValue, which stays valid
+  // because flushing does not allocate.
+  GCScopeMarkerRAII marker{runtime};
+
+  lv.key = HermesValue::encodeTrustedNumberValue(k);
+  ComputedPropertyDescWithSymStorage desc{lv.tmpPropNameStorage};
+  if (LLVM_UNLIKELY(
+          JSObject::getComputedPrimitiveDescriptor(
+              O, runtime, lv.key, lv.propObj, desc) ==
+          ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  return JSObject::getComputedPropertyValue_RJS(
+             O, runtime, lv.propObj, desc.get(), lv.key)
+      .toCallResultHermesValue();
+}
+
+/// Perform the HasProperty(O, k) and Get(O, k) steps of the array iteration
+/// methods for any object \p O, using tryGetFastArrayElement() if possible and
+/// getElementGeneric() otherwise.
+/// \return the value of the property, or empty if it is not present. The
+///   value is not rooted.
+static inline CallResult<HermesValue>
+getElementIfPresent(Runtime &runtime, Handle<JSObject> O, uint64_t k) {
+  HermesValue value = tryGetFastArrayElement(runtime, *O, k);
+  if (LLVM_LIKELY(!value.isEmpty()))
+    return value;
+  return getElementGeneric(runtime, O, k);
+}
+
 HermesValue createArrayConstructor(Runtime &runtime) {
   auto arrayPrototype = Handle<JSArray>::vmcast(&runtime.arrayPrototype);
 
@@ -2190,76 +2268,81 @@ CallResult<HermesValue> arrayPrototypeSort(void *, Runtime &runtime) {
   return lv.O.getHermesValue();
 }
 
+/// ES2025 23.1.3.15 Array.prototype.forEach.
 inline CallResult<HermesValue> arrayPrototypeForEach(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   struct : Locals {
     PinnedValue<JSObject> O;
-    PinnedValue<> lenProp;
-    PinnedValue<> k;
-    PinnedValue<JSObject> descObj;
-    PinnedValue<SymbolID> tmpPropNameStorage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  GCScope gcScope(runtime);
-  auto objRes = toObject(runtime, args.getThisHandle());
-  if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  lv.O.castAndSetHermesValue<JSObject>(*objRes);
+  // Handles allocated below, for example by getters or native callbacks, are
+  // released on every iteration and on return.
+  GCScopeMarkerRAII marker{runtime};
 
-  auto propRes = JSObject::getNamed_RJS(
-      lv.O, runtime, Predefined::getSymbolID(Predefined::length));
-  if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
+  // 1. Let O be ? ToObject(this value).
+  // ToObject is the identity on objects, so it is only called for primitives.
+  if (LLVM_LIKELY(args.getThisArg().isObject())) {
+    lv.O.castAndSetHermesValue<JSObject>(args.getThisArg());
+  } else {
+    auto objRes = toObject(runtime, args.getThisHandle());
+    if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    lv.O.castAndSetHermesValue<JSObject>(*objRes);
   }
-  lv.lenProp = std::move(*propRes);
-  auto intRes = toLengthU64(runtime, lv.lenProp);
-  if (LLVM_UNLIKELY(intRes == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  uint64_t len = *intRes;
 
+  // 2. Let len be ? LengthOfArrayLike(O).
+  auto jsArr = vmisa<JSArray>(*lv.O) ? Handle<JSArray>::vmcast(&lv.O)
+                                     : Runtime::makeNullHandle<JSArray>();
+  auto lenRes = lengthOfArrayLike(runtime, lv.O, jsArr);
+  if (LLVM_UNLIKELY(lenRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  const uint64_t len = *lenRes;
+
+  // 3. If IsCallable(callbackfn) is false, throw a TypeError exception.
   auto callbackFn = args.dyncastArg<Callable>(0);
   if (!callbackFn) {
     return runtime.raiseTypeError(
         "Array.prototype.forEach() requires a callable argument");
   }
 
-  // Index to execute the callback on.
-  lv.k = HermesValue::encodeTrustedNumberValue(0);
+  // 4. Let k be 0.
+  // 5. Repeat, while k < len
+  for (uint64_t k = 0; k < len; ++k) {
+    marker.flush();
 
-  // Loop through and execute the callback on all existing values.
-  // TODO: Implement a fast path for actual arrays.
-  auto marker = gcScope.createMarker();
-  while (lv.k->getDouble() < len) {
-    gcScope.flushToMarker(marker);
-
-    ComputedPropertyDescWithSymStorage desc{lv.tmpPropNameStorage};
-    JSObject::getComputedPrimitiveDescriptor(
-        lv.O, runtime, lv.k, lv.descObj, desc);
-    CallResult<PseudoHandle<>> propRes = JSObject::getComputedPropertyValue_RJS(
-        lv.O, runtime, lv.descObj, desc.get(), lv.k);
-    if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
+    // 5a. Let Pk be ! ToString(𝔽(k)).
+    // 5b. Let kPresent be ? HasProperty(O, Pk).
+    // 5c. If kPresent is true, then
+    // 5c.i. Let kValue be ? Get(O, Pk).
+    // The callback may have modified O, for example shrunk it or added an
+    // accessor, so the fast path is checked again on every iteration.
+    CallResult<HermesValue> kValueRes = getElementIfPresent(runtime, lv.O, k);
+    if (LLVM_UNLIKELY(kValueRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    if (LLVM_LIKELY(!(*propRes)->isEmpty())) {
-      auto kValue = std::move(*propRes);
-      if (LLVM_UNLIKELY(
-              Callable::executeCall3(
-                  callbackFn,
-                  runtime,
-                  args.getArgHandle(1),
-                  kValue.get(),
-                  lv.k.get(),
-                  lv.O.getHermesValue()) == ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
-      }
-    }
+    // Skip the index if it is not present.
+    if (LLVM_UNLIKELY(kValueRes->isEmpty()))
+      continue;
 
-    lv.k = HermesValue::encodeTrustedNumberValue(lv.k->getDouble() + 1);
+    // 5c.ii. Perform ? Call(callbackfn, thisArg, « kValue, 𝔽(k), O »).
+    // kValue is not rooted, but executeCall3() stores it in the new frame
+    // before anything can allocate.
+    if (LLVM_UNLIKELY(
+            Callable::executeCall3(
+                callbackFn,
+                runtime,
+                args.getArgHandle(1),
+                *kValueRes,
+                HermesValue::encodeTrustedNumberValue(k),
+                lv.O.getHermesValue()) == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
   }
 
+  // 6. Return undefined.
   return HermesValue::encodeUndefinedValue();
 }
 
