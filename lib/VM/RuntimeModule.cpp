@@ -264,7 +264,12 @@ void RuntimeModule::initializeFunctionMap() {
 
 ExecutionStatus RuntimeModule::importCJSModuleTable() {
   PerfSection perf("Import CJS Module Table");
-  return Domain::importCJSModuleTable(getDomain(runtime_), runtime_, this);
+  struct : public Locals {
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii(runtime_, &lv);
+  lv.domain = getDomainUnsafe(runtime_);
+  return Domain::importCJSModuleTable(lv.domain, runtime_, this);
 }
 
 StringPrimitive *RuntimeModule::getStringPrimFromStringIDMayAllocate(
@@ -342,8 +347,8 @@ SymbolID RuntimeModule::mapStringMayAllocate(
     // Accessing a symbol non-lazily may allocate in the GC heap, so add a scope
     // marker.
     GCScopeMarkerRAII scopeMarker{runtime_};
-    id = *runtime_.ignoreAllocationFailure(
-        runtime_.getIdentifierTable().getSymbolHandle(runtime_, str, hash));
+    id = runtime_.ignoreAllocationFailure(
+        runtime_.getIdentifierTable().getSymbolID(runtime_, str, hash));
   }
   stringIDMap_[stringID] = RootSymbolID(id);
   return id;

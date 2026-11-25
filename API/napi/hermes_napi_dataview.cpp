@@ -88,20 +88,17 @@ napi_status NAPI_CDECL napi_get_dataview_info(
     *byte_offset = dv->byteOffset();
   }
 
-  // getBuffer() returns Handle<JSArrayBuffer> which allocates in
-  // the current GCScope, so we need one if data or arraybuffer is
-  // requested.
   if (data != nullptr || arraybuffer != nullptr) {
     GCScope gcScope(runtime);
 
     if (dv->attached(runtime)) {
-      auto bufHandle = dv->getBuffer(runtime);
+      JSArrayBuffer *buf = dv->getBuffer(runtime);
       if (data != nullptr) {
-        *data = bufHandle->getDataBlock() + dv->byteOffset();
+        *data = buf->getDataBlock() + dv->byteOffset();
       }
       if (arraybuffer != nullptr) {
-        *arraybuffer = env->addToCurrentScope(
-            HermesValue::encodeObjectValue(bufHandle.get()));
+        *arraybuffer =
+            env->addToCurrentScope(HermesValue::encodeObjectValue(buf));
       }
     } else {
       if (data != nullptr) {

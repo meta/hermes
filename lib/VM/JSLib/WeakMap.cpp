@@ -19,6 +19,7 @@ HermesValue createWeakMapConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -73,11 +74,12 @@ HermesValue createWeakMapConstructor(Runtime &runtime) {
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::WeakMap);
   defineProperty(
       runtime,
       weakMapPrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::WeakMap),
+      lv.str,
       dpf);
 
   defineSystemConstructor(
@@ -109,6 +111,7 @@ CallResult<HermesValue> weakMapConstructor(void *, Runtime &runtime) {
   struct : public Locals {
     PinnedValue<JSObject> selfParent;
     PinnedValue<JSWeakMap> self;
+    PinnedValue<JSObject> next;
     PinnedValue<JSObject> nextItem;
     PinnedValue<> keyHandle;
     PinnedValue<> valueHandle;
@@ -169,8 +172,9 @@ CallResult<HermesValue> weakMapConstructor(void *, Runtime &runtime) {
     if (!*nextRes) {
       return lv.self.getHermesValue();
     }
+    lv.next = std::move(*nextRes);
     auto nextItemRes = JSObject::getNamed_RJS(
-        *nextRes, runtime, Predefined::getSymbolID(Predefined::value));
+        lv.next, runtime, Predefined::getSymbolID(Predefined::value));
     if (LLVM_UNLIKELY(nextItemRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }

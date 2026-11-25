@@ -30,7 +30,9 @@ struct ProxySlots {
 
 detail::ProxySlots &slots(JSObject *selfHandle);
 
-CallResult<Handle<Callable>>
+/// \return the trap \p name of the proxy \p selfHandle, or a null
+/// PseudoHandle if the handler does not define it.
+CallResult<PseudoHandle<Callable>>
 findTrap(Handle<JSObject> selfHandle, Runtime &runtime, Predefined::Str name);
 
 } // namespace detail

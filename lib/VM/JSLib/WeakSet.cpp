@@ -19,6 +19,7 @@ HermesValue createWeakSetConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -49,11 +50,12 @@ HermesValue createWeakSetConstructor(Runtime &runtime) {
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::WeakSet);
   defineProperty(
       runtime,
       weakSetPrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::WeakSet),
+      lv.str,
       dpf);
 
   defineSystemConstructor(
@@ -86,6 +88,7 @@ CallResult<HermesValue> weakSetConstructor(void *, Runtime &runtime) {
     PinnedValue<JSObject> selfParent;
     PinnedValue<JSWeakSet> self;
     PinnedValue<Callable> adder;
+    PinnedValue<JSObject> next;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   if (LLVM_LIKELY(
@@ -134,7 +137,7 @@ CallResult<HermesValue> weakSetConstructor(void *, Runtime &runtime) {
   auto marker = gcScope.createMarker();
   for (;;) {
     gcScope.flushToMarker(marker);
-    CallResult<Handle<JSObject>> nextRes =
+    CallResult<PseudoHandle<JSObject>> nextRes =
         iteratorStep(runtime, iteratorRecord);
     if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -143,8 +146,9 @@ CallResult<HermesValue> weakSetConstructor(void *, Runtime &runtime) {
       // Done with iteration.
       return lv.self.getHermesValue();
     }
+    lv.next = std::move(*nextRes);
     auto nextValueRes = JSObject::getNamed_RJS(
-        *nextRes, runtime, Predefined::getSymbolID(Predefined::value));
+        lv.next, runtime, Predefined::getSymbolID(Predefined::value));
     if (LLVM_UNLIKELY(nextValueRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }

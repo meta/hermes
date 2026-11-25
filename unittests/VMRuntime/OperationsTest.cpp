@@ -109,12 +109,9 @@ TEST_F(OperationsTest, IsSameValueTest) {
   v2 = HermesValue::encodeObjectValue(obj1.get());
   IsSameValueTest(TRUE, v1, v2);
 
-  auto s1 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hello world"));
-  auto s2 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hello world"));
-  auto s3 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hi earth"));
+  auto s1 = createNoThrowForTest(runtime, createUTF16Ref(u"hello world"));
+  auto s2 = createNoThrowForTest(runtime, createUTF16Ref(u"hello world"));
+  auto s3 = createNoThrowForTest(runtime, createUTF16Ref(u"hi earth"));
 
   v1 = HermesValue::encodeStringValue(s1.get());
   v2 = HermesValue::encodeStringValue(s2.get());
@@ -133,9 +130,9 @@ TEST_F(OperationsTest, IsSameValueTest) {
   v2 = HermesValue::encodeTrustedNumberValue(0);
   IsSameValueTest(FALSE, v1, v2);
 
-  auto b1 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
-  auto b2 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
-  auto b3 = BigIntPrimitive::fromSignedNoThrow(runtime, -22);
+  auto b1 = fromSignedNoThrowForTest(runtime, 1);
+  auto b2 = fromSignedNoThrowForTest(runtime, 1);
+  auto b3 = fromSignedNoThrowForTest(runtime, -22);
 
   v1 = HermesValue::encodeBigIntValue(b1.get());
   v2 = HermesValue::encodeBigIntValue(b2.get());
@@ -244,25 +241,21 @@ TEST_F(OperationsTest, AbstractEqualityTest) {
   v2 = HermesValue::encodeObjectValue(obj1.get());
   AbstractEqualityTest(TRUE, v1, v2);
 
-  auto s1 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hello world"));
-  auto s2 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hello world"));
-  auto s3 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hi earth"));
+  auto s1 = createNoThrowForTest(runtime, createUTF16Ref(u"hello world"));
+  auto s2 = createNoThrowForTest(runtime, createUTF16Ref(u"hello world"));
+  auto s3 = createNoThrowForTest(runtime, createUTF16Ref(u"hi earth"));
   v1 = HermesValue::encodeStringValue(s1.get());
   v2 = HermesValue::encodeStringValue(s2.get());
   v3 = HermesValue::encodeStringValue(s3.get());
   AbstractEqualityTest(TRUE, v1, v2);
   AbstractEqualityTest(FALSE, v1, v3);
 
-  auto s4 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"1000"));
+  auto s4 = createNoThrowForTest(runtime, createUTF16Ref(u"1000"));
   v1 = HermesValue::encodeStringValue(s4.get());
   v2 = HermesValue::encodeTrustedNumberValue(1000);
   AbstractEqualityTest(TRUE, v1, v2);
 
-  auto s5 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"Infinity"));
+  auto s5 = createNoThrowForTest(runtime, createUTF16Ref(u"Infinity"));
   v1 = HermesValue::encodeStringValue(s5.get());
   v2 = HermesValue::encodeTrustedNumberValue(
       std::numeric_limits<double>::infinity());
@@ -282,7 +275,7 @@ TEST_F(OperationsTest, AbstractEqualityTest) {
 
   // BigInt tests
   // 0n does not equal null, undefined
-  auto bigint0 = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
+  auto bigint0 = fromSignedNoThrowForTest(runtime, 0);
   v1 = HermesValue::encodeBigIntValue(bigint0.get());
   v2 = HermesValue::encodeNullValue();
   AbstractEqualityTest(FALSE, v1, v2);
@@ -292,7 +285,7 @@ TEST_F(OperationsTest, AbstractEqualityTest) {
   AbstractEqualityTest(FALSE, v1, v2);
 
   // 0n equals bigint created with no bytes
-  auto bigintNoBytes = BigIntPrimitive::fromBytesNoThrow(runtime, {});
+  auto bigintNoBytes = fromBytesNoThrowForTest(runtime, {});
   v1 = HermesValue::encodeBigIntValue(bigint0.get());
   v2 = HermesValue::encodeBigIntValue(bigintNoBytes.get());
   AbstractEqualityTest(TRUE, v1, v2);
@@ -302,12 +295,12 @@ TEST_F(OperationsTest, AbstractEqualityTest) {
   v2 = HermesValue::encodeBoolValue(false);
   AbstractEqualityTest(TRUE, v1, v2);
 
-  auto s0 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"0"));
+  auto s0 = createNoThrowForTest(runtime, createUTF16Ref(u"0"));
   v1 = HermesValue::encodeBigIntValue(bigint0.get());
   v2 = HermesValue::encodeStringValue(s0.get());
   AbstractEqualityTest(TRUE, v1, v2);
 
-  auto sEmpty = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u""));
+  auto sEmpty = createNoThrowForTest(runtime, createUTF16Ref(u""));
   v1 = HermesValue::encodeBigIntValue(bigint0.get());
   v2 = HermesValue::encodeStringValue(sEmpty.get());
   AbstractEqualityTest(TRUE, v1, v2);
@@ -325,8 +318,8 @@ TEST_F(OperationsTest, AbstractEqualityTest) {
   AbstractEqualityTest(TRUE, v1, v2);
 
   // 1n equals true, "1", 1
-  auto bigint1 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
-  s1 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"1"));
+  auto bigint1 = fromSignedNoThrowForTest(runtime, 1);
+  s1 = createNoThrowForTest(runtime, createUTF16Ref(u"1"));
 
   v1 = HermesValue::encodeBigIntValue(bigint1.get());
   v2 = HermesValue::encodeBoolValue(true);
@@ -342,23 +335,23 @@ TEST_F(OperationsTest, AbstractEqualityTest) {
 
   // Other tests
   auto bigint0x00ffff00ffff00 =
-      BigIntPrimitive::fromSignedNoThrow(runtime, 0x0000ffff00ffff00ll);
+      fromSignedNoThrowForTest(runtime, 0x0000ffff00ffff00ll);
   uint8_t bigint00ffff00ffff00Bytes[] = {
       0x00, 0xff, 0xff, 0x00, 0xff, 0xff, 0x00};
   auto bigint00ffff00ffff00 =
-      BigIntPrimitive::fromBytesNoThrow(runtime, bigint00ffff00ffff00Bytes);
+      fromBytesNoThrowForTest(runtime, bigint00ffff00ffff00Bytes);
   v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
   v2 = HermesValue::encodeBigIntValue(bigint00ffff00ffff00.get());
   AbstractEqualityTest(TRUE, v1, v2);
 
-  auto s281470698520320 = StringPrimitive::createNoThrow(
-      runtime, createUTF16Ref(u"281470698520320"));
+  auto s281470698520320 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"281470698520320"));
   v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
   v2 = HermesValue::encodeStringValue(s281470698520320.get());
   AbstractEqualityTest(TRUE, v1, v2);
 
-  auto s281470698520320_0 = StringPrimitive::createNoThrow(
-      runtime, createUTF16Ref(u"281470698520320.0"));
+  auto s281470698520320_0 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"281470698520320.0"));
   v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
   v2 = HermesValue::encodeStringValue(s281470698520320_0.get());
   AbstractEqualityTest(FALSE, v1, v2);
@@ -460,12 +453,9 @@ TEST_F(OperationsTest, StrictEquaityTest) {
   v2 = HermesValue::encodeObjectValue(obj1.get());
   StrictEqualityTest(TRUE, v1, v2);
 
-  auto s1 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hello world"));
-  auto s2 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hello world"));
-  auto s3 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hi earth"));
+  auto s1 = createNoThrowForTest(runtime, createUTF16Ref(u"hello world"));
+  auto s2 = createNoThrowForTest(runtime, createUTF16Ref(u"hello world"));
+  auto s3 = createNoThrowForTest(runtime, createUTF16Ref(u"hi earth"));
 
   v1 = HermesValue::encodeStringValue(s1.get());
   v2 = HermesValue::encodeStringValue(s2.get());
@@ -475,7 +465,7 @@ TEST_F(OperationsTest, StrictEquaityTest) {
 
   // BigInt tests
   // 0n does not equal null, undefined
-  auto bigint0 = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
+  auto bigint0 = fromSignedNoThrowForTest(runtime, 0);
   v1 = HermesValue::encodeBigIntValue(bigint0.get());
   v2 = HermesValue::encodeNullValue();
   StrictEqualityTest(FALSE, v1, v2);
@@ -485,7 +475,7 @@ TEST_F(OperationsTest, StrictEquaityTest) {
   StrictEqualityTest(FALSE, v1, v2);
 
   // 0n equals bigint created with no bytes
-  auto bigintNoBytes = BigIntPrimitive::fromBytesNoThrow(runtime, {});
+  auto bigintNoBytes = fromBytesNoThrowForTest(runtime, {});
   v1 = HermesValue::encodeBigIntValue(bigint0.get());
   v2 = HermesValue::encodeBigIntValue(bigintNoBytes.get());
   StrictEqualityTest(TRUE, v1, v2);
@@ -495,12 +485,12 @@ TEST_F(OperationsTest, StrictEquaityTest) {
   v2 = HermesValue::encodeBoolValue(false);
   StrictEqualityTest(FALSE, v1, v2);
 
-  auto s0 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"0"));
+  auto s0 = createNoThrowForTest(runtime, createUTF16Ref(u"0"));
   v1 = HermesValue::encodeBigIntValue(bigint0.get());
   v2 = HermesValue::encodeStringValue(s0.get());
   StrictEqualityTest(FALSE, v1, v2);
 
-  auto sEmpty = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u""));
+  auto sEmpty = createNoThrowForTest(runtime, createUTF16Ref(u""));
   v1 = HermesValue::encodeBigIntValue(bigint0.get());
   v2 = HermesValue::encodeStringValue(sEmpty.get());
   StrictEqualityTest(FALSE, v1, v2);
@@ -518,8 +508,8 @@ TEST_F(OperationsTest, StrictEquaityTest) {
   StrictEqualityTest(FALSE, v1, v2);
 
   // 1n is not strictly equal to true, "1", 1
-  auto bigint1 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
-  s1 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"1"));
+  auto bigint1 = fromSignedNoThrowForTest(runtime, 1);
+  s1 = createNoThrowForTest(runtime, createUTF16Ref(u"1"));
 
   v1 = HermesValue::encodeBigIntValue(bigint1.get());
   v2 = HermesValue::encodeBoolValue(true);
@@ -535,23 +525,23 @@ TEST_F(OperationsTest, StrictEquaityTest) {
 
   // Other tests
   auto bigint0x00ffff00ffff00 =
-      BigIntPrimitive::fromSignedNoThrow(runtime, 0x0000ffff00ffff00ll);
+      fromSignedNoThrowForTest(runtime, 0x0000ffff00ffff00ll);
   uint8_t bigint00ffff00ffff00Bytes[] = {
       0x00, 0xff, 0xff, 0x00, 0xff, 0xff, 0x00};
   auto bigint00ffff00ffff00 =
-      BigIntPrimitive::fromBytesNoThrow(runtime, bigint00ffff00ffff00Bytes);
+      fromBytesNoThrowForTest(runtime, bigint00ffff00ffff00Bytes);
   v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
   v2 = HermesValue::encodeBigIntValue(bigint00ffff00ffff00.get());
   StrictEqualityTest(TRUE, v1, v2);
 
-  auto s281470698520320 = StringPrimitive::createNoThrow(
-      runtime, createUTF16Ref(u"281470698520320"));
+  auto s281470698520320 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"281470698520320"));
   v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
   v2 = HermesValue::encodeStringValue(s281470698520320.get());
   StrictEqualityTest(FALSE, v1, v2);
 
-  auto s281470698520320_0 = StringPrimitive::createNoThrow(
-      runtime, createUTF16Ref(u"281470698520320.0"));
+  auto s281470698520320_0 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"281470698520320.0"));
   v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
   v2 = HermesValue::encodeStringValue(s281470698520320_0.get());
   StrictEqualityTest(FALSE, v1, v2);
@@ -579,8 +569,7 @@ TEST_F(OperationsTest, IsPrimitiveTest) {
   v = HermesValue::encodeTrustedNumberValue(1.21);
   EXPECT_TRUE(isPrimitive(v));
 
-  auto s =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hello world"));
+  auto s = createNoThrowForTest(runtime, createUTF16Ref(u"hello world"));
   v = HermesValue::encodeStringValue(s.get());
   EXPECT_TRUE(isPrimitive(v));
 
@@ -602,22 +591,21 @@ TEST_F(OperationsTest, ToBooleanTest) {
   }
 
   {
-    auto empty = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u""));
+    auto empty = createNoThrowForTest(runtime, createUTF16Ref(u""));
     EXPECT_FALSE(toBoolean(HermesValue::encodeStringValue(empty.get())));
 
-    auto full =
-        StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"full"));
+    auto full = createNoThrowForTest(runtime, createUTF16Ref(u"full"));
     EXPECT_TRUE(toBoolean(HermesValue::encodeStringValue(full.get())));
   }
 
   {
-    auto bigint12 = BigIntPrimitive::fromSignedNoThrow(runtime, 12);
+    auto bigint12 = fromSignedNoThrowForTest(runtime, 12);
     EXPECT_TRUE(toBoolean(HermesValue::encodeBigIntValue(bigint12.get())));
 
-    auto bigint0 = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
+    auto bigint0 = fromSignedNoThrowForTest(runtime, 0);
     EXPECT_FALSE(toBoolean(HermesValue::encodeBigIntValue(bigint0.get())));
 
-    auto bigintMinus42 = BigIntPrimitive::fromSignedNoThrow(runtime, -42);
+    auto bigintMinus42 = fromSignedNoThrowForTest(runtime, -42);
     EXPECT_TRUE(toBoolean(HermesValue::encodeBigIntValue(bigintMinus42.get())));
   }
 
@@ -663,10 +651,9 @@ TEST_F(OperationsTest, ToStringTest) {
 
   // Strings
   {
-    auto str1 =
-        StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"asdf"));
+    auto str1 = createNoThrowForTest(runtime, createUTF16Ref(u"asdf"));
     ToStringTest(u"asdf", HermesValue::encodeStringValue(str1.get()));
-    auto str2 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u""));
+    auto str2 = createNoThrowForTest(runtime, createUTF16Ref(u""));
     ToStringTest(u"", HermesValue::encodeStringValue(str2.get()));
   }
 
@@ -729,16 +716,14 @@ TEST_F(OperationsTest, ToStringTest) {
 
 #define StringToNumericTest(result, string)                               \
   {                                                                       \
-    auto strPrim =                                                        \
-        StringPrimitive::createNoThrow(runtime, createUTF16Ref(string));  \
+    auto strPrim = createNoThrowForTest(runtime, createUTF16Ref(string)); \
     ToNumericTest(result, HermesValue::encodeStringValue(strPrim.get())); \
   }
 
-#define InvalidStringToNumericTest(string)                               \
-  {                                                                      \
-    auto strPrim =                                                       \
-        StringPrimitive::createNoThrow(runtime, createUTF16Ref(string)); \
-    InvalidToNumericTest(HermesValue::encodeStringValue(strPrim.get())); \
+#define InvalidStringToNumericTest(string)                                \
+  {                                                                       \
+    auto strPrim = createNoThrowForTest(runtime, createUTF16Ref(string)); \
+    InvalidToNumericTest(HermesValue::encodeStringValue(strPrim.get()));  \
   }
 
 #define BigIntToNumericTest(result, value)                      \
@@ -764,12 +749,12 @@ TEST_F(OperationsTest, ToNumericTest) {
   InvalidStringToNumericTest(u"0n");
 
   {
-    auto bigintPrim = BigIntPrimitive::fromSignedNoThrow(runtime, 12);
+    auto bigintPrim = fromSignedNoThrowForTest(runtime, 12);
     BigIntToNumericTest(bigintPrim.get(), bigintPrim.get());
   }
 
   {
-    auto bigintPrim = BigIntPrimitive::fromSignedNoThrow(runtime, 42);
+    auto bigintPrim = fromSignedNoThrowForTest(runtime, 42);
     auto bigintBoxed = toObject(runtime, bigintPrim);
     BigIntToNumericTest(bigintPrim.get(), *bigintBoxed);
   }
@@ -792,18 +777,16 @@ TEST_F(OperationsTest, ToNumericTest) {
     EXPECT_TRUE(std::isnan(res->getDouble()));             \
   }
 
-#define StringToNumberTest(result, string)                               \
-  {                                                                      \
-    auto strPrim =                                                       \
-        StringPrimitive::createNoThrow(runtime, createUTF16Ref(string)); \
-    ToNumberTest(result, HermesValue::encodeStringValue(strPrim.get())); \
+#define StringToNumberTest(result, string)                                \
+  {                                                                       \
+    auto strPrim = createNoThrowForTest(runtime, createUTF16Ref(string)); \
+    ToNumberTest(result, HermesValue::encodeStringValue(strPrim.get()));  \
   }
 
-#define InvalidStringToNumberTest(string)                                \
-  {                                                                      \
-    auto strPrim =                                                       \
-        StringPrimitive::createNoThrow(runtime, createUTF16Ref(string)); \
-    InvalidToNumberTest(HermesValue::encodeStringValue(strPrim.get()));  \
+#define InvalidStringToNumberTest(string)                                 \
+  {                                                                       \
+    auto strPrim = createNoThrowForTest(runtime, createUTF16Ref(string)); \
+    InvalidToNumberTest(HermesValue::encodeStringValue(strPrim.get()));   \
   }
 
 using OperationsLargeHeapTest = LargeHeapRuntimeTestFixture;
@@ -900,8 +883,8 @@ TEST_F(OperationsLargeHeapTest, ToNumberTest) {
 
   // Big hex number
   {
-    auto str = StringPrimitive::createNoThrow(
-        runtime, createUTF16Ref(u"0xFFFFFFFFFFFFFFFF"));
+    auto str =
+        createNoThrowForTest(runtime, createUTF16Ref(u"0xFFFFFFFFFFFFFFFF"));
     auto scopedVal =
         runtime.makeHandle(HermesValue::encodeStringValue(str.get()));
     res = toNumber_RJS(runtime, scopedVal);
@@ -936,7 +919,7 @@ TEST_F(OperationsLargeHeapTest, ToNumberTest) {
 
   // BigInt
   {
-    auto bigintPrim = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
+    auto bigintPrim = fromSignedNoThrowForTest(runtime, 0);
     Handle<> hBigInt =
         runtime.makeHandle(HermesValue::encodeBigIntValue(bigintPrim.get()));
     res = toNumber_RJS(runtime, hBigInt);
@@ -1149,7 +1132,7 @@ TEST_F(OperationsTest, ToObjectTest) {
 
   {
     auto strRef = createUTF16Ref(u"hello");
-    auto str = StringPrimitive::createNoThrow(runtime, strRef);
+    auto str = createNoThrowForTest(runtime, strRef);
     auto scopedVal =
         runtime.makeHandle(HermesValue::encodeStringValue(str.get()));
     auto res = toObject(runtime, scopedVal);
@@ -1164,7 +1147,7 @@ TEST_F(OperationsTest, ToObjectTest) {
   }
 
   {
-    auto bigint = BigIntPrimitive::fromSignedNoThrow(runtime, 0x7ffffffe);
+    auto bigint = fromSignedNoThrowForTest(runtime, 0x7ffffffe);
     auto scopedVal =
         runtime.makeHandle(HermesValue::encodeBigIntValue(bigint.get()));
     auto res = toObject(runtime, scopedVal);
@@ -1199,10 +1182,9 @@ TEST_F(OperationsTest, typeOfTest) {
   TypeOfTest(u"number", HermesValue::encodeTrustedNumberValue(+0.0));
   TypeOfTest(u"number", HermesValue::encodeNaNValue());
 
-  TypeOfTest(
-      u"string", *StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"")));
+  TypeOfTest(u"string", *createNoThrowForTest(runtime, createUTF16Ref(u"")));
 
-  TypeOfTest(u"bigint", *BigIntPrimitive::fromSignedNoThrow(runtime, 0));
+  TypeOfTest(u"bigint", *fromSignedNoThrowForTest(runtime, 0));
 
   TypeOfTest(
       u"symbol", HermesValue::encodeSymbolValue(SymbolID::unsafeCreate(1)));
@@ -1241,10 +1223,10 @@ TEST_F(OperationsTest, getPrimitivePrototypeTest) {
 
   GetPrimitivePrototypeTest(
       runtime.stringPrototype,
-      *StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"")));
+      *createNoThrowForTest(runtime, createUTF16Ref(u"")));
 
   GetPrimitivePrototypeTest(
-      runtime.bigintPrototype, *BigIntPrimitive::fromSignedNoThrow(runtime, 0));
+      runtime.bigintPrototype, *fromSignedNoThrowForTest(runtime, 0));
 
   GetPrimitivePrototypeTest(
       runtime.symbolPrototype,
@@ -1279,8 +1261,8 @@ TEST_F(OperationsTest, AdditionTest) {
   GCScope gcScope{runtime, "OperationsTest.AdditionTest", 128};
 
   {
-    auto a = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abc"));
-    auto b = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"def"));
+    auto a = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
+    auto b = createNoThrowForTest(runtime, createUTF16Ref(u"def"));
     auto aHandle = runtime.makeHandle(HermesValue::encodeStringValue(a.get()));
     auto bHandle = runtime.makeHandle(HermesValue::encodeStringValue(b.get()));
     res = addOp_RJS(runtime, aHandle, bHandle);
@@ -1294,8 +1276,7 @@ TEST_F(OperationsTest, AdditionTest) {
   }
 
   {
-    auto a =
-        StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"number: "));
+    auto a = createNoThrowForTest(runtime, createUTF16Ref(u"number: "));
     auto aHandle = runtime.makeHandle(HermesValue::encodeStringValue(a.get()));
     auto bHandle =
         runtime.makeHandle(HermesValue::encodeTrustedNumberValue(1.4));

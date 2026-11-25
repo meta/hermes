@@ -43,7 +43,7 @@ TEST_F(FinalizationRegistryTest, RegisterAndUnregisterTest) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  lv.callable = *NativeFunction::create(
+  lv.callable = NativeFunction::create(
       runtime,
       nullptr,
       noopCallback,
@@ -83,7 +83,7 @@ TEST_F(FinalizationRegistryTest, RegisterAndUnregisterTest) {
   // Test with Symbol Target
   lv.heldValue = JSObject::create(runtime);
   heldValue.set(SmallHermesValue::encodeObjectValue(*lv.heldValue, runtime));
-  auto desc = StringPrimitive::createNoThrow(runtime, "test");
+  auto desc = createNoThrowForTest(runtime, "test");
   auto sym = runtime.getIdentifierTable().createNotUniquedSymbol(runtime, desc);
   lv.target = HermesValue::encodeSymbolValue(*sym);
   lv.unregisterToken = JSObject::create(runtime);
@@ -127,8 +127,7 @@ TEST_F(FinalizationRegistryTest, CleanupTest) {
   )#");
   lv.callable.castAndSetHermesValue<Callable>(*callableRes);
 
-  auto counterSym = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("counter"));
+  auto counterSym = *getSymbolHandleForTest(runtime, createASCIIRef("counter"));
   auto getCounter = [this, counterSym]() {
     auto result =
         JSObject::getNamed_RJS(runtime.getGlobal(), runtime, *counterSym);
@@ -152,7 +151,7 @@ TEST_F(FinalizationRegistryTest, CleanupTest) {
   ASSERT_EQ(getCounter(), 2);
 
   for (size_t i = 0; i < 3; ++i) {
-    auto desc = StringPrimitive::createNoThrow(runtime, "test");
+    auto desc = createNoThrowForTest(runtime, "test");
     auto sym =
         runtime.getIdentifierTable().createNotUniquedSymbol(runtime, desc);
     lv.target = HermesValue::encodeSymbolValue(*sym);
@@ -171,7 +170,7 @@ TEST_F(FinalizationRegistryTest, CleanupTest) {
       lv.fr, runtime, lv.target, lv.heldValue, lv.unregisterToken);
   ASSERT_TRUE(lv.fr->unregisterCells(runtime, lv.unregisterToken));
 
-  auto desc = StringPrimitive::createNoThrow(runtime, "test");
+  auto desc = createNoThrowForTest(runtime, "test");
   auto sym = runtime.getIdentifierTable().createNotUniquedSymbol(runtime, desc);
   lv.target = HermesValue::encodeSymbolValue(*sym);
   JSFinalizationRegistry::registerCell(
@@ -212,8 +211,7 @@ TEST_F(FinalizationRegistryTest, IndexReuseTest) {
   ASSERT_FALSE(isException(callableRes));
   lv.callable.castAndSetHermesValue<Callable>(*callableRes);
 
-  auto counterSym = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("counter"));
+  auto counterSym = *getSymbolHandleForTest(runtime, createASCIIRef("counter"));
   auto getCounter = [this, counterSym]() {
     auto result =
         JSObject::getNamed_RJS(runtime.getGlobal(), runtime, *counterSym);

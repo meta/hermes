@@ -18,6 +18,11 @@ namespace hermes {
 namespace vm {
 
 void populateCallSitePrototype(Runtime &runtime) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   auto callSitePrototype = Handle<JSObject>::vmcast(&runtime.callSitePrototype);
 
   // CallSite.prototype.xxx methods.
@@ -144,11 +149,12 @@ void populateCallSitePrototype(Runtime &runtime) {
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::CallSite);
   defineProperty(
       runtime,
       callSitePrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::CallSite),
+      lv.str,
       dpf);
 }
 

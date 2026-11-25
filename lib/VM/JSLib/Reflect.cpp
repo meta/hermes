@@ -224,6 +224,7 @@ CallResult<HermesValue> reflectSetPrototypeOf(void *, Runtime &runtime) {
 void createReflectObject(Runtime &runtime, MutableHandle<JSObject> result) {
   struct : public Locals {
     PinnedValue<JSObject> reflect;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.reflect = JSObject::create(runtime);
@@ -259,11 +260,12 @@ void createReflectObject(Runtime &runtime, MutableHandle<JSObject> result) {
   dpf.writable = 0;
   dpf.enumerable = 0;
   dpf.configurable = 1;
+  lv.str = runtime.getPredefinedString(Predefined::Reflect);
   defineProperty(
       runtime,
       lv.reflect,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::Reflect),
+      lv.str,
       dpf);
 
   result.castAndSetHermesValue<JSObject>(lv.reflect.getHermesValue());

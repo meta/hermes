@@ -680,6 +680,7 @@ void defineIntlCollator(Runtime &runtime, Handle<JSObject> intl) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> constructor;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -727,11 +728,12 @@ void defineIntlCollator(Runtime &runtime, Handle<JSObject> intl) {
     dpf.writable = 0;
     dpf.enumerable = 0;
 
+    lv.str = runtime.getPredefinedString(Predefined::IntlCollator);
     defineProperty(
         runtime,
         prototype,
         Predefined::getSymbolID(Predefined::SymbolToStringTag),
-        runtime.getPredefinedStringHandle(Predefined::IntlCollator),
+        lv.str,
         dpf);
   }
 
@@ -823,6 +825,11 @@ CallResult<HermesValue> intlCollatorPrototypeCompareGetter(
     return ExecutionStatus::EXCEPTION;
   }
 
+  struct : public Locals {
+    PinnedValue<NativeFunction> bound;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   PseudoHandle<NativeFunction> boundCompare =
       getBoundCompare(*collatorHandle, runtime);
   if (boundCompare) {
@@ -832,7 +839,7 @@ CallResult<HermesValue> intlCollatorPrototypeCompareGetter(
   static_assert(
       (unsigned)CollatorCompareSlotIndexes::COUNT == 1,
       "can only reserve 1 slot");
-  Handle<NativeFunction> compare = NativeFunction::create(
+  lv.bound = NativeFunction::create(
       runtime,
       runtime.functionPrototype,
       runtime.classNativeFunction1Reserved,
@@ -842,11 +849,11 @@ CallResult<HermesValue> intlCollatorPrototypeCompareGetter(
       Predefined::getSymbolID(Predefined::emptyString),
       2,
       Runtime::makeNullHandle<JSObject>());
-  setCollator(compare, runtime, collatorHandle);
+  setCollator(createPseudoHandle(*lv.bound), runtime, collatorHandle);
 
-  setBoundCompare(*collatorHandle, runtime, compare);
+  setBoundCompare(*collatorHandle, runtime, createPseudoHandle(*lv.bound));
 
-  return compare.getHermesValue();
+  return lv.bound.getHermesValue();
 }
 
 CallResult<HermesValue> intlCollatorPrototypeResolvedOptions(
@@ -927,6 +934,7 @@ void defineIntlDateTimeFormat(Runtime &runtime, Handle<JSObject> intl) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> constructor;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -974,11 +982,12 @@ void defineIntlDateTimeFormat(Runtime &runtime, Handle<JSObject> intl) {
     dpf.writable = 0;
     dpf.enumerable = 0;
 
+    lv.str = runtime.getPredefinedString(Predefined::IntlDateTimeFormat);
     defineProperty(
         runtime,
         prototype,
         Predefined::getSymbolID(Predefined::SymbolToStringTag),
-        runtime.getPredefinedStringHandle(Predefined::IntlDateTimeFormat),
+        lv.str,
         dpf);
   }
 
@@ -1116,6 +1125,11 @@ CallResult<HermesValue> intlDateTimeFormatPrototypeFormatGetter(
     return ExecutionStatus::EXCEPTION;
   }
 
+  struct : public Locals {
+    PinnedValue<NativeFunction> bound;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   PseudoHandle<NativeFunction> boundFormat =
       getDTFBoundFormat(dateTimeFormatHandle, runtime);
   if (boundFormat) {
@@ -1124,7 +1138,7 @@ CallResult<HermesValue> intlDateTimeFormatPrototypeFormatGetter(
 
   static_assert(
       (unsigned)DTFFormatSlotIndexes::COUNT == 1, "can only reserve 1 slot");
-  Handle<NativeFunction> format = NativeFunction::create(
+  lv.bound = NativeFunction::create(
       runtime,
       runtime.functionPrototype,
       runtime.classNativeFunction1Reserved,
@@ -1134,11 +1148,13 @@ CallResult<HermesValue> intlDateTimeFormatPrototypeFormatGetter(
       Predefined::getSymbolID(Predefined::emptyString),
       1,
       Runtime::makeNullHandle<JSObject>());
-  setDateTimeFormat(format, runtime, dateTimeFormatHandle);
+  setDateTimeFormat(
+      createPseudoHandle(*lv.bound), runtime, dateTimeFormatHandle);
 
-  setDTFBoundFormat(dateTimeFormatHandle, runtime, format);
+  setDTFBoundFormat(
+      dateTimeFormatHandle, runtime, createPseudoHandle(*lv.bound));
 
-  return format.getHermesValue();
+  return lv.bound.getHermesValue();
 }
 
 CallResult<HermesValue> intlDateTimeFormatPrototypeFormatToParts(
@@ -1244,6 +1260,7 @@ void defineIntlNumberFormat(Runtime &runtime, Handle<JSObject> intl) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> constructor;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1291,11 +1308,12 @@ void defineIntlNumberFormat(Runtime &runtime, Handle<JSObject> intl) {
     dpf.writable = 0;
     dpf.enumerable = 0;
 
+    lv.str = runtime.getPredefinedString(Predefined::IntlNumberFormat);
     defineProperty(
         runtime,
         prototype,
         Predefined::getSymbolID(Predefined::SymbolToStringTag),
-        runtime.getPredefinedStringHandle(Predefined::IntlNumberFormat),
+        lv.str,
         dpf);
   }
 
@@ -1398,6 +1416,11 @@ CallResult<HermesValue> intlNumberFormatPrototypeFormatGetter(
     return ExecutionStatus::EXCEPTION;
   }
 
+  struct : public Locals {
+    PinnedValue<NativeFunction> bound;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   PseudoHandle<NativeFunction> boundFormat =
       getNFBoundFormat(numberFormatHandle, runtime);
   if (boundFormat) {
@@ -1406,7 +1429,7 @@ CallResult<HermesValue> intlNumberFormatPrototypeFormatGetter(
 
   static_assert(
       (unsigned)NFFormatSlotIndexes::COUNT == 1, "can only reserve 1 slot");
-  Handle<NativeFunction> format = NativeFunction::create(
+  lv.bound = NativeFunction::create(
       runtime,
       runtime.functionPrototype,
       runtime.classNativeFunction1Reserved,
@@ -1416,11 +1439,11 @@ CallResult<HermesValue> intlNumberFormatPrototypeFormatGetter(
       Predefined::getSymbolID(Predefined::emptyString),
       1,
       Runtime::makeNullHandle<JSObject>());
-  setNumberFormat(format, runtime, numberFormatHandle);
+  setNumberFormat(createPseudoHandle(*lv.bound), runtime, numberFormatHandle);
 
-  setNFBoundFormat(numberFormatHandle, runtime, format);
+  setNFBoundFormat(numberFormatHandle, runtime, createPseudoHandle(*lv.bound));
 
-  return format.getHermesValue();
+  return lv.bound.getHermesValue();
 }
 
 CallResult<HermesValue> intlNumberFormatPrototypeFormatToParts(
@@ -1766,6 +1789,7 @@ vm::CallResult<vm::HermesValue> intlGetCanonicalLocales(
 vm::HermesValue createIntlObject(vm::Runtime &runtime) {
   struct : public vm::Locals {
     vm::PinnedValue<vm::JSObject> intl;
+    vm::PinnedValue<vm::StringPrimitive> str;
   } lv;
   vm::LocalsRAII lraii(runtime, &lv);
 
@@ -1783,11 +1807,12 @@ vm::HermesValue createIntlObject(vm::Runtime &runtime) {
     dpf.writable = 0;
     dpf.enumerable = 0;
 
+    lv.str = runtime.getPredefinedString(vm::Predefined::Intl);
     defineProperty(
         runtime,
         lv.intl,
         vm::Predefined::getSymbolID(vm::Predefined::SymbolToStringTag),
-        runtime.getPredefinedStringHandle(vm::Predefined::Intl),
+        lv.str,
         dpf);
   }
 

@@ -156,6 +156,7 @@ CallResult<HermesValue> proxyRevocable(void *, Runtime &runtime) {
     PinnedValue<JSObject> initialProxy;
     PinnedValue<JSObject> finalProxy;
     PinnedValue<JSObject> result;
+    PinnedValue<NativeFunction> revoker;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -177,7 +178,7 @@ CallResult<HermesValue> proxyRevocable(void *, Runtime &runtime) {
       ProxySlotIndexes::COUNT == 1,
       "COUNT must be 1. "
       "Only 1 reserved slot in classNativeFunction1Reserved");
-  Handle<NativeFunction> revoker = NativeFunction::create(
+  lv.revoker = NativeFunction::create(
       runtime,
       runtime.functionPrototype,
       runtime.classNativeFunction1Reserved,
@@ -190,7 +191,7 @@ CallResult<HermesValue> proxyRevocable(void *, Runtime &runtime) {
   // 4. Set revoker.[[RevocableProxy]] to p.
   auto shv = SmallHermesValue::encodeHermesValue(
       lv.finalProxy.getHermesValue(), runtime);
-  setRevocableProxySlot(*revoker, runtime, shv);
+  setRevocableProxySlot(*lv.revoker, runtime, shv);
   // 5. Let result be ObjectCreate(%ObjectPrototype%).
   lv.result = JSObject::create(runtime);
   // 6. Perform CreateDataProperty(result, "proxy", p).
@@ -205,7 +206,10 @@ CallResult<HermesValue> proxyRevocable(void *, Runtime &runtime) {
   assert(*res1 && "Failed to set proxy on Proxy.revocable return");
   // 7. Perform CreateDataProperty(result, "revoke", revoker).
   auto res2 = JSObject::putNamed_RJS(
-      lv.result, runtime, Predefined::getSymbolID(Predefined::revoke), revoker);
+      lv.result,
+      runtime,
+      Predefined::getSymbolID(Predefined::revoke),
+      lv.revoker);
   if (res2 == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }

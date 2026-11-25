@@ -40,11 +40,13 @@
 namespace hermes {
 namespace vm {
 
-CallResult<Handle<SymbolID>> valueToSymbolID(
+ExecutionStatus valueToSymbolID(
     Runtime &runtime,
-    Handle<> nameValHnd) {
+    Handle<> nameValHnd,
+    MutableHandle<SymbolID> out) {
   if (nameValHnd->isSymbol()) {
-    return Handle<SymbolID>::vmcast(nameValHnd);
+    out = nameValHnd->getSymbol();
+    return ExecutionStatus::RETURNED;
   }
   // Convert the value to a string.
   auto res = toString_RJS(runtime, nameValHnd);
@@ -52,7 +54,7 @@ CallResult<Handle<SymbolID>> valueToSymbolID(
     return ExecutionStatus::EXCEPTION;
 
   // Unique the string.
-  return stringToSymbolID(runtime, std::move(*res));
+  return stringToSymbolID(runtime, std::move(*res), out);
 }
 
 HermesValue typeOf(Runtime &runtime, Handle<> valueHandle) {
@@ -412,12 +414,37 @@ bool isStringWellFormedUnicode(StringPrimitive *string) {
   return true;
 }
 
+/// \return the value of \p str16 if it is one of the special numeric strings
+/// "Infinity", "+Infinity", "-Infinity" or "NaN". Out of line so that the
+/// rooted slot for the identifier string views is only set up when needed.
+LLVM_ATTRIBUTE_NOINLINE
+static OptValue<double> trimmedStringToSpecialNumber(
+    Runtime &runtime,
+    StringView str16) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> storage;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  auto &idTable = runtime.getIdentifierTable();
+  auto matches = [&](Predefined::Str str) {
+    return str16.equals(
+        idTable.getStringView(Predefined::getSymbolID(str), lv.storage));
+  };
+  if (LLVM_UNLIKELY(matches(Predefined::Infinity)))
+    return std::numeric_limits<double>::infinity();
+  if (LLVM_UNLIKELY(matches(Predefined::PositiveInfinity)))
+    return std::numeric_limits<double>::infinity();
+  if (LLVM_UNLIKELY(matches(Predefined::NegativeInfinity)))
+    return -std::numeric_limits<double>::infinity();
+  if (LLVM_UNLIKELY(matches(Predefined::NaN)))
+    return std::numeric_limits<double>::quiet_NaN();
+  return llvh::None;
+}
+
 /// ES5.1 9.3.1
 static inline double stringToNumber(
     Runtime &runtime,
     Handle<StringPrimitive> strPrim) {
-  auto &idTable = runtime.getIdentifierTable();
-
   // Fast check for special values (no extraneous whitespace).
   if (runtime.symbolEqualsToStringPrim(
           Predefined::getSymbolID(Predefined::Infinity), *strPrim)) {
@@ -461,22 +488,8 @@ static inline double stringToNumber(
   // Slow check for special values.
   // This should only run if user created a string with extra whitespace,
   // since normal uses would get caught by the initial check.
-  if (LLVM_UNLIKELY(str16.equals(idTable.getStringView(
-          runtime, Predefined::getSymbolID(Predefined::Infinity))))) {
-    return std::numeric_limits<double>::infinity();
-  }
-  if (LLVM_UNLIKELY(str16.equals(idTable.getStringView(
-          runtime, Predefined::getSymbolID(Predefined::PositiveInfinity))))) {
-    return std::numeric_limits<double>::infinity();
-  }
-  if (LLVM_UNLIKELY(str16.equals(idTable.getStringView(
-          runtime, Predefined::getSymbolID(Predefined::NegativeInfinity))))) {
-    return -std::numeric_limits<double>::infinity();
-  }
-  if (LLVM_UNLIKELY(str16.equals(idTable.getStringView(
-          runtime, Predefined::getSymbolID(Predefined::NaN))))) {
-    return std::numeric_limits<double>::quiet_NaN();
-  }
+  if (auto special = trimmedStringToSpecialNumber(runtime, str16))
+    return *special;
 
   auto len = str16.length();
 
@@ -820,9 +833,13 @@ ExecutionStatus amendPropAccessErrorMsgWithPropName(
 
   // Construct an error message that contains the property name.
   llvh::StringRef valueStr = valueHandle->isNull() ? "null" : "undefined";
+  struct : public Locals {
+    PinnedValue<StringPrimitive> storage;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   return runtime.raiseTypeError(
       TwineChar16("Cannot ") + operationStr + " property '" +
-      runtime.getIdentifierTable().getStringView(runtime, id) + "' of " +
+      runtime.getIdentifierTable().getStringView(id, lv.storage) + "' of " +
       valueStr);
 }
 
@@ -1366,7 +1383,7 @@ static inline int doubleExponent(double x) {
   return e;
 }
 
-Handle<StringPrimitive>
+PseudoHandle<StringPrimitive>
 numberToStringWithRadix(Runtime &runtime, double number, unsigned radix) {
   (void)MIN_RADIX;
   (void)MAX_RADIX;
@@ -1495,8 +1512,9 @@ numberToStringWithRadix(Runtime &runtime, double number, unsigned radix) {
     result.insert(result.begin(), '-');
   }
 
-  return runtime.makeHandle<StringPrimitive>(runtime.ignoreAllocationFailure(
-      StringPrimitive::create(runtime, result)));
+  return PseudoHandle<StringPrimitive>::create(
+      vmcast<StringPrimitive>(runtime.ignoreAllocationFailure(
+          StringPrimitive::create(runtime, result))));
 }
 
 CallResult<PseudoHandle<>>
@@ -1609,29 +1627,37 @@ CallResult<PseudoHandle<HermesValue>> iteratorValue(
       iterResult, runtime, Predefined::getSymbolID(Predefined::value));
 }
 
-CallResult<Handle<JSObject>> iteratorStep(
+CallResult<PseudoHandle<JSObject>> iteratorStep(
     Runtime &runtime,
     const CheckedIteratorRecord &iteratorRecord) {
+  struct : public Locals {
+    PinnedValue<JSObject> result;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto resultRes = iteratorNext(runtime, iteratorRecord);
   if (LLVM_UNLIKELY(resultRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<JSObject> result = runtime.makeHandle(std::move(*resultRes));
+  lv.result = std::move(*resultRes);
   auto completeRes = JSObject::getNamed_RJS(
-      result, runtime, Predefined::getSymbolID(Predefined::done));
+      lv.result, runtime, Predefined::getSymbolID(Predefined::done));
   if (LLVM_UNLIKELY(completeRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
   if (toBoolean(completeRes->get())) {
-    return Runtime::makeNullHandle<JSObject>();
+    return PseudoHandle<JSObject>::create(nullptr);
   }
-  return result;
+  return PseudoHandle<JSObject>::create(lv.result.get());
 }
 
 CallResult<bool> iteratorStepValue(
     Runtime &runtime,
     const CheckedIteratorRecord &iteratorRecord,
     PinnedValue<> *value) {
+  struct : public Locals {
+    PinnedValue<JSObject> step;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // 1. Let result be ?IteratorStep(iteratorRecord)
   auto stepRes = iteratorStep(runtime, iteratorRecord);
   if (LLVM_UNLIKELY(stepRes == ExecutionStatus::EXCEPTION)) {
@@ -1647,7 +1673,8 @@ CallResult<bool> iteratorStepValue(
   // 3. Let value be Completion(IteratorValue(result))
   // 4. If value is a throw completion, then
   //   a. Set iteratorRecord.[[Done]] to true
-  auto valueRes = iteratorValue(runtime, *stepRes);
+  lv.step = std::move(*stepRes);
+  auto valueRes = iteratorValue(runtime, lv.step);
   if (LLVM_UNLIKELY(valueRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1743,9 +1770,15 @@ ExecutionStatus iteratorCloseAndRethrow(
   return ExecutionStatus::EXCEPTION;
 }
 
-CallResult<Handle<JSArray>> iterableToArray(
+CallResult<PseudoHandle<JSArray>> iterableToArray(
     Runtime &runtime,
     Handle<HermesValue> items) {
+  struct : public Locals {
+    PinnedValue<JSArray> array;
+    PinnedValue<JSObject> next;
+    PinnedValue<> nextValue;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // IterableToList: 2a. Let iteratorRecord be ? GetIterator(items, sync).
   CallResult<CheckedIteratorRecord> iteratorRecordRes =
       getCheckedIterator(runtime, items);
@@ -1757,14 +1790,14 @@ CallResult<Handle<JSArray>> iterableToArray(
   // CreateArrayFromList: 1. Let array be ! ArrayCreate(0).
   auto arrRes = JSArray::create(runtime, 0, 0);
   assert(arrRes != ExecutionStatus::EXCEPTION && "could not create array");
-  Handle<JSArray> array = runtime.makeHandle(std::move(*arrRes));
+  lv.array = std::move(*arrRes);
   // CreateArrayFromList: 2. Let n be 0.
   size_t n = 0;
 
   GCScopeMarkerRAII marker{runtime};
   for (;; marker.flush()) {
     // IterableToList: 5.a. Set next to ? IteratorStep(iteratorRecord).
-    CallResult<Handle<JSObject>> nextRes =
+    CallResult<PseudoHandle<JSObject>> nextRes =
         iteratorStep(runtime, iteratorRecord);
     if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -1772,32 +1805,30 @@ CallResult<Handle<JSArray>> iterableToArray(
     if (!*nextRes) {
       break;
     }
+    lv.next = std::move(*nextRes);
     // 5.b.i. Let nextValue be ? IteratorValue(next).
     CallResult<PseudoHandle<HermesValue>> nextValueRes =
-        iteratorValue(runtime, *nextRes);
+        iteratorValue(runtime, lv.next);
     if (LLVM_UNLIKELY(nextValueRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
+    lv.nextValue = std::move(*nextValueRes);
     // CreateArrayFromList: 3.a Perform ! CreateDataPropertyOrThrow(array, !
     // ToString(𝔽(n)), e).
     if (LLVM_UNLIKELY(
-            JSArray::setElementAt(
-                array,
-                runtime,
-                n,
-                runtime.makeHandle(std::move(*nextValueRes))) ==
+            JSArray::setElementAt(lv.array, runtime, n, lv.nextValue) ==
             ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
     // CreateArrayFromList: 3.b Set n to n + 1.
     n++;
   }
   if (LLVM_UNLIKELY(
-          JSArray::setLengthProperty(array, runtime, n) ==
+          JSArray::setLengthProperty(lv.array, runtime, n) ==
           ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
   // 4. Return array.
-  return array;
+  return PseudoHandle<JSArray>::create(lv.array.get());
 }
 
 bool isUncatchableError(HermesValue value) {
@@ -1807,11 +1838,15 @@ bool isUncatchableError(HermesValue value) {
   return false;
 }
 
-Handle<JSObject>
+HermesValue
 createIterResultObject(Runtime &runtime, Handle<> value, bool done) {
-  auto objHandle = runtime.makeHandle(JSObject::create(runtime));
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.obj = JSObject::create(runtime);
   auto status = JSObject::defineOwnProperty(
-      objHandle,
+      lv.obj,
       runtime,
       Predefined::getSymbolID(Predefined::value),
       DefinePropertyFlags::getDefaultNewPropertyFlags(),
@@ -1821,7 +1856,7 @@ createIterResultObject(Runtime &runtime, Handle<> value, bool done) {
       status != ExecutionStatus::EXCEPTION && *status &&
       "put own value property cannot fail");
   status = JSObject::defineOwnProperty(
-      objHandle,
+      lv.obj,
       runtime,
       Predefined::getSymbolID(Predefined::done),
       DefinePropertyFlags::getDefaultNewPropertyFlags(),
@@ -1829,7 +1864,7 @@ createIterResultObject(Runtime &runtime, Handle<> value, bool done) {
   assert(
       status != ExecutionStatus::EXCEPTION && *status &&
       "put own value property cannot fail");
-  return objHandle;
+  return lv.obj.getHermesValue();
 }
 
 CallResult<Handle<Callable>> speciesConstructor(
@@ -2094,29 +2129,33 @@ CallResult<bool> isRegExp(Runtime &runtime, Handle<> arg) {
   return vmisa<JSRegExp>(arg.get());
 }
 
-CallResult<Handle<StringPrimitive>> symbolDescriptiveString(
+CallResult<PseudoHandle<StringPrimitive>> symbolDescriptiveString(
     Runtime &runtime,
     Handle<SymbolID> sym) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> desc;
+    PinnedValue<StringPrimitive> result;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // 1. Assert: Type(sym) is Symbol.
   // 2. Let desc be sym's [[Description]] value.
   // 3. If desc is undefined, set desc to the empty string.
   // 4. Assert: Type(desc) is String.
-  auto desc = runtime.makeHandle<StringPrimitive>(
-      runtime.getStringPrimFromSymbolID(*sym));
-  SafeUInt32 descLen(desc->getStringLength());
+  lv.desc = runtime.getStringPrimFromSymbolID(*sym);
+  SafeUInt32 descLen(lv.desc->getStringLength());
   descLen.add(8);
 
   // 5. Return the string-concatenation of "Symbol(", desc, and ")".
-  auto builder =
-      StringBuilder::createStringBuilder(runtime, descLen, desc->isASCII());
+  auto builder = StringBuilder::createStringBuilder(
+      runtime, lv.result, descLen, lv.desc->isASCII());
   if (LLVM_UNLIKELY(builder == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
   builder->appendASCIIRef({"Symbol(", 7});
-  builder->appendStringPrim(desc);
+  builder->appendStringPrim(lv.desc);
   builder->appendCharacter(')');
 
-  return builder->getStringPrimitive();
+  return createPseudoHandle(*lv.result);
 }
 
 CallResult<bool> isArray(Runtime &runtime, JSObject *obj) {

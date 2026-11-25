@@ -26,6 +26,7 @@ HermesValue createFinalizationRegistryConstructor(Runtime &runtime) {
 
   struct : Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -44,11 +45,12 @@ HermesValue createFinalizationRegistryConstructor(Runtime &runtime) {
   // The initial value is the String value "FinalizationRegistry".
   // This property has the attributes:
   // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }.
+  lv.str = runtime.getPredefinedString(Predefined::FinalizationRegistry);
   defineProperty(
       runtime,
       prototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::FinalizationRegistry),
+      lv.str,
       dpf);
 
   // 26.2.3.2 FinalizationRegistry.prototype.register ( target, heldValue [,

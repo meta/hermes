@@ -1076,6 +1076,7 @@ ExecutionStatus directRegExpExec(
     PinnedValue<JSArray> A;
     PinnedValue<StringPrimitive> strHandle;
     PinnedValue<JSArray> indicesArray;
+    PinnedValue<JSObject> groupNames;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1124,8 +1125,8 @@ ExecutionStatus directRegExpExec(
   JSObject::setNamedSlotValueUnsafe(lv.A.get(), runtime, inputDesc, inputSHV);
 
   // If R contains any GroupName, then let hasGroups be true.
-  Handle<JSObject> groupNames = regexp->getGroupNameMappings(runtime);
-  bool hasGroups = (bool)groupNames;
+  lv.groupNames = regexp->getGroupNameMappings(runtime);
+  bool hasGroups = (bool)*lv.groupNames;
 
   // Set capture groups (including the initial full match)
   size_t idx = 0;
@@ -1166,7 +1167,7 @@ ExecutionStatus directRegExpExec(
         runtime,
         S,
         match,
-        groupNames,
+        lv.groupNames,
         hasGroups,
         MutableHandle<JSArray>{lv.indicesArray});
     if (LLVM_UNLIKELY(indicesStatus == ExecutionStatus::EXCEPTION)) {
@@ -1186,7 +1187,7 @@ ExecutionStatus directRegExpExec(
   }
 
   if (LLVM_UNLIKELY(
-          setMatchGroups(runtime, lv.A, groupNames) ==
+          setMatchGroups(runtime, lv.A, lv.groupNames) ==
           ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
   resultOut.castAndSetHermesValue<JSArray>(lv.A.getHermesValue());
@@ -1584,6 +1585,7 @@ CallResult<HermesValue> getSubstitution(
   struct : public Locals {
     PinnedValue<StringPrimitive> captureStrHandle;
     PinnedValue<> captureValueHandle;
+    PinnedValue<SymbolID> sym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1734,12 +1736,13 @@ CallResult<HermesValue> getSubstitution(
         auto identifier =
             replacementView.slice(i + 2, gtPos - (i + 2)).getUTF16Ref(storage);
         auto symbolRes =
-            runtime.getIdentifierTable().getSymbolHandle(runtime, identifier);
+            runtime.getIdentifierTable().getSymbolID(runtime, identifier);
         if (LLVM_UNLIKELY(symbolRes == ExecutionStatus::EXCEPTION)) {
           return ExecutionStatus::EXCEPTION;
         }
+        lv.sym = *symbolRes;
         auto captureRes =
-            JSObject::getNamed_RJS(namedCaptures, runtime, symbolRes->get());
+            JSObject::getNamed_RJS(namedCaptures, runtime, *lv.sym);
         if (LLVM_UNLIKELY(captureRes == ExecutionStatus::EXCEPTION))
           return ExecutionStatus::EXCEPTION;
         // 5. If capture is undefined, then
@@ -2464,6 +2467,7 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
     PinnedValue<> capN;
     PinnedValue<HermesValue> namedCaptures;
     PinnedValue<> execResult;
+    PinnedValue<JSObject> groupNames;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -2624,8 +2628,7 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
   uint32_t nextSourcePosition = 0;
   // 16. Repeat, for each result in results,
   if (fast) {
-    Handle<JSObject> groupNames =
-        Handle<JSRegExp>::vmcast(rx)->getGroupNameMappings(runtime);
+    lv.groupNames = Handle<JSRegExp>::vmcast(rx)->getGroupNameMappings(runtime);
     for (size_t i = 0, e = fastMatches.size(); i < e; i += fastMatchStride) {
       GCScopeMarkerRAII marker1{runtime};
       if (LLVM_UNLIKELY(
@@ -2635,7 +2638,7 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
                   stringView,
                   replaceFn,
                   lv.replaceValueStr,
-                  groupNames,
+                  lv.groupNames,
                   llvh::makeArrayRef(&fastMatches[i], fastMatchStride),
                   accumulatedResult,
                   nextSourcePosition) == ExecutionStatus::EXCEPTION)) {

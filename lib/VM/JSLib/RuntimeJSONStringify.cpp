@@ -920,7 +920,7 @@ ExecutionStatus JSONStringifyer::operationJO() {
         if (cr == ExecutionStatus::EXCEPTION) {
           return ExecutionStatus::EXCEPTION;
         }
-        lv.operationJOK = **cr;
+        lv.operationJOK = std::move(*cr);
       }
     } else {
       CallResult<HermesValue> ownPropRes = enumerableOwnProperties_RJS(

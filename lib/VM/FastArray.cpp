@@ -63,10 +63,15 @@ void FastArray::staticAsserts() {
   llvm_unreachable("staticAsserts must never be called.");
 }
 
-Handle<HiddenClass> FastArray::createClass(
+PseudoHandle<HiddenClass> FastArray::createClass(
     Runtime &runtime,
     Handle<JSObject> prototypeHandle,
     Handle<HiddenClass> rootClazz) {
+  struct : public Locals {
+    PinnedValue<HiddenClass> clazz;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   // Add the length property.
   PropertyFlags pf{};
   pf.enumerable = 0;
@@ -74,16 +79,18 @@ Handle<HiddenClass> FastArray::createClass(
   pf.configurable = 0;
 
   auto added = HiddenClass::addProperty(
-      rootClazz, runtime, Predefined::getSymbolID(Predefined::length), pf);
+      rootClazz,
+      runtime,
+      Predefined::getSymbolID(Predefined::length),
+      pf,
+      MutableHandle<HiddenClass>(lv.clazz));
   assert(
       added != ExecutionStatus::EXCEPTION &&
       "Adding the first properties shouldn't cause overflow");
-  assert(
-      added->second == lengthPropIndex() &&
-      "FastArray.length has invalid index");
-  rootClazz = added->first;
+  assert(*added == lengthPropIndex() && "FastArray.length has invalid index");
+  (void)added;
 
-  return rootClazz;
+  return createPseudoHandle(*lv.clazz);
 }
 
 CallResult<HermesValue> FastArray::create(Runtime &runtime, size_t capacity) {

@@ -24,14 +24,12 @@ void populateIteratorPrototype(Runtime &runtime) {
 
   auto proto = Handle<JSObject>::vmcast(&runtime.iteratorPrototype);
 
-  lv.iteratorFunc.castAndSetHermesValue<NativeFunction>(
-      NativeFunction::create(
-          runtime,
-          nullptr,
-          iteratorPrototypeIterator,
-          Predefined::getSymbolID(Predefined::squareSymbolIterator),
-          0)
-          .getHermesValue());
+  lv.iteratorFunc = NativeFunction::create(
+      runtime,
+      nullptr,
+      iteratorPrototypeIterator,
+      Predefined::getSymbolID(Predefined::squareSymbolIterator),
+      0);
 
   defineProperty(
       runtime,

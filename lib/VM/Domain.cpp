@@ -111,6 +111,9 @@ ExecutionStatus Domain::importCJSModuleTable(
 
   struct : public Locals {
     PinnedValue<ArrayStorage> cjsModules;
+    PinnedValue<StringPrimitive> str;
+    PinnedValue<NativeFunction> requireFn;
+    PinnedValue<RequireContext> context;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -144,17 +147,15 @@ ExecutionStatus Domain::importCJSModuleTable(
       self->cjsRuntimeModules_.push_back(nullptr, runtime.getHeap());
     }
 
-    auto requireFn = NativeFunction::create(
+    lv.requireFn = NativeFunction::create(
         runtime,
         (void *)TypeErrorKind::InvalidDynamicRequire,
         throwTypeError,
         Predefined::getSymbolID(Predefined::emptyString),
         0);
 
-    auto context = RequireContext::create(
-        runtime,
-        self,
-        runtime.getPredefinedStringHandle(Predefined::emptyString));
+    lv.str = runtime.getPredefinedString(Predefined::emptyString);
+    lv.context = RequireContext::create(runtime, self, lv.str);
 
     // Set the require.context property.
     PropertyFlags pf = PropertyFlags::defaultNewNamedPropertyFlags();
@@ -162,15 +163,15 @@ ExecutionStatus Domain::importCJSModuleTable(
     pf.configurable = 0;
     if (LLVM_UNLIKELY(
             JSObject::defineNewOwnProperty(
-                requireFn,
+                lv.requireFn,
                 runtime,
                 Predefined::getSymbolID(Predefined::context),
                 pf,
-                context) == ExecutionStatus::EXCEPTION)) {
+                lv.context) == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
 
-    self->throwingRequire_.set(runtime, *requireFn, runtime.getHeap());
+    self->throwingRequire_.set(runtime, *lv.requireFn, runtime.getHeap());
   } else {
     lv.cjsModules = self->cjsModules_.get(runtime);
   }
@@ -335,13 +336,13 @@ void RequireContextBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.addField(&self->dirname_);
 }
 
-Handle<RequireContext> RequireContext::create(
+PseudoHandle<RequireContext> RequireContext::create(
     Runtime &runtime,
     Handle<Domain> domain,
     Handle<StringPrimitive> dirname) {
   auto *cell = runtime.makeAFixed<RequireContext>(
       runtime, runtime.objectPrototype, runtime.classRequireContext);
-  auto self = JSObjectInit::initToHandle(runtime, cell);
+  auto self = JSObjectInit::initToPseudoHandle(runtime, cell);
   self->domain_.set(runtime, *domain, runtime.getHeap());
   self->dirname_.set(runtime, *dirname, runtime.getHeap());
   return self;

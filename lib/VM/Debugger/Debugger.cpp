@@ -40,12 +40,13 @@ static inline bool shouldSingleStep(OpCode opCode) {
 
 static StringView getFunctionName(
     Runtime &runtime,
-    const CodeBlock *codeBlock) {
+    const CodeBlock *codeBlock,
+    MutableHandle<StringPrimitive> storage) {
   auto functionName = codeBlock->getNameMayAllocate();
   if (functionName == Predefined::getSymbolID(Predefined::emptyString)) {
     functionName = Predefined::getSymbolID(Predefined::anonymous);
   }
-  return runtime.getIdentifierTable().getStringView(runtime, functionName);
+  return runtime.getIdentifierTable().getStringView(functionName, storage);
 }
 
 static std::string getFileNameAsUTF8(
@@ -596,9 +597,13 @@ auto Debugger::getCallFrameInfo(const CodeBlock *codeBlock, uint32_t ipOffset)
     // so make sure we aren't.
     GCScopeMarkerRAII gcMarker{runtime_};
 
+    struct : public Locals {
+      PinnedValue<StringPrimitive> nameStr;
+    } lv;
+    LocalsRAII lraii(runtime_, &lv);
     llvh::SmallVector<char16_t, 64> storage;
     UTF16Ref functionName =
-        getFunctionName(runtime_, codeBlock).getUTF16Ref(storage);
+        getFunctionName(runtime_, codeBlock, lv.nameStr).getUTF16Ref(storage);
     convertUTF16ToUTF8WithReplacements(frameInfo.functionName, functionName);
     auto locationOpt = codeBlock->getSourceLocation(ipOffset);
     if (locationOpt) {

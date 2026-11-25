@@ -52,7 +52,7 @@ class JSArrayBuffer final : public JSObject {
   /// ES7 24.1.1.4
   /// NOTE: since SharedArrayBuffer does not exist, this does not use the
   /// SpeciesConstructor, it always allocates a normal ArrayBuffer.
-  static CallResult<Handle<JSArrayBuffer>> clone(
+  static CallResult<PseudoHandle<JSArrayBuffer>> clone(
       Runtime &runtime,
       Handle<JSArrayBuffer> src,
       size_type srcByteOffset,

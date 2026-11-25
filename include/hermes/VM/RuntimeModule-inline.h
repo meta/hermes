@@ -15,10 +15,6 @@
 namespace hermes {
 namespace vm {
 
-inline Handle<Domain> RuntimeModule::getDomain(Runtime &runtime) {
-  return runtime.makeHandle(getDomainUnsafe(runtime));
-}
-
 inline Domain *RuntimeModule::getDomainUnsafe(Runtime &runtime) {
   Domain *domain = domain_.get(runtime_, runtime_.getHeap());
   assert(domain && "RuntimeModule has an invalid Domain");

@@ -162,10 +162,13 @@ napi_status NAPI_CDECL napi_set_named_property(
 
   hermes::vm::GCScope gcScope(env->runtime);
 
+  struct : public hermes::vm::Locals {
+    hermes::vm::PinnedValue<hermes::vm::SymbolID> sym;
+  } lv;
+  hermes::vm::LocalsRAII lraii(env->runtime, &lv);
+
   // Intern the property name.
-  hermes::vm::CallResult<hermes::vm::Handle<hermes::vm::SymbolID>> symRes =
-      hermes::vm::ExecutionStatus::EXCEPTION;
-  auto internStatus = internUtf8AsSymbol(env, utf8name, symRes);
+  auto internStatus = internUtf8AsSymbol(env, utf8name, lv.sym);
   if (internStatus != napi_ok) {
     return internStatus;
   }
@@ -173,7 +176,7 @@ napi_status NAPI_CDECL napi_set_named_property(
   // Use putNamedOrIndexed because the property name could be
   // index-like (e.g. "0", "1").
   auto putRes = hermes::vm::JSObject::putNamedOrIndexed(
-      objHandle, env->runtime, **symRes, valHandle);
+      objHandle, env->runtime, *lv.sym, valHandle);
   if (LLVM_UNLIKELY(putRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_pending_exception);
   }
@@ -198,18 +201,21 @@ napi_status NAPI_CDECL napi_get_named_property(
 
   hermes::vm::GCScope gcScope(env->runtime);
 
+  struct : public hermes::vm::Locals {
+    hermes::vm::PinnedValue<hermes::vm::SymbolID> sym;
+  } lv;
+  hermes::vm::LocalsRAII lraii(env->runtime, &lv);
+
   // Intern the property name.
-  hermes::vm::CallResult<hermes::vm::Handle<hermes::vm::SymbolID>> symRes =
-      hermes::vm::ExecutionStatus::EXCEPTION;
-  auto internStatus = internUtf8AsSymbol(env, utf8name, symRes);
+  auto internStatus = internUtf8AsSymbol(env, utf8name, lv.sym);
   if (internStatus != napi_ok) {
     return internStatus;
   }
 
   // Use getNamedOrIndexed because the property name could be
   // index-like (e.g. "0", "1").
-  auto getRes = hermes::vm::JSObject::getNamedOrIndexed(
-      objHandle, env->runtime, **symRes);
+  auto getRes =
+      hermes::vm::JSObject::getNamedOrIndexed(objHandle, env->runtime, *lv.sym);
   if (LLVM_UNLIKELY(getRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_pending_exception);
   }
@@ -235,18 +241,21 @@ napi_status NAPI_CDECL napi_has_named_property(
 
   hermes::vm::GCScope gcScope(env->runtime);
 
+  struct : public hermes::vm::Locals {
+    hermes::vm::PinnedValue<hermes::vm::SymbolID> sym;
+  } lv;
+  hermes::vm::LocalsRAII lraii(env->runtime, &lv);
+
   // Intern the property name.
-  hermes::vm::CallResult<hermes::vm::Handle<hermes::vm::SymbolID>> symRes =
-      hermes::vm::ExecutionStatus::EXCEPTION;
-  auto internStatus = internUtf8AsSymbol(env, utf8name, symRes);
+  auto internStatus = internUtf8AsSymbol(env, utf8name, lv.sym);
   if (internStatus != napi_ok) {
     return internStatus;
   }
 
   // Use hasNamedOrIndexed because the property name could be
   // index-like (e.g. "0", "1").
-  auto hasRes = hermes::vm::JSObject::hasNamedOrIndexed(
-      objHandle, env->runtime, **symRes);
+  auto hasRes =
+      hermes::vm::JSObject::hasNamedOrIndexed(objHandle, env->runtime, *lv.sym);
   if (LLVM_UNLIKELY(hasRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_pending_exception);
   }
@@ -436,6 +445,7 @@ napi_status NAPI_CDECL napi_get_all_property_names(
   struct : public hermes::vm::Locals {
     hermes::vm::PinnedValue<hermes::vm::JSArray> resultArray;
     hermes::vm::PinnedValue<hermes::vm::JSObject> curObj;
+    hermes::vm::PinnedValue<hermes::vm::JSArray> keysArray;
     hermes::vm::PinnedValue<> tmp;
   } lv;
   hermes::vm::LocalsRAII lraii(env->runtime, &lv);
@@ -473,15 +483,15 @@ napi_status NAPI_CDECL napi_get_all_property_names(
       return captureRuntimeException(env, napi_pending_exception);
     }
 
-    auto keysArray = *keysRes;
+    lv.keysArray = std::move(*keysRes);
     uint32_t len =
-        hermes::vm::JSArray::getLength(keysArray.get(), env->runtime);
+        hermes::vm::JSArray::getLength(lv.keysArray.get(), env->runtime);
 
     auto innerMarker = gcScope.createMarker();
     for (uint32_t i = 0; i < len; ++i) {
       gcScope.flushToMarker(innerMarker);
       hermes::vm::HermesValue elem =
-          keysArray->at(env->runtime, i).unboxToHV(env->runtime);
+          lv.keysArray->at(env->runtime, i).unboxToHV(env->runtime);
 
       // Compute a dedup key for this element.
       // Numbers: encode the index value with a tag bit to
@@ -765,6 +775,7 @@ napi_status NAPI_CDECL napi_define_properties(
     PinnedValue<Callable> setter;
     PinnedValue<PropertyAccessor> accessor;
     PinnedValue<NativeFunction> method;
+    PinnedValue<SymbolID> propSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   GCScope gcScope(runtime);
@@ -779,14 +790,11 @@ napi_status NAPI_CDECL napi_define_properties(
 
     // Resolve the property key. Either utf8name (C string) or name
     // (napi_value that must be a string or symbol).
-    SymbolID propertySym{};
     if (p->utf8name != nullptr) {
-      CallResult<Handle<SymbolID>> symRes = ExecutionStatus::EXCEPTION;
-      auto internStatus = internUtf8AsSymbol(env, p->utf8name, symRes);
+      auto internStatus = internUtf8AsSymbol(env, p->utf8name, lv.propSym);
       if (internStatus != napi_ok) {
         return internStatus;
       }
-      propertySym = **symRes;
     } else {
       auto *namePhv = reinterpret_cast<PinnedHermesValue *>(p->name);
       RETURN_STATUS_IF_FALSE(
@@ -796,17 +804,17 @@ napi_status NAPI_CDECL napi_define_properties(
 
       if (namePhv->isString()) {
         // Intern the string to get a SymbolID.
-        auto symRes = runtime.getIdentifierTable().getSymbolHandleFromPrimitive(
-            runtime,
-            PseudoHandle<StringPrimitive>::create(
-                vmcast<StringPrimitive>(*namePhv)));
-        if (LLVM_UNLIKELY(symRes == ExecutionStatus::EXCEPTION)) {
+        if (LLVM_UNLIKELY(
+                runtime.getIdentifierTable().getSymbolFromPrimitive(
+                    runtime,
+                    PseudoHandle<StringPrimitive>::create(
+                        vmcast<StringPrimitive>(*namePhv)),
+                    lv.propSym) == ExecutionStatus::EXCEPTION)) {
           return captureRuntimeException(env, napi_pending_exception);
         }
-        propertySym = **symRes;
       } else {
         // Symbol value — extract the SymbolID directly.
-        propertySym = namePhv->getSymbol();
+        lv.propSym = namePhv->getSymbol();
       }
     }
 
@@ -818,14 +826,14 @@ napi_status NAPI_CDECL napi_define_properties(
       if (p->getter != nullptr) {
         PseudoHandle<NativeFunction> getterFunc{};
         STATUS_CALL(createNapiNativeFunction(
-            env, p->getter, p->data, propertySym, 0, getterFunc));
+            env, p->getter, p->data, *lv.propSym, 0, getterFunc));
         lv.getter.castAndSetHermesValue<Callable>(getterFunc.getHermesValue());
         getterHandle = lv.getter;
       }
       if (p->setter != nullptr) {
         PseudoHandle<NativeFunction> setterFunc{};
         STATUS_CALL(createNapiNativeFunction(
-            env, p->setter, p->data, propertySym, 1, setterFunc));
+            env, p->setter, p->data, *lv.propSym, 1, setterFunc));
         lv.setter.castAndSetHermesValue<Callable>(setterFunc.getHermesValue());
         setterHandle = lv.setter;
       }
@@ -845,7 +853,7 @@ napi_status NAPI_CDECL napi_define_properties(
       auto defRes = JSObject::defineOwnProperty(
           objHandle,
           runtime,
-          propertySym,
+          *lv.propSym,
           dpf,
           lv.accessor,
           PropOpFlags().plusThrowOnError());
@@ -857,7 +865,7 @@ napi_status NAPI_CDECL napi_define_properties(
       // Case 2: Method property.
       PseudoHandle<NativeFunction> methodFunc{};
       STATUS_CALL(createNapiNativeFunction(
-          env, p->method, p->data, propertySym, 0, methodFunc));
+          env, p->method, p->data, *lv.propSym, 0, methodFunc));
       lv.method = std::move(methodFunc);
 
       DefinePropertyFlags dpf{};
@@ -872,7 +880,7 @@ napi_status NAPI_CDECL napi_define_properties(
       auto defRes = JSObject::defineOwnProperty(
           objHandle,
           runtime,
-          propertySym,
+          *lv.propSym,
           dpf,
           lv.method,
           PropOpFlags().plusThrowOnError());
@@ -897,7 +905,7 @@ napi_status NAPI_CDECL napi_define_properties(
       auto defRes = JSObject::defineOwnProperty(
           objHandle,
           runtime,
-          propertySym,
+          *lv.propSym,
           dpf,
           valHandle,
           PropOpFlags().plusThrowOnError());

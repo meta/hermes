@@ -76,12 +76,16 @@ CallResult<HermesValue> FinalizableNativeFunction::createWithoutPrototype(
       context,
       functionPtr,
       finalizePtr);
-  auto selfHandle = JSObjectInit::initToHandle(runtime, cell);
+  struct : public Locals {
+    PinnedValue<FinalizableNativeFunction> self;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.self = JSObjectInit::initToPseudoHandle(runtime, cell);
 
   auto prototypeObjectHandle = runtime.makeNullHandle<JSObject>();
 
   auto st = defineNameLengthAndPrototype(
-      selfHandle,
+      lv.self,
       runtime,
       name,
       paramCount,
@@ -91,7 +95,7 @@ CallResult<HermesValue> FinalizableNativeFunction::createWithoutPrototype(
   assert(
       st != ExecutionStatus::EXCEPTION && "defineLengthAndPrototype() failed");
 
-  return selfHandle.getHermesValue();
+  return lv.self.getHermesValue();
 }
 
 HostObjectProxy::~HostObjectProxy() {}

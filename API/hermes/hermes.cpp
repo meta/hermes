@@ -1005,16 +1005,24 @@ class HermesRuntimeImpl final : public HermesRuntime,
         return rt_.runtime_.setThrownValue(hvFromValue(error.value()));
       } catch (const std::exception &ex) {
         llvh::SmallVector<llvh::UTF16, 16> buf;
+        struct : public vm::Locals {
+          vm::PinnedValue<vm::StringPrimitive> nameStr;
+        } lv;
+        vm::LocalsRAII lraii(rt_.runtime_, &lv);
         return rt_.runtime_.raiseError(
             vm::TwineChar16{"Exception in HostObject::get for prop '"} +
             rt_.runtime_.getIdentifierTable().getStringViewForDev(
-                rt_.runtime_, id) +
+                id, lv.nameStr) +
             "': " + rt_.utf16FromErrorWhat(ex, buf));
       } catch (...) {
+        struct : public vm::Locals {
+          vm::PinnedValue<vm::StringPrimitive> nameStr;
+        } lv;
+        vm::LocalsRAII lraii(rt_.runtime_, &lv);
         return rt_.runtime_.raiseError(
             vm::TwineChar16{"Exception in HostObject::get: for prop '"} +
             rt_.runtime_.getIdentifierTable().getStringViewForDev(
-                rt_.runtime_, id) +
+                id, lv.nameStr) +
             "': <unknown exception>");
       }
 
@@ -1036,16 +1044,24 @@ class HermesRuntimeImpl final : public HermesRuntime,
         return rt_.runtime_.setThrownValue(hvFromValue(error.value()));
       } catch (const std::exception &ex) {
         llvh::SmallVector<llvh::UTF16, 16> buf;
+        struct : public vm::Locals {
+          vm::PinnedValue<vm::StringPrimitive> nameStr;
+        } lv;
+        vm::LocalsRAII lraii(rt_.runtime_, &lv);
         return rt_.runtime_.raiseError(
             vm::TwineChar16{"Exception in HostObject::set for prop '"} +
             rt_.runtime_.getIdentifierTable().getStringViewForDev(
-                rt_.runtime_, id) +
+                id, lv.nameStr) +
             "': " + rt_.utf16FromErrorWhat(ex, buf));
       } catch (...) {
+        struct : public vm::Locals {
+          vm::PinnedValue<vm::StringPrimitive> nameStr;
+        } lv;
+        vm::LocalsRAII lraii(rt_.runtime_, &lv);
         return rt_.runtime_.raiseError(
             vm::TwineChar16{"Exception in HostObject::set: for prop '"} +
             rt_.runtime_.getIdentifierTable().getStringViewForDev(
-                rt_.runtime_, id) +
+                id, lv.nameStr) +
             "': <unknown exception>");
       }
       return true;
@@ -2403,12 +2419,17 @@ jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromAscii(
 #endif
 
   vm::GCScope gcScope(runtime_);
-  auto cr = vm::stringToSymbolID(
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::SymbolID> sym;
+  } lv;
+  vm::LocalsRAII lraii(runtime_, &lv);
+  auto status = vm::stringToSymbolID(
       runtime_,
       vm::StringPrimitive::createNoThrow(
-          runtime_, llvh::StringRef(str, length)));
-  checkStatus(cr.getStatus());
-  return add<jsi::PropNameID>(cr->getHermesValue());
+          runtime_, llvh::StringRef(str, length)),
+      lv.sym);
+  checkStatus(status);
+  return add<jsi::PropNameID>(lv.sym.getHermesValue());
 }
 
 jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromUtf8(
@@ -2416,11 +2437,16 @@ jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromUtf8(
     size_t length) {
   ExecutionScopeRAII scopeRAII(mutatorScope);
   vm::GCScope gcScope(runtime_);
-  auto cr = vm::stringToSymbolID(
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::SymbolID> sym;
+  } lv;
+  vm::LocalsRAII lraii(runtime_, &lv);
+  auto status = vm::stringToSymbolID(
       runtime_,
-      vm::createPseudoHandle(stringHVFromUtf8(utf8, length).getString()));
-  checkStatus(cr.getStatus());
-  return add<jsi::PropNameID>(cr->getHermesValue());
+      vm::createPseudoHandle(stringHVFromUtf8(utf8, length).getString()),
+      lv.sym);
+  checkStatus(status);
+  return add<jsi::PropNameID>(lv.sym.getHermesValue());
 }
 
 jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromUtf16(
@@ -2428,21 +2454,30 @@ jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromUtf16(
     size_t length) {
   ExecutionScopeRAII scopeRAII(mutatorScope);
   vm::GCScope gcScope(runtime_);
-  auto cr = vm::stringToSymbolID(
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::SymbolID> sym;
+  } lv;
+  vm::LocalsRAII lraii(runtime_, &lv);
+  auto status = vm::stringToSymbolID(
       runtime_,
-      vm::createPseudoHandle(stringHVFromUtf16(utf16, length).getString()));
-  checkStatus(cr.getStatus());
-  return add<jsi::PropNameID>(cr->getHermesValue());
+      vm::createPseudoHandle(stringHVFromUtf16(utf16, length).getString()),
+      lv.sym);
+  checkStatus(status);
+  return add<jsi::PropNameID>(lv.sym.getHermesValue());
 }
 
 jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromString(
     const jsi::String &str) {
   ExecutionScopeRAII scopeRAII(mutatorScope);
   vm::GCScope gcScope(runtime_);
-  auto cr = vm::stringToSymbolID(
-      runtime_, vm::createPseudoHandle(phv(str).getString()));
-  checkStatus(cr.getStatus());
-  return add<jsi::PropNameID>(cr->getHermesValue());
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::SymbolID> sym;
+  } lv;
+  vm::LocalsRAII lraii(runtime_, &lv);
+  auto status = vm::stringToSymbolID(
+      runtime_, vm::createPseudoHandle(phv(str).getString()), lv.sym);
+  checkStatus(status);
+  return add<jsi::PropNameID>(lv.sym.getHermesValue());
 }
 
 jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromSymbol(
@@ -2453,8 +2488,12 @@ jsi::PropNameID HermesRuntimeImpl::createPropNameIDFromSymbol(
 std::string HermesRuntimeImpl::utf8(const jsi::PropNameID &sym) {
   ExecutionScopeRAII scopeRAII(mutatorScope);
   vm::GCScope gcScope(runtime_);
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::StringPrimitive> nameStr;
+  } lv;
+  vm::LocalsRAII lraii(runtime_, &lv);
   vm::SymbolID id = phv(sym).getSymbol();
-  auto view = runtime_.getIdentifierTable().getStringView(runtime_, id);
+  auto view = runtime_.getIdentifierTable().getStringView(id, lv.nameStr);
   return utf8FromStringView(view);
 }
 
@@ -2489,13 +2528,18 @@ vm::UTF16Ref HermesRuntimeImpl::utf16FromErrorWhat(
 std::string HermesRuntimeImpl::symbolToString(const jsi::Symbol &sym) {
   ExecutionScopeRAII scopeRAII(mutatorScope);
   vm::GCScope gcScope(runtime_);
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::StringPrimitive> str;
+  } lv;
+  vm::LocalsRAII lraii(runtime_, &lv);
   auto res = symbolDescriptiveString(
       runtime_,
       ::hermes::vm::Handle<::hermes::vm::SymbolID>::vmcast(&phv(sym)));
   checkStatus(res.getStatus());
+  lv.str = std::move(*res);
 
   return utf8FromStringView(
-      vm::StringPrimitive::createStringView(runtime_, *res));
+      vm::StringPrimitive::createStringView(runtime_, lv.str));
 }
 
 jsi::BigInt HermesRuntimeImpl::createBigIntFromInt64(int64_t value) {
@@ -3085,6 +3129,7 @@ bool HermesRuntimeImpl::isHostFunction(const jsi::Function &func) const {
 jsi::Array HermesRuntimeImpl::getPropertyNames(const jsi::Object &obj) {
   ExecutionScopeRAII scopeRAII(mutatorScope);
   struct : public vm::Locals {
+    vm::PinnedValue<vm::ArrayStorageSmall> arr;
     vm::PinnedValue<vm::JSArray> ret;
   } lv;
   vm::LocalsRAII lraii(runtime_, &lv);
@@ -3092,10 +3137,10 @@ jsi::Array HermesRuntimeImpl::getPropertyNames(const jsi::Object &obj) {
   vm::GCScope gcScope(runtime_);
   uint32_t beginIndex;
   uint32_t endIndex;
-  vm::CallResult<vm::Handle<vm::ArrayStorageSmall>> cr =
+  vm::CallResult<vm::PseudoHandle<vm::ArrayStorageSmall>> cr =
       vm::getForInPropertyNames(runtime_, handle(obj), beginIndex, endIndex);
   checkStatus(cr.getStatus());
-  vm::Handle<vm::ArrayStorageSmall> arr = *cr;
+  lv.arr = std::move(*cr);
   size_t length = endIndex - beginIndex;
 
   // Fill the new array directly, as the interpreter does for array literals.
@@ -3107,7 +3152,7 @@ jsi::Array HermesRuntimeImpl::getPropertyNames(const jsi::Object &obj) {
   checkStatus(vm::JSArray::setStorageEndIndex(lv.ret, runtime_, length));
 
   for (size_t i = 0; i < length; ++i) {
-    vm::SmallHermesValue name = arr->at(beginIndex + i);
+    vm::SmallHermesValue name = lv.arr->at(beginIndex + i);
     vm::StringPrimitive *str;
     if (name.isString()) {
       str = name.getString(runtime_);

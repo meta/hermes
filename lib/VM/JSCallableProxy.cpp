@@ -80,6 +80,7 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
     PinnedValue<JSObject> target;
     PinnedValue<JSObject> handler;
     PinnedValue<JSArray> argArray;
+    PinnedValue<Callable> trap;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   // We do the constructor related work of checking for a valid call and making
@@ -114,13 +115,13 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
   lv.handler = slots.handler.get(runtime);
   Predefined::Str trapName =
       isConstructorCall ? Predefined::construct : Predefined::apply;
-  CallResult<Handle<Callable>> trapRes =
-      detail::findTrap(selfHandle, runtime, trapName);
+  auto trapRes = detail::findTrap(selfHandle, runtime, trapName);
   if (trapRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
+  lv.trap = std::move(*trapRes);
   // 6. If trap is undefined, then
-  if (!*trapRes) {
+  if (!*lv.trap) {
     //   a. Return ? Call(target, thisArgument, argumentsList).
     // OR
     //   a. Assert: IsConstructor(target) is true.
@@ -170,7 +171,7 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
   // 8. Let newObj be ? Call(trap, handler, « target, argArray, newTarget »).
   if (isConstructorCall) {
     CallResult<PseudoHandle<>> newObjRes = Callable::executeCall3(
-        *trapRes,
+        lv.trap,
         runtime,
         lv.handler,
         lv.target.getHermesValue(),
@@ -188,7 +189,7 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
   } else {
     // 8. Return ? Call(trap, handler, « target, thisArgument, argArray »).
     auto res = Callable::executeCall3(
-        *trapRes,
+        lv.trap,
         runtime,
         lv.handler,
         lv.target.getHermesValue(),

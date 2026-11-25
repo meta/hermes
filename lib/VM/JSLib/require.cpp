@@ -150,11 +150,15 @@ CallResult<HermesValue> requireFast(void *, Runtime &runtime) {
   // Find the RuntimeModule from which this require was called.
   RuntimeModule *runtimeModule =
       runtime.getStackFrames().begin()->getSavedCodeBlock()->getRuntimeModule();
-  auto domain = runtimeModule->getDomain(runtime);
+  struct : public Locals {
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.domain = runtimeModule->getDomainUnsafe(runtime);
 
   uint32_t index = args.getArg(0).getNumberAs<uint32_t>();
   OptValue<uint32_t> cjsModuleOffset =
-      domain->getCJSModuleOffset(runtime, index);
+      lv.domain->getCJSModuleOffset(runtime, index);
   if (LLVM_UNLIKELY(!cjsModuleOffset)) {
     return runtime.raiseTypeError(
         TwineChar16("Unable to find module with ID: ") + index);
@@ -162,7 +166,7 @@ CallResult<HermesValue> requireFast(void *, Runtime &runtime) {
   return runRequireCall(
       runtime,
       Runtime::makeNullHandle<RequireContext>(),
-      domain,
+      lv.domain,
       *cjsModuleOffset);
 }
 
@@ -210,6 +214,8 @@ CallResult<HermesValue> require(void *, Runtime &runtime) {
     PinnedValue<StringPrimitive> dirname;
     PinnedValue<StringPrimitive> target;
     PinnedValue<StringPrimitive> dirnameHandle;
+    PinnedValue<SymbolID> targetID;
+    PinnedValue<RequireContext> newRequireContext;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -232,15 +238,17 @@ CallResult<HermesValue> require(void *, Runtime &runtime) {
     return ExecutionStatus::EXCEPTION;
   }
 
-  auto cr = stringToSymbolID(
-      runtime, createPseudoHandle(vmcast<StringPrimitive>(*targetStrRes)));
-  if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION)) {
+  if (LLVM_UNLIKELY(
+          stringToSymbolID(
+              runtime,
+              createPseudoHandle(vmcast<StringPrimitive>(*targetStrRes)),
+              lv.targetID) == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<SymbolID> targetID = *cr;
 
   // Find the relevant CJS module.
-  OptValue<uint32_t> cjsModuleOffset = lv.domain->getCJSModuleOffset(*targetID);
+  OptValue<uint32_t> cjsModuleOffset =
+      lv.domain->getCJSModuleOffset(*lv.targetID);
   if (LLVM_UNLIKELY(!cjsModuleOffset)) {
     return runtime.raiseTypeError(
         TwineChar16("Unable to find module: ") + lv.target.get());
@@ -254,11 +262,11 @@ CallResult<HermesValue> require(void *, Runtime &runtime) {
   }
   lv.dirnameHandle.castAndSetHermesValue<StringPrimitive>(*dirnameRes);
 
-  auto newRequireContext =
+  lv.newRequireContext =
       RequireContext::create(runtime, lv.domain, lv.dirnameHandle);
 
   return runRequireCall(
-      runtime, newRequireContext, lv.domain, *cjsModuleOffset);
+      runtime, lv.newRequireContext, lv.domain, *cjsModuleOffset);
 }
 
 } // namespace vm

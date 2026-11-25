@@ -70,6 +70,10 @@ ExecutionStatus Interpreter::caseCreateClass(
     PinnedHermesValue *frameRegs) {
   const Inst *ip = runtime.getCurrentIP();
   GCScopeMarkerRAII mark{runtime};
+  struct : public Locals {
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   /// Obtain the function index and value of the super class based on the IP.
   auto funcIdxAndSuper = [ip, frameRegs]() -> std::pair<uint32_t, Handle<>> {
     // We use toRValue here because the accesses into the ip fields will not
@@ -101,7 +105,7 @@ ExecutionStatus Interpreter::caseCreateClass(
   auto classRes = createClass(
       runtime,
       funcIdxAndSuper.second,
-      [&runtime, frameRegs, ip, funcIdx = funcIdxAndSuper.first](
+      [&runtime, &lv, frameRegs, ip, funcIdx = funcIdxAndSuper.first](
           Handle<JSObject> ctorParent) {
         CodeBlock *curCodeBlock =
             runtime.getCurrentFrame().getCalleeCodeBlock();
@@ -110,9 +114,10 @@ ExecutionStatus Interpreter::caseCreateClass(
         auto envHandle = O3REG(CreateBaseClass).isUndefined()
             ? Runtime::makeNullHandle<Environment>()
             : Handle<Environment>::vmcast(&O3REG(CreateBaseClass));
+        lv.domain = runtimeModule->getDomainUnsafe(runtime);
         return JSClass::create(
                    runtime,
-                   runtimeModule->getDomain(runtime),
+                   lv.domain,
                    ctorParent,
                    envHandle,
                    runtimeModule->getCodeBlockMayAllocate(funcIdx))
@@ -488,12 +493,14 @@ ExecutionStatus Interpreter::caseGetPNameList(
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<ArrayStorageSmall> arr = *cr;
+  // No safepoint between here and the last write, so the PseudoHandle needs no
+  // pinning.
+  HermesValue arr = cr->getHermesValue();
   O3REG(GetPNameList) = HermesValue::encodeTrustedNumberValue(beginIndex);
   O4REG(GetPNameList) = HermesValue::encodeTrustedNumberValue(endIndex);
   // Write the result last in case it is the same register as one of the in/out
   // operands.
-  O1REG(GetPNameList) = arr.getHermesValue();
+  O1REG(GetPNameList) = arr;
   return ExecutionStatus::RETURNED;
 }
 
@@ -802,11 +809,14 @@ ExecutionStatus Interpreter::putByValTransient_RJS(
     Handle<> name,
     Handle<> value,
     bool strictMode) {
-  auto idRes = valueToSymbolID(runtime, name);
-  if (idRes == ExecutionStatus::EXCEPTION)
+  struct : public Locals {
+    PinnedValue<SymbolID> id;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  if (valueToSymbolID(runtime, name, lv.id) == ExecutionStatus::EXCEPTION)
     return ExecutionStatus::EXCEPTION;
 
-  return putByIdTransient_RJS(runtime, base, **idRes, value, strictMode);
+  return putByIdTransient_RJS(runtime, base, *lv.id, value, strictMode);
 }
 
 ExecutionStatus Interpreter::casePutByVal(
@@ -1696,12 +1706,14 @@ static ExecutionStatus
 transientObjectPutErrorMessage(Runtime &runtime, Handle<> base, SymbolID id) {
   // Emit an error message that looks like:
   // "Cannot create property '%{id}' on ${typeof base} '${String(base)}'".
-  StringView propName = runtime.getIdentifierTable().getStringView(runtime, id);
   struct : public Locals {
+    PinnedValue<StringPrimitive> propNameStr;
     PinnedValue<StringPrimitive> baseType;
     PinnedValue<StringPrimitive> valueAsString;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  StringView propName =
+      runtime.getIdentifierTable().getStringView(id, lv.propNameStr);
   lv.baseType = vmcast<StringPrimitive>(typeOf(runtime, base));
   StringView baseTypeAsString =
       StringPrimitive::createStringView(runtime, lv.baseType);
@@ -1709,7 +1721,7 @@ transientObjectPutErrorMessage(Runtime &runtime, Handle<> base, SymbolID id) {
     // Special workaround for Symbol which can't be stringified.
     auto str = symbolDescriptiveString(runtime, Handle<SymbolID>::vmcast(base));
     if (str != ExecutionStatus::EXCEPTION) {
-      lv.valueAsString = *str;
+      lv.valueAsString = std::move(*str);
     } else {
       runtime.clearThrownValue();
       lv.valueAsString = StringPrimitive::createNoThrow(

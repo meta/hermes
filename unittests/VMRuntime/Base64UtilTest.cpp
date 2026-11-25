@@ -22,8 +22,9 @@ using Base64UtilTest = RuntimeTestFixture;
     uint64_t expectedLength = ((original.size() + 2) / 3) * 4;              \
     EXPECT_LE(expectedLength, std::numeric_limits<uint32_t>::max());        \
     hermes::SafeUInt32 outputLength{static_cast<uint32_t>(expectedLength)}; \
-    CallResult<StringBuilder> builder =                                     \
-        StringBuilder::createStringBuilder(runtime, outputLength, true);    \
+    MutableHandle<StringPrimitive> storage{runtime};                        \
+    CallResult<StringBuilder> builder = StringBuilder::createStringBuilder( \
+        runtime, storage, outputLength, true);                              \
     EXPECT_NE(builder, ExecutionStatus::EXCEPTION);                         \
                                                                             \
     bool success = base64Encode(original, *builder);                        \
@@ -52,8 +53,9 @@ using Base64UtilTest = RuntimeTestFixture;
     hermes::OptValue<uint32_t> expectedLength =                             \
         base64DecodeOutputLength(original);                                 \
     EXPECT_TRUE(expectedLength.hasValue());                                 \
+    MutableHandle<StringPrimitive> storage{runtime};                        \
     CallResult<StringBuilder> builder = StringBuilder::createStringBuilder( \
-        runtime, hermes::SafeUInt32(*expectedLength), false);               \
+        runtime, storage, hermes::SafeUInt32(*expectedLength), false);      \
     EXPECT_NE(builder, ExecutionStatus::EXCEPTION);                         \
                                                                             \
     bool success = base64Decode(original, *builder);                        \
@@ -109,8 +111,9 @@ TEST_F(Base64UtilTest, EncodePaddingNotNeeded) {
 TEST_F(Base64UtilTest, EncodeInvalid) {
   // Just a long enough buffer. All calls in this function are expected to fail.
   hermes::SafeUInt32 outputLength{20};
+  MutableHandle<StringPrimitive> storage{runtime};
   CallResult<StringBuilder> builder =
-      StringBuilder::createStringBuilder(runtime, outputLength, true);
+      StringBuilder::createStringBuilder(runtime, storage, outputLength, true);
   EXPECT_NE(builder, ExecutionStatus::EXCEPTION);
   EXPECT_FALSE(base64Encode(createUTF16Ref(u"\U0001F600"), *builder));
   EXPECT_FALSE(base64Encode(createUTF16Ref(u"a\U0001F600"), *builder));
@@ -147,8 +150,9 @@ TEST_F(Base64UtilTest, DecodeWithWhitespace) {
 TEST_F(Base64UtilTest, DecodeInvalid) {
   // Just a long enough buffer. All calls in this function are expected to fail.
   hermes::SafeUInt32 outputLength{50};
+  MutableHandle<StringPrimitive> storage{runtime};
   CallResult<StringBuilder> builder =
-      StringBuilder::createStringBuilder(runtime, outputLength, false);
+      StringBuilder::createStringBuilder(runtime, storage, outputLength, false);
 
   std::array<char, 5> hasNegative = {'A', 'b', 'c', (char)-15, '\0'};
   EXPECT_FALSE(base64Decode(createASCIIRef(hasNegative.data()), *builder));

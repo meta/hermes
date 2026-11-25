@@ -19,6 +19,7 @@ HermesValue createGeneratorFunctionConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -63,11 +64,12 @@ HermesValue createGeneratorFunctionConstructor(Runtime &runtime) {
       runtime.generatorPrototype,
       dpf);
 
+  lv.str = runtime.getPredefinedString(Predefined::GeneratorFunction);
   defineProperty(
       runtime,
       proto,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::GeneratorFunction),
+      lv.str,
       dpf);
 
   return lv.cons.getHermesValue();

@@ -18,6 +18,11 @@ namespace hermes {
 namespace vm {
 
 void populateRegExpStringIteratorPrototype(Runtime &runtime) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   auto proto = Handle<JSObject>::vmcast(&runtime.regExpStringIteratorPrototype);
 
   defineMethod(
@@ -32,11 +37,12 @@ void populateRegExpStringIteratorPrototype(Runtime &runtime) {
   auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::RegExpStringIterator);
   defineProperty(
       runtime,
       proto,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::RegExpStringIterator),
+      lv.str,
       dpf);
 }
 

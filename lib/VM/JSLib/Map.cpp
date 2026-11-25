@@ -22,6 +22,7 @@ HermesValue createMapConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -136,11 +137,12 @@ HermesValue createMapConstructor(Runtime &runtime) {
   dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::Map);
   defineProperty(
       runtime,
       mapPrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::Map),
+      lv.str,
       dpf);
 
   defineSystemConstructor(
@@ -501,6 +503,7 @@ CallResult<HermesValue> mapPrototypeValues(void *, Runtime &runtime) {
 HermesValue createMapIteratorPrototype(Runtime &runtime) {
   struct : public Locals {
     PinnedValue<JSObject> parentHandle;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.parentHandle.castAndSetHermesValue<JSObject>(
@@ -518,11 +521,12 @@ HermesValue createMapIteratorPrototype(Runtime &runtime) {
   auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::MapIterator);
   defineProperty(
       runtime,
       lv.parentHandle,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::MapIterator),
+      lv.str,
       dpf);
 
   return lv.parentHandle.getHermesValue();

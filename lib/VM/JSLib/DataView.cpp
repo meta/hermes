@@ -26,7 +26,7 @@ CallResult<HermesValue> dataViewPrototypeBuffer(void *, Runtime &runtime) {
     return runtime.raiseTypeError(
         "DataView.prototype.buffer called on a non DataView object");
   }
-  return self->getBuffer(runtime).getHermesValue();
+  return HermesValue::encodeObjectValue(self->getBuffer(runtime));
 }
 
 // ES6 24.2.4.2
@@ -263,6 +263,7 @@ HermesValue createDataViewConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -324,11 +325,12 @@ HermesValue createDataViewConstructor(Runtime &runtime) {
   auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::DataView);
   defineProperty(
       runtime,
       proto,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::DataView),
+      lv.str,
       dpf);
 
   // DataView.xxx() methods.

@@ -436,6 +436,7 @@ CallResult<HermesValue> objectGetOwnPropertyDescriptors(
     PinnedValue<JSObject> descriptors;
     PinnedValue<> key;
     PinnedValue<> descriptor;
+    PinnedValue<JSArray> ownKeys;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.obj.castAndSetHermesValue<JSObject>(objRes.getValue());
@@ -451,8 +452,8 @@ CallResult<HermesValue> objectGetOwnPropertyDescriptors(
   if (LLVM_UNLIKELY(ownKeysRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<JSArray> ownKeys = *ownKeysRes;
-  uint32_t len = JSArray::getLength(*ownKeys, runtime);
+  lv.ownKeys = std::move(*ownKeysRes);
+  uint32_t len = JSArray::getLength(*lv.ownKeys, runtime);
 
   // 3. Let descriptors be ! ObjectCreate(%ObjectPrototype%).
   lv.descriptors = JSObject::create(runtime);
@@ -463,7 +464,7 @@ CallResult<HermesValue> objectGetOwnPropertyDescriptors(
   // 4. For each element key of ownKeys in List order, do
   for (uint32_t i = 0; i < len; ++i) {
     gcScope.flushToMarker(marker);
-    lv.key = ownKeys->at(runtime, i).unboxToHV(runtime);
+    lv.key = lv.ownKeys->at(runtime, i).unboxToHV(runtime);
     // a. Let desc be ? obj.[[GetOwnProperty]](key).
     // b. Let descriptor be ! FromPropertyDescriptor(desc).
     auto descriptorRes = getOwnPropertyDescriptor(runtime, lv.obj, lv.key);
@@ -498,17 +499,18 @@ CallResult<HermesValue> getOwnPropertyKeysAsStrings(
   if (cr == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto array = *cr;
   struct : public Locals {
+    PinnedValue<JSArray> array;
     PinnedValue<> prop;
     PinnedValue<> stringValue;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  lv.array = std::move(*cr);
   GCScope gcScope(runtime);
   auto marker = gcScope.createMarker();
-  for (unsigned i = 0, e = array->getEndIndex(); i < e; ++i) {
+  for (unsigned i = 0, e = lv.array->getEndIndex(); i < e; ++i) {
     gcScope.flushToMarker(marker);
-    lv.prop = array->at(runtime, i).unboxToHV(runtime);
+    lv.prop = lv.array->at(runtime, i).unboxToHV(runtime);
     if (lv.prop->isString() || lv.prop->isSymbol()) {
       // Nothing to do if it's already a string or symbol.
       continue;
@@ -521,11 +523,11 @@ CallResult<HermesValue> getOwnPropertyKeysAsStrings(
         "toString() on property name cannot fail");
     lv.stringValue = std::move(*status);
     if (LLVM_UNLIKELY(
-            JSArray::setElementAt(array, runtime, i, lv.stringValue) ==
+            JSArray::setElementAt(lv.array, runtime, i, lv.stringValue) ==
             ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
   }
-  return array.getHermesValue();
+  return lv.array.getHermesValue();
 }
 
 CallResult<HermesValue> objectGetOwnPropertyNames(void *, Runtime &runtime) {
@@ -583,17 +585,19 @@ defineProperty(Runtime &runtime, NativeArgs args, PropOpFlags opFlags) {
   // converting the key argument to a primitive happens before
   // toPropertyDescriptor (which can fail, so the order is
   // observable).
-  CallResult<Handle<>> keyRes =
-      toPropertyKeyIfObject(runtime, args.getArgHandle(1));
-  if (LLVM_UNLIKELY(keyRes == ExecutionStatus::EXCEPTION))
-    return ExecutionStatus::EXCEPTION;
-
-  // 3. Let desc be ? ToPropertyDescriptor(Attributes).
-  DefinePropertyFlags descFlags;
   struct : public Locals {
+    PinnedValue<> key;
     PinnedValue<> descValueOrAccessor;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  CallResult<PseudoHandle<>> keyRes =
+      toPropertyKeyIfObject(runtime, args.getArgHandle(1));
+  if (LLVM_UNLIKELY(keyRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  lv.key = std::move(*keyRes);
+
+  // 3. Let desc be ? ToPropertyDescriptor(Attributes).
+  DefinePropertyFlags descFlags;
   MutableHandle<> valueAccessor{lv.descValueOrAccessor};
   if (toPropertyDescriptor(
           args.getArgHandle(2), runtime, descFlags, valueAccessor) ==
@@ -604,7 +608,7 @@ defineProperty(Runtime &runtime, NativeArgs args, PropOpFlags opFlags) {
   // 4[throwOnError]. Perform ? DefinePropertyOrThrow(O, key, desc).
   // 4[!throwOnError]. Return ? O.[[DefineOwnProperty]](key, desc).
   return JSObject::defineOwnComputedPrimitive(
-      O, runtime, *keyRes, descFlags, lv.descValueOrAccessor, opFlags);
+      O, runtime, lv.key, descFlags, lv.descValueOrAccessor, opFlags);
 }
 
 CallResult<HermesValue> objectDefineProperty(void *, Runtime &runtime) {
@@ -635,6 +639,7 @@ objectDefinePropertiesInternal(Runtime &runtime, Handle<> obj, Handle<> props) {
     PinnedValue<> propName;
     PinnedValue<ArrayStorage> valueOrAccessorStorage;
     PinnedValue<> tempValueOrAccessor;
+    PinnedValue<JSArray> propNames;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.objHandle = objPtr;
@@ -660,7 +665,7 @@ objectDefinePropertiesInternal(Runtime &runtime, Handle<> obj, Handle<> props) {
   if (cr == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto propNames = *cr;
+  lv.propNames = std::move(*cr);
 
   // This function may create an unbounded number of GC handles.
   GCScope scope{runtime, "objectDefinePropertiesInternal", UINT_MAX};
@@ -680,7 +685,7 @@ objectDefinePropertiesInternal(Runtime &runtime, Handle<> obj, Handle<> props) {
   llvh::SmallVector<NewProps, 4> newProps;
 
   // Initialize ArrayStorage to hold valueOrAccessor values
-  uint32_t numProps = propNames->getEndIndex();
+  uint32_t numProps = lv.propNames->getEndIndex();
   auto storageRes = ArrayStorage::create(runtime, numProps, numProps);
   if (LLVM_UNLIKELY(storageRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -688,7 +693,7 @@ objectDefinePropertiesInternal(Runtime &runtime, Handle<> obj, Handle<> props) {
   lv.valueOrAccessorStorage.castAndSetHermesValue<ArrayStorage>(*storageRes);
 
   for (unsigned i = 0, e = numProps; i < e; ++i) {
-    lv.propName = propNames->at(runtime, i).unboxToHV(runtime);
+    lv.propName = lv.propNames->at(runtime, i).unboxToHV(runtime);
     ComputedPropertyDescriptor desc;
     CallResult<bool> descRes = JSObject::getOwnComputedDescriptor(
         lv.propsHandle, runtime, lv.propName, desc);
@@ -727,7 +732,7 @@ objectDefinePropertiesInternal(Runtime &runtime, Handle<> obj, Handle<> props) {
   for (unsigned propIdx = 0; propIdx < newProps.size(); ++propIdx) {
     const auto &newProp = newProps[propIdx];
     lv.propName =
-        propNames->at(runtime, newProp.propNameIndex).unboxToHV(runtime);
+        lv.propNames->at(runtime, newProp.propNameIndex).unboxToHV(runtime);
 
     // Get the value from ArrayStorage using the same index as newProps
     lv.tempValueOrAccessor = lv.valueOrAccessorStorage->at(propIdx);
@@ -1239,7 +1244,6 @@ CallResult<HermesValue> objectPropsFastArray(
   bool anyArrayIndex = false;
 
   lv.clazz = obj->getClass(runtime);
-  // forEachPropertyWhile flushes the handles getStringView creates.
   HiddenClass::forEachPropertyWhile(
       lv.clazz,
       runtime,
@@ -1248,8 +1252,7 @@ CallResult<HermesValue> objectPropsFastArray(
         if (desc.flags.privateName || !desc.flags.enumerable ||
             !isPropertyNamePrimitive(id))
           return true;
-        auto arrayIndex = toArrayIndex(
-            runtime.getIdentifierTable().getStringView(runtime, id));
+        auto arrayIndex = runtime.getIdentifierTable().symbolToArrayIndex(id);
         anyArrayIndex |= arrayIndex.hasValue();
         props.emplace_back(arrayIndex ? *arrayIndex : UINT32_MAX, id, desc);
         return true;
@@ -1427,6 +1430,7 @@ CallResult<HermesValue> objectAssign(void *, Runtime &runtime) {
     PinnedValue<JSObject> fromHandle;
     PinnedValue<> nextKeyHandle;
     PinnedValue<> propValueHandle;
+    PinnedValue<JSArray> keys;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.toHandle.castAndSetHermesValue<JSObject>(objRes.getValue());
@@ -1476,15 +1480,15 @@ CallResult<HermesValue> objectAssign(void *, Runtime &runtime) {
       return ExecutionStatus::EXCEPTION;
     }
 
-    auto keys = *cr;
+    lv.keys = std::move(*cr);
     ComputedPropertyDescriptor desc;
     // 5.c. Repeat for each element nextKey of keys in List order,
-    for (uint32_t nextKeyIdx = 0, endIdx = keys->getEndIndex();
+    for (uint32_t nextKeyIdx = 0, endIdx = lv.keys->getEndIndex();
          nextKeyIdx < endIdx;
          ++nextKeyIdx) {
       GCScopeMarkerRAII markerInner(gcScope);
 
-      nextKeyHandle = keys->at(runtime, nextKeyIdx).unboxToHV(runtime);
+      nextKeyHandle = lv.keys->at(runtime, nextKeyIdx).unboxToHV(runtime);
 
       // 5.c.i. Let desc be from.[[GetOwnProperty]](nextKey).
       auto descCr = JSObject::getOwnComputedDescriptor(
@@ -1621,6 +1625,7 @@ CallResult<HermesValue> directObjectPrototypeToString(
     struct : public Locals {
       PinnedValue<JSObject> O;
       PinnedValue<StringPrimitive> tag;
+      PinnedValue<StringPrimitive> result;
     } lv;
     LocalsRAII lraii(runtime, &lv);
     lv.O.castAndSetHermesValue<JSObject>(res.getValue());
@@ -1636,7 +1641,7 @@ CallResult<HermesValue> directObjectPrototypeToString(
       SafeUInt32 tagLen(lv.tag->getStringLength());
       tagLen.add(9);
       CallResult<StringBuilder> builder = StringBuilder::createStringBuilder(
-          runtime, tagLen, lv.tag->isASCII());
+          runtime, lv.result, tagLen, lv.tag->isASCII());
       if (LLVM_UNLIKELY(builder == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
@@ -1800,10 +1805,16 @@ CallResult<HermesValue> objectPrototypeHasOwnProperty(
           objectHasOwnFast(runtime, args.getThisArg(), args.getArg(0)))
     return HermesValue::encodeBoolValue(*fast);
   /// 1. Let P be ? ToPropertyKey(V).
+  struct : public Locals {
+    PinnedValue<JSObject> O;
+    PinnedValue<> P;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto PRes = toPropertyKey(runtime, args.getArgHandle(0));
   if (LLVM_UNLIKELY(PRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
+  lv.P = std::move(*PRes);
 
   /// 2. Let O be ? ToObject(this value).
   auto ORes = toObject(runtime, args.getThisHandle());
@@ -1811,12 +1822,8 @@ CallResult<HermesValue> objectPrototypeHasOwnProperty(
     return ExecutionStatus::EXCEPTION;
   }
   /// 3. Return ? HasOwnProperty(O, P).
-  struct : public Locals {
-    PinnedValue<JSObject> O;
-  } lv;
-  LocalsRAII lraii(runtime, &lv);
   lv.O.castAndSetHermesValue<JSObject>(ORes.getValue());
-  return objectHasOwnHelper(runtime, lv.O, *PRes);
+  return objectHasOwnHelper(runtime, lv.O, lv.P);
 }
 
 CallResult<HermesValue> objectHasOwn(void *, Runtime &runtime) {
@@ -1831,6 +1838,7 @@ CallResult<HermesValue> objectHasOwn(void *, Runtime &runtime) {
   }
   struct : public Locals {
     PinnedValue<JSObject> O;
+    PinnedValue<> P;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.O.castAndSetHermesValue<JSObject>(ORes.getValue());
@@ -1840,8 +1848,9 @@ CallResult<HermesValue> objectHasOwn(void *, Runtime &runtime) {
   if (LLVM_UNLIKELY(PRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
+  lv.P = std::move(*PRes);
   /// 3. Return ? HasOwnProperty(O, P).
-  return objectHasOwnHelper(runtime, lv.O, *PRes);
+  return objectHasOwnHelper(runtime, lv.O, lv.P);
 }
 
 CallResult<HermesValue> objectPrototypeIsPrototypeOf(void *, Runtime &runtime) {

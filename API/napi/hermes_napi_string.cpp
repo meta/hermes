@@ -223,12 +223,12 @@ napi_status NAPI_CDECL node_api_create_property_key_latin1(
   const auto *src = reinterpret_cast<const uint8_t *>(str);
   if (hermes::isAllASCII(src, src + length)) {
     hermes::vm::GCScope gcScope(runtime);
-    auto symRes = runtime.getIdentifierTable().getSymbolHandle(
+    auto symRes = runtime.getIdentifierTable().getSymbolID(
         runtime, hermes::vm::ASCIIRef(str, length));
     if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
       return napi_set_last_error(env, napi_generic_failure);
     }
-    auto *strPrim = runtime.getStringPrimFromSymbolID(**symRes);
+    auto *strPrim = runtime.getStringPrimFromSymbolID(*symRes);
     *result = env->addToCurrentScope(
         hermes::vm::HermesValue::encodeStringValue(strPrim));
     return napi_clear_last_error(env);
@@ -241,12 +241,12 @@ napi_status NAPI_CDECL node_api_create_property_key_latin1(
   }
 
   hermes::vm::GCScope gcScope(runtime);
-  auto symRes = runtime.getIdentifierTable().getSymbolHandle(
+  auto symRes = runtime.getIdentifierTable().getSymbolID(
       runtime, hermes::vm::UTF16Ref(buf.data(), length));
   if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
     return napi_set_last_error(env, napi_generic_failure);
   }
-  auto *strPrim = runtime.getStringPrimFromSymbolID(**symRes);
+  auto *strPrim = runtime.getStringPrimFromSymbolID(*symRes);
   *result = env->addToCurrentScope(
       hermes::vm::HermesValue::encodeStringValue(strPrim));
   return napi_clear_last_error(env);
@@ -275,12 +275,12 @@ napi_status NAPI_CDECL node_api_create_property_key_utf8(
   // If all bytes are ASCII, intern directly via ASCIIRef.
   if (hermes::isAllASCII(utf8, utf8 + length)) {
     hermes::vm::GCScope gcScope(runtime);
-    auto symRes = runtime.getIdentifierTable().getSymbolHandle(
+    auto symRes = runtime.getIdentifierTable().getSymbolID(
         runtime, hermes::vm::ASCIIRef(str, length));
     if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
       return napi_set_last_error(env, napi_generic_failure);
     }
-    auto *strPrim = runtime.getStringPrimFromSymbolID(**symRes);
+    auto *strPrim = runtime.getStringPrimFromSymbolID(*symRes);
     *result = env->addToCurrentScope(
         hermes::vm::HermesValue::encodeStringValue(strPrim));
     return napi_clear_last_error(env);
@@ -305,12 +305,12 @@ napi_status NAPI_CDECL node_api_create_property_key_utf8(
   size_t utf16Len = targetStart - reinterpret_cast<llvh::UTF16 *>(buf.data());
 
   hermes::vm::GCScope gcScope(runtime);
-  auto symRes = runtime.getIdentifierTable().getSymbolHandle(
+  auto symRes = runtime.getIdentifierTable().getSymbolID(
       runtime, hermes::vm::UTF16Ref(buf.data(), utf16Len));
   if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
     return napi_set_last_error(env, napi_generic_failure);
   }
-  auto *strPrim = runtime.getStringPrimFromSymbolID(**symRes);
+  auto *strPrim = runtime.getStringPrimFromSymbolID(*symRes);
   *result = env->addToCurrentScope(
       hermes::vm::HermesValue::encodeStringValue(strPrim));
   return napi_clear_last_error(env);
@@ -335,12 +335,12 @@ napi_status NAPI_CDECL node_api_create_property_key_utf16(
 
   auto &runtime = env->runtime;
   hermes::vm::GCScope gcScope(runtime);
-  auto symRes = runtime.getIdentifierTable().getSymbolHandle(
+  auto symRes = runtime.getIdentifierTable().getSymbolID(
       runtime, hermes::vm::UTF16Ref(str, length));
   if (LLVM_UNLIKELY(symRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
     return napi_set_last_error(env, napi_generic_failure);
   }
-  auto *strPrim = runtime.getStringPrimFromSymbolID(**symRes);
+  auto *strPrim = runtime.getStringPrimFromSymbolID(*symRes);
   *result = env->addToCurrentScope(
       hermes::vm::HermesValue::encodeStringValue(strPrim));
   return napi_clear_last_error(env);

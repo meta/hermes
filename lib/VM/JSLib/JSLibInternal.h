@@ -470,8 +470,7 @@ CallResult<HermesValue> addEntriesFromIterable(
       return target.getHermesValue();
     }
     // c. Let nextItem be ? IteratorValue(next).
-    lv.nextItem.template castAndSetHermesValue<JSObject>(
-        nextRes->getHermesValue());
+    lv.nextItem = std::move(*nextRes);
     auto nextItemRes = JSObject::getNamed_RJS(
         lv.nextItem, runtime, Predefined::getSymbolID(Predefined::value));
     if (LLVM_UNLIKELY(nextItemRes == ExecutionStatus::EXCEPTION)) {

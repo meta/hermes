@@ -35,6 +35,7 @@ HermesValue createAsyncFunctionConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -71,11 +72,12 @@ HermesValue createAsyncFunctionConstructor(Runtime &runtime) {
 
   /// 26.7.3.2 AsyncFunction.prototype [ @@toStringTag ]
   /// The initial value is the String value "AsyncFunction".
+  lv.str = runtime.getPredefinedString(Predefined::AsyncFunction);
   defineProperty(
       runtime,
       proto,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::AsyncFunction),
+      lv.str,
       dpf);
 
   return lv.cons.getHermesValue();

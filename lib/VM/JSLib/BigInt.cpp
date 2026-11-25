@@ -23,6 +23,7 @@ void createBigIntConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -80,11 +81,12 @@ void createBigIntConstructor(Runtime &runtime) {
   auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::BigInt);
   defineProperty(
       runtime,
       bigintPrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::BigInt),
+      lv.str,
       dpf);
 }
 

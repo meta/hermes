@@ -169,7 +169,7 @@ class FastArray : public JSObject {
   /// Construct an instance of the hidden class describing the layout of JSArray
   /// instances.
   /// \param rootClazz the starting HiddenClass for the JSArray.
-  static Handle<HiddenClass> createClass(
+  static PseudoHandle<HiddenClass> createClass(
       Runtime &runtime,
       Handle<JSObject> prototypeHandle,
       Handle<HiddenClass> rootClazz);

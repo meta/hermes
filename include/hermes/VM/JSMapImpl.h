@@ -179,6 +179,7 @@ class JSMapIteratorImpl final : public JSObject {
       Runtime &runtime) {
     struct : public Locals {
       PinnedValue<> value;
+      PinnedValue<JSArray> arr;
     } lv;
     LocalsRAII lraii(runtime, &lv);
     if (!self->iterationFinished_) {
@@ -206,11 +207,11 @@ class JSMapIteratorImpl final : public JSObject {
             if (arrRes == ExecutionStatus::EXCEPTION) {
               return ExecutionStatus::EXCEPTION;
             }
-            Handle<JSArray> arrHandle = runtime.makeHandle(std::move(*arrRes));
+            lv.arr = std::move(*arrRes);
             lv.value = self->data_.getNonNull(runtime)->iteratorKey(
                 runtime, self->iterCtx_);
             if (LLVM_UNLIKELY(
-                    JSArray::setElementAt(arrHandle, runtime, 0, lv.value) ==
+                    JSArray::setElementAt(lv.arr, runtime, 0, lv.value) ==
                     ExecutionStatus::EXCEPTION))
               return ExecutionStatus::EXCEPTION;
             if constexpr (std::is_same_v<HashMapEntryType, HashMapEntry>) {
@@ -218,10 +219,10 @@ class JSMapIteratorImpl final : public JSObject {
                   runtime, self->iterCtx_);
             }
             if (LLVM_UNLIKELY(
-                    JSArray::setElementAt(arrHandle, runtime, 1, lv.value) ==
+                    JSArray::setElementAt(lv.arr, runtime, 1, lv.value) ==
                     ExecutionStatus::EXCEPTION))
               return ExecutionStatus::EXCEPTION;
-            lv.value = arrHandle.getHermesValue();
+            lv.value = lv.arr.getHermesValue();
             break;
           };
           case IterationKind::NumKinds:
@@ -236,8 +237,7 @@ class JSMapIteratorImpl final : public JSObject {
         self->data_.setNull(runtime.getHeap());
       }
     }
-    return createIterResultObject(runtime, lv.value, self->iterationFinished_)
-        .getHermesValue();
+    return createIterResultObject(runtime, lv.value, self->iterationFinished_);
   }
 
   /// Build the metadata for this map implementation, and store it into \p mb.

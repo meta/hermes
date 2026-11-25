@@ -48,9 +48,7 @@ TEST_F(TwineChar16Test, ConstructTest) {
 
   {
     EXPECT_TWINE_OUTPUT(
-        4u,
-        u"abcd",
-        TwineChar16(StringPrimitive::createNoThrow(runtime, "abcd").get()));
+        4u, u"abcd", TwineChar16(createNoThrowForTest(runtime, "abcd").get()));
   }
 }
 
@@ -80,7 +78,7 @@ TEST_F(TwineChar16Test, ConcatTest) {
         u"abcdefgh",
         ((TwineChar16(u"ab") + TwineChar16(createUTF16Ref(u"cd"))) +
          (TwineChar16("ef") +
-          TwineChar16(StringPrimitive::createNoThrow(runtime, "gh").get()))));
+          TwineChar16(createNoThrowForTest(runtime, "gh").get()))));
   }
 
   {

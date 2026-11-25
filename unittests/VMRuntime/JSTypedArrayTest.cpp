@@ -19,19 +19,20 @@ TEST_F(JSTypedArrayTest, BeginAndEndMatchesOnBaseAndSub) {
   // Make sure that the begin and end pointers match for both JSTypedArrayBase,
   // and JSTypedArray<T>. Do this for each T.
 
-#define TYPED_ARRAY(name, type)                                       \
-  {                                                                   \
-    auto result = name##Array::allocate(runtime, 10);                 \
-    ASSERT_FALSE(isException(result));                                \
-    Handle<name##Array> array = Handle<name##Array>::vmcast(*result); \
-    EXPECT_EQ(                                                        \
-        reinterpret_cast<uintptr_t>(array->data(runtime)),            \
-        reinterpret_cast<uintptr_t>(                                  \
-            Handle<JSTypedArrayBase>(array)->data(runtime)));         \
-    EXPECT_EQ(                                                        \
-        reinterpret_cast<uintptr_t>(array->dataEnd(runtime)),         \
-        reinterpret_cast<uintptr_t>(                                  \
-            Handle<JSTypedArrayBase>(array)->dataEnd(runtime)));      \
+#define TYPED_ARRAY(name, type)                                              \
+  {                                                                          \
+    auto result = name##Array::allocate(runtime, 10);                        \
+    ASSERT_FALSE(isException(result));                                       \
+    Handle<name##Array> array =                                              \
+        Handle<name##Array>::vmcast(runtime.makeHandle(std::move(*result))); \
+    EXPECT_EQ(                                                               \
+        reinterpret_cast<uintptr_t>(array->data(runtime)),                   \
+        reinterpret_cast<uintptr_t>(                                         \
+            Handle<JSTypedArrayBase>(array)->data(runtime)));                \
+    EXPECT_EQ(                                                               \
+        reinterpret_cast<uintptr_t>(array->dataEnd(runtime)),                \
+        reinterpret_cast<uintptr_t>(                                         \
+            Handle<JSTypedArrayBase>(array)->dataEnd(runtime)));             \
   }
 #include "hermes/VM/TypedArrays.def"
 }

@@ -22,6 +22,7 @@ HermesValue createSetConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -169,11 +170,12 @@ HermesValue createSetConstructor(Runtime &runtime) {
   dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::Set);
   defineProperty(
       runtime,
       setPrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::Set),
+      lv.str,
       dpf);
 
   defineSystemConstructor(
@@ -354,7 +356,7 @@ CallResult<HermesValue> setConstructor(void *, Runtime &runtime) {
   // to allow for the fact that the length could be modified during iteration.
   for (;;) {
     gcScope.flushToMarker(marker);
-    CallResult<Handle<JSObject>> nextRes =
+    CallResult<PseudoHandle<JSObject>> nextRes =
         iteratorStep(runtime, iteratorRecord);
     if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -363,7 +365,7 @@ CallResult<HermesValue> setConstructor(void *, Runtime &runtime) {
       // Done with iteration.
       return lv.self.getHermesValue();
     }
-    lv.tmpObjHandle = vmcast<JSObject>(nextRes->getHermesValue());
+    lv.tmpObjHandle = std::move(*nextRes);
     auto nextValueRes = JSObject::getNamed_RJS(
         lv.tmpObjHandle, runtime, Predefined::getSymbolID(Predefined::value));
     if (LLVM_UNLIKELY(nextValueRes == ExecutionStatus::EXCEPTION)) {
@@ -502,6 +504,7 @@ CallResult<HermesValue> setPrototypeValues(void *, Runtime &runtime) {
 HermesValue createSetIteratorPrototype(Runtime &runtime) {
   struct : public Locals {
     PinnedValue<JSObject> parentHandle;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.parentHandle = JSObject::create(
@@ -517,11 +520,12 @@ HermesValue createSetIteratorPrototype(Runtime &runtime) {
   auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::SetIterator);
   defineProperty(
       runtime,
       lv.parentHandle,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::SetIterator),
+      lv.str,
       dpf);
 
   return lv.parentHandle.getHermesValue();

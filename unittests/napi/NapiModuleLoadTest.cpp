@@ -111,11 +111,11 @@ TEST_F(NapiModuleLoadTest, LoadTestAddon) {
     auto objHandle = rt_->makeHandle(vm::vmcast<vm::JSObject>(hv));
 
     // Look up "hello".
-    auto symRes = rt_->getIdentifierTable().getSymbolHandle(
-        *rt_, vm::ASCIIRef("hello", 5));
+    auto symRes =
+        rt_->getIdentifierTable().getSymbolID(*rt_, vm::ASCIIRef("hello", 5));
     ASSERT_EQ(symRes.getStatus(), vm::ExecutionStatus::RETURNED);
 
-    auto propRes = vm::JSObject::getNamed_RJS(objHandle, *rt_, **symRes);
+    auto propRes = vm::JSObject::getNamed_RJS(objHandle, *rt_, *symRes);
     ASSERT_EQ(propRes.getStatus(), vm::ExecutionStatus::RETURNED);
 
     vm::HermesValue propVal = propRes->get();

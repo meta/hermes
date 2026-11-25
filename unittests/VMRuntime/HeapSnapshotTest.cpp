@@ -905,6 +905,13 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationForLazyCode) {
 }
 
 TEST_F(HeapSnapshotRuntimeTest, RegExpBytecodeReportedByItsModule) {
+  struct : public Locals {
+    PinnedValue<JSFunction> f;
+    PinnedValue<Domain> domain;
+    PinnedValue<JSRegExp> r0;
+    PinnedValue<JSRegExp> r1;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
 
@@ -913,14 +920,16 @@ TEST_F(HeapSnapshotRuntimeTest, RegExpBytecodeReportedByItsModule) {
       "file:///fake.js",
       hbc::CompileFlags{});
   ASSERT_FALSE(isException(res));
-  Handle<JSFunction> f = runtime.makeHandle(vmcast<JSFunction>(*res));
+  lv.f = vmcast<JSFunction>(*res);
+  Handle<JSFunction> f = lv.f;
   RuntimeModule *rm = f->getRuntimeModule();
   const size_t numRegExps = rm->getBytecode()->getRegExpTable().size();
   ASSERT_EQ(1u, numRegExps);
   // Precondition: nothing is cached yet.
   ASSERT_EQ(0u, rm->regExpCacheMemorySize());
   const auto rmID = runtime.getHeap().getNativeID(rm);
-  Handle<Domain> domain = rm->getDomain(runtime);
+  lv.domain = rm->getDomainUnsafe(runtime);
+  Handle<Domain> domain = lv.domain;
   auto domainMallocSize = [&]() {
     GCCell *cell = domain.get();
     return cell->getVT()->getMallocSize(cell);
@@ -941,14 +950,15 @@ TEST_F(HeapSnapshotRuntimeTest, RegExpBytecodeReportedByItsModule) {
     rmSizeBefore = FIND_NODE_FOR_ID(rmID, nodes, strings).selfSize;
   }
 
-  auto call = [&]() {
+  auto call = [&](MutableHandle<JSRegExp> out) {
     CallResult<PseudoHandle<>> r =
         Callable::executeCall0(f, runtime, Runtime::getUndefinedValue());
     EXPECT_FALSE(isException(r));
-    return runtime.makeHandle(vmcast<JSRegExp>(r->get()));
+    out = vmcast<JSRegExp>(r->get());
+    return Handle<JSRegExp>(out);
   };
 
-  Handle<JSRegExp> r0 = call();
+  Handle<JSRegExp> r0 = call(lv.r0);
   const RegExpBytecode *entry = r0->getBytecodeEntry();
   ASSERT_EQ(RegExpBytecode::Ownership::Cached, entry->ownership());
   auto regExpMallocSize = [](Handle<JSRegExp> r) {
@@ -960,7 +970,7 @@ TEST_F(HeapSnapshotRuntimeTest, RegExpBytecodeReportedByItsModule) {
   // The Domain reports the cache through its module.
   EXPECT_EQ(domainSizeBefore + sizeAfterFirst, domainMallocSize());
 
-  Handle<JSRegExp> r1 = call();
+  Handle<JSRegExp> r1 = call(lv.r1);
   EXPECT_EQ(entry, r1->getBytecodeEntry());
   EXPECT_EQ(0u, regExpMallocSize(r1));
   EXPECT_EQ(domainSizeBefore + sizeAfterFirst, domainMallocSize());
@@ -1161,12 +1171,12 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
   lv.obj = JSObject::create(runtime);
   {
     vm::GCScope gcScope(runtime);
-    lv.fooSym = vm::stringToSymbolID(
-                    runtime, vm::StringPrimitive::createNoThrow(runtime, "foo"))
+    lv.fooSym = vm::stringToSymbolIDForTest(
+                    runtime, vm::createNoThrowForTest(runtime, "foo"))
                     ->getHermesValue()
                     .getSymbol();
-    lv.barSym = vm::stringToSymbolID(
-                    runtime, vm::StringPrimitive::createNoThrow(runtime, "bar"))
+    lv.barSym = vm::stringToSymbolIDForTest(
+                    runtime, vm::createNoThrowForTest(runtime, "bar"))
                     ->getHermesValue()
                     .getSymbol();
   }
@@ -1583,12 +1593,12 @@ baz();
   SymbolID fooSym, barSym;
   {
     vm::GCScope gcScope(runtime);
-    fooSym = vm::stringToSymbolID(
-                 runtime, vm::StringPrimitive::createNoThrow(runtime, "foo"))
+    fooSym = vm::stringToSymbolIDForTest(
+                 runtime, vm::createNoThrowForTest(runtime, "foo"))
                  ->getHermesValue()
                  .getSymbol();
-    barSym = vm::stringToSymbolID(
-                 runtime, vm::StringPrimitive::createNoThrow(runtime, "bar"))
+    barSym = vm::stringToSymbolIDForTest(
+                 runtime, vm::createNoThrowForTest(runtime, "bar"))
                  ->getHermesValue()
                  .getSymbol();
   }

@@ -111,7 +111,9 @@ inline bool isPropertyKey(Handle<> valueHandle) {
 }
 
 /// ES9 7.1.14
-inline CallResult<Handle<>> toPropertyKey(
+/// \return a Symbol or a String. The caller must pin the result before the
+/// next safepoint.
+inline CallResult<PseudoHandle<>> toPropertyKey(
     Runtime &runtime,
     Handle<> valueHandle) {
   CallResult<HermesValue> primRes =
@@ -119,31 +121,36 @@ inline CallResult<Handle<>> toPropertyKey(
   if (LLVM_UNLIKELY(primRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<> prim = runtime.makeHandle(*primRes);
-  if (prim->isSymbol()) {
-    return prim;
+  if (primRes->isSymbol()) {
+    return PseudoHandle<>::create(*primRes);
   }
+  struct : public Locals {
+    PinnedValue<> prim;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.prim = *primRes;
   CallResult<PseudoHandle<StringPrimitive>> strRes =
-      toString_RJS(runtime, prim);
+      toString_RJS(runtime, lv.prim);
   if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  return Handle<>(runtime.makeHandle(std::move(*strRes)));
+  return PseudoHandle<>::create(strRes->getHermesValue());
 }
 
 /// This function is used to convert a property to property key if it's an
-/// object. Check if \p nameValHandle is an object, if so, convert it to a
+/// object. Check if \p valueHandle is an object, if so, convert it to a
 /// key which may have side-effects. Otherwise just return the original
-/// handle.
+/// value.
 /// ES6.0 7.1.14, but only for objects. Primitives are left unaltered.
 /// Note: this can return a Symbol or a String if \p valueHandle is an object.
-inline CallResult<Handle<>> toPropertyKeyIfObject(
+/// The caller must pin the result before the next safepoint.
+inline CallResult<PseudoHandle<>> toPropertyKeyIfObject(
     Runtime &runtime,
     Handle<> valueHandle) {
   if (LLVM_UNLIKELY(valueHandle->isObject())) {
     return toPropertyKey(runtime, valueHandle);
   }
-  return valueHandle;
+  return PseudoHandle<>::create(valueHandle.getHermesValue());
 }
 
 /// \return prototype for primitive \p base.
@@ -211,13 +218,15 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle);
 /// ES5.1 11.9.6
 bool strictEqualityTest(HermesValue x, HermesValue y);
 
-/// Convert a string to a uniqued property name.
-inline CallResult<Handle<SymbolID>> stringToSymbolID(
+/// Convert a string to a uniqued property name, stored in \p out (which must
+/// be a rooted slot, e.g. a PinnedValue<SymbolID> in the caller's Locals).
+inline ExecutionStatus stringToSymbolID(
     Runtime &runtime,
-    PseudoHandle<StringPrimitive> strPrim) {
+    PseudoHandle<StringPrimitive> strPrim,
+    MutableHandle<SymbolID> out) {
   // Unique the string.
-  return runtime.getIdentifierTable().getSymbolHandleFromPrimitive(
-      runtime, std::move(strPrim));
+  return runtime.getIdentifierTable().getSymbolFromPrimitive(
+      runtime, std::move(strPrim), out);
 }
 
 /// ES16.0 9.13
@@ -232,10 +241,12 @@ inline bool canBeHeldWeakly(Runtime &rt, SmallHermesValue hv) {
       (hv.isSymbol() && !rt.getSymbolRegistry().hasSymbol(hv.getSymbol()));
 }
 
-/// Convert a value to a uniqued property name.
-CallResult<Handle<SymbolID>> valueToSymbolID(
+/// Convert a value to a uniqued property name, stored in \p out (which must be
+/// a rooted slot, e.g. a PinnedValue<SymbolID> in the caller's Locals).
+ExecutionStatus valueToSymbolID(
     Runtime &runtime,
-    Handle<> nameValHnd);
+    Handle<> nameValHnd,
+    MutableHandle<SymbolID> out);
 
 /// \return a string indicating the type of the operand corresponding to the
 /// `typeof` operator.
@@ -359,7 +370,7 @@ CallResult<PseudoHandle<StringPrimitive>> numberToStringPrimitive(
 /// string such that we're as close as possible to the actual precision encoded
 /// in the double value given by number.
 /// \returns the string that results.
-Handle<StringPrimitive>
+PseudoHandle<StringPrimitive>
 numberToStringWithRadix(Runtime &runtime, double number, unsigned radix);
 
 /// ES6.0 7.3.9
@@ -419,8 +430,9 @@ CallResult<PseudoHandle<HermesValue>> iteratorValue(
     Handle<JSObject> iterResult);
 
 /// ES2023 7.4.6
-/// \return a null pointer instead of the boolean false.
-CallResult<Handle<JSObject>> iteratorStep(
+/// \return a null pointer instead of the boolean false. The caller must pin
+/// the result before the next safepoint.
+CallResult<PseudoHandle<JSObject>> iteratorStep(
     Runtime &runtime,
     const CheckedIteratorRecord &iteratorRecord);
 
@@ -450,7 +462,7 @@ ExecutionStatus iteratorCloseAndRethrow(
 
 /// This function combines ES2023 7.4.12 IterableToList and 7.3.18
 /// CreateArrayFromList into one API.
-CallResult<Handle<JSArray>> iterableToArray(
+CallResult<PseudoHandle<JSArray>> iterableToArray(
     Runtime &runtime,
     Handle<HermesValue> items);
 
@@ -462,8 +474,8 @@ CallResult<Handle<JSArray>> iterableToArray(
 bool isUncatchableError(HermesValue value);
 
 /// ES6.0 7.4.7
-Handle<JSObject>
-createIterResultObject(Runtime &runtime, Handle<> value, bool done);
+/// \return the new iterator result object.
+HermesValue createIterResultObject(Runtime &runtime, Handle<> value, bool done);
 
 /// ES7 7.3.20
 CallResult<Handle<Callable>> speciesConstructor(
@@ -542,7 +554,7 @@ instanceOfOperator_RJS(Runtime &runtime, Handle<> object, Handle<> constructor);
 
 /// ES6.0 19.4.3.2.1 Runtime Semantics: SymbolDescriptiveString ( sym )
 /// Returns "Symbol([description])" given a symbol.
-CallResult<Handle<StringPrimitive>> symbolDescriptiveString(
+CallResult<PseudoHandle<StringPrimitive>> symbolDescriptiveString(
     Runtime &runtime,
     Handle<SymbolID> sym);
 

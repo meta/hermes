@@ -405,6 +405,7 @@ HermesValue createMathObject(Runtime &runtime) {
   struct : public Locals {
     PinnedValue<> numberHandle;
     PinnedValue<JSMath> math;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
@@ -576,11 +577,12 @@ HermesValue createMathObject(Runtime &runtime) {
   auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::Math);
   defineProperty(
       runtime,
       lv.math,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::Math),
+      lv.str,
       dpf);
 
   return lv.math.getHermesValue();

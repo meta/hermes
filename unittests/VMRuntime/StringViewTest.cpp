@@ -21,7 +21,7 @@ using StringViewTest = RuntimeTestFixture;
 TEST_F(StringViewTest, Construction) {
   // Test createStringView
   UTF16Ref str1 = createUTF16Ref(u"abcdef\x100");
-  auto strPrim1 = StringPrimitive::createNoThrow(runtime, str1);
+  auto strPrim1 = createNoThrowForTest(runtime, str1);
   StringView view1 = StringPrimitive::createStringView(runtime, strPrim1);
   EXPECT_TRUE(!view1.isASCII());
   EXPECT_EQ(view1.length(), 7u);
@@ -39,32 +39,28 @@ TEST_F(StringViewTest, Construction) {
 }
 
 TEST_F(StringViewTest, Comparison) {
-  auto strPrim1 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abcde"));
+  auto strPrim1 = createNoThrowForTest(runtime, createUTF16Ref(u"abcde"));
   auto view1 = StringPrimitive::createStringView(runtime, strPrim1);
 
-  auto strPrim2 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abcdefg"));
+  auto strPrim2 = createNoThrowForTest(runtime, createUTF16Ref(u"abcdefg"));
   auto view2 = StringPrimitive::createStringView(runtime, strPrim2);
 
   EXPECT_FALSE(view1.equals(view2));
   EXPECT_FALSE(view2.equals(view1));
 
-  auto strPrim3 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abc"));
+  auto strPrim3 = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
   auto view3 = StringPrimitive::createStringView(runtime, strPrim3);
 
   EXPECT_FALSE(view1.equals(view3));
   EXPECT_FALSE(view3.equals(view1));
 
-  auto strPrim4 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"defgh"));
+  auto strPrim4 = createNoThrowForTest(runtime, createUTF16Ref(u"defgh"));
   auto view4 = StringPrimitive::createStringView(runtime, strPrim4);
   EXPECT_FALSE(view1.equals(view4));
   EXPECT_FALSE(view4.equals(view1));
 
   llvh::StringRef str = "abcde";
-  auto strPrim5 = StringPrimitive::createNoThrow(runtime, str);
+  auto strPrim5 = createNoThrowForTest(runtime, str);
   auto view5 = StringPrimitive::createStringView(runtime, strPrim5);
   EXPECT_TRUE(view1.equals(view5));
   EXPECT_TRUE(view1.equals(view5));
@@ -85,16 +81,16 @@ TEST_F(StringViewTest, HandleHandling) {
   // count in its dtor.
   GCScope scope1{runtime, "StringViewTest.HandleHandling1"};
 
-  auto strPrim1 = StringPrimitive::createNoThrow(
-      runtime, createUTF16Ref(u"I have a handle"));
+  auto strPrim1 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"I have a handle"));
   StringView scope1View1 = StringPrimitive::createStringView(runtime, strPrim1);
   StringView scope1View2 = StringPrimitive::createStringView(runtime, strPrim1);
   StringView scope1View3 = StringPrimitive::createStringView(runtime, strPrim1);
   (void)scope1View3;
 
   GCScope scope2{runtime, "StringViewTest.HandleHandling2"};
-  auto strPrim2 = StringPrimitive::createNoThrow(
-      runtime, createUTF16Ref(u"I also have a handle"));
+  auto strPrim2 =
+      createNoThrowForTest(runtime, createUTF16Ref(u"I also have a handle"));
   StringView scope2View1 = StringPrimitive::createStringView(runtime, strPrim2);
 
   // This assignment requires us to change the GCScope associated with the
@@ -116,7 +112,7 @@ TEST_F(StringViewTest, HandleHandling) {
 
 TEST_F(StringViewTest, Iteration) {
   auto str1 = createUTF16Ref(u"abcdefghijklmnopqrstuvwxyz");
-  auto strPrim1 = StringPrimitive::createNoThrow(runtime, str1);
+  auto strPrim1 = createNoThrowForTest(runtime, str1);
   auto view1 = StringPrimitive::createStringView(runtime, strPrim1);
   uint32_t index = 0;
   for (const char16_t c : view1) {
@@ -126,7 +122,7 @@ TEST_F(StringViewTest, Iteration) {
 
 TEST_F(StringViewTest, Slice) {
   auto str = createUTF16Ref(u"abcdefgh");
-  auto strPrim1 = StringPrimitive::createNoThrow(runtime, str);
+  auto strPrim1 = createNoThrowForTest(runtime, str);
   auto view = StringPrimitive::createStringView(runtime, strPrim1);
   auto itr = view.begin();
   for (uint32_t i = 0; i < 8; ++i, ++itr) {
@@ -140,7 +136,7 @@ TEST_F(StringViewTest, Output) {
   auto str = createUTF16Ref(u"abcd");
   llvh::SmallVector<char, 32> result{};
   llvh::raw_svector_ostream os{result};
-  auto strPrim = StringPrimitive::createNoThrow(runtime, str);
+  auto strPrim = createNoThrowForTest(runtime, str);
   auto view = StringPrimitive::createStringView(runtime, strPrim);
   os << view;
   EXPECT_EQ('a', result[0]);

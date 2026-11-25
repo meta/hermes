@@ -662,22 +662,25 @@ class HiddenClass final : public GCCell {
 
   /// Delete a property which we found earlier using \c findProperty.
   /// \return the resulting new class.
-  static Handle<HiddenClass> deleteProperty(
+  static PseudoHandle<HiddenClass> deleteProperty(
       Handle<HiddenClass> selfHandle,
       Runtime &runtime,
       PropertyPos pos);
 
   /// Add a new property. It must not already exist.
-  /// \return the resulting new class and the index of the new property.
-  static CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> addProperty(
+  /// \param[out] out receives the resulting class. It is only written on
+  ///   success and may alias \p selfHandle.
+  /// \return the index of the new property.
+  static CallResult<SlotIndex> addProperty(
       Handle<HiddenClass> selfHandle,
       Runtime &runtime,
       SymbolID name,
-      PropertyFlags propertyFlags);
+      PropertyFlags propertyFlags,
+      MutableHandle<HiddenClass> out);
 
   /// Update an existing property's flags and return the resulting class.
   /// \param pos is the position of the property into the property map.
-  static Handle<HiddenClass> updateProperty(
+  static PseudoHandle<HiddenClass> updateProperty(
       Handle<HiddenClass> selfHandle,
       Runtime &runtime,
       PropertyPos pos,
@@ -780,7 +783,7 @@ class HiddenClass final : public GCCell {
   /// class, so the SymbolIDs won't get freed by gc. It can be llvh::None; if it
   /// is llvh::None, update every property.
   /// \return the resulting hidden class.
-  static Handle<HiddenClass> updatePropertyFlagsWithoutTransitions(
+  static PseudoHandle<HiddenClass> updatePropertyFlagsWithoutTransitions(
       Handle<HiddenClass> selfHandle,
       Runtime &runtime,
       PropertyFlags flagsToClear,
@@ -791,10 +794,12 @@ class HiddenClass final : public GCCell {
   /// with an internal property name. Only slots with index less than
   /// InternalProperty::NumAnonymousInternalProperties can be reserved.
   /// \param selfHandle must not be in dictionary mode.
-  /// \return the resulting new class and the index of the reserved slot.
-  static CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> reserveSlot(
+  /// \param[out] out receives the resulting class; may alias \p selfHandle.
+  /// \return the index of the reserved slot.
+  static CallResult<SlotIndex> reserveSlot(
       Handle<HiddenClass> selfHandle,
-      Runtime &runtime);
+      Runtime &runtime,
+      MutableHandle<HiddenClass> out);
 
   /// \return true if all properties are non-configurable
   static bool areAllNonConfigurable(
@@ -829,10 +834,20 @@ class HiddenClass final : public GCCell {
   /// will have one.  The \p noCache argument indicates whether the
   /// new dictionary \c HiddenClass's dictionaryNoCacheMode flag will
   /// be set.  \return the new class.
-  static Handle<HiddenClass> copyToNewDictionary(
+  static PseudoHandle<HiddenClass> copyToNewDictionary(
       Handle<HiddenClass> selfHandle,
       Runtime &runtime,
       bool noCache = false);
+
+  /// Out-of-line slow path of addProperty for a class-mode \p selfHandle with
+  /// no existing transition: either converts to a dictionary or allocates a
+  /// new child class. \p out may alias \p selfHandle.
+  LLVM_ATTRIBUTE_NOINLINE static CallResult<SlotIndex> addPropertySlow(
+      Handle<HiddenClass> selfHandle,
+      Runtime &runtime,
+      SymbolID name,
+      PropertyFlags propertyFlags,
+      MutableHandle<HiddenClass> out);
 
   /// Like findProperty, but for the case where we know that propertyMap_ is
   /// null. This serves as the out-of-line slow path for findProperty.
@@ -898,8 +913,12 @@ void HiddenClass::forEachProperty(
   if (LLVM_UNLIKELY(!selfHandle->propertyMap_))
     initializeMissingPropertyMap(selfHandle, runtime);
 
-  return DictPropertyMap::forEachProperty(
-      runtime.makeHandle(selfHandle->propertyMap_), runtime, callback);
+  struct : public Locals {
+    PinnedValue<DictPropertyMap> map;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.map = selfHandle->propertyMap_.getNonNull(runtime);
+  return DictPropertyMap::forEachProperty(lv.map, runtime, callback);
 }
 
 template <typename CallbackFunction>
@@ -910,8 +929,12 @@ bool HiddenClass::forEachPropertyWhile(
   if (LLVM_UNLIKELY(!selfHandle->propertyMap_))
     initializeMissingPropertyMap(selfHandle, runtime);
 
-  return DictPropertyMap::forEachPropertyWhile(
-      runtime.makeHandle(selfHandle->propertyMap_), runtime, callback);
+  struct : public Locals {
+    PinnedValue<DictPropertyMap> map;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.map = selfHandle->propertyMap_.getNonNull(runtime);
+  return DictPropertyMap::forEachPropertyWhile(lv.map, runtime, callback);
 }
 
 inline OptValue<bool> HiddenClass::tryFindPropertyFast(

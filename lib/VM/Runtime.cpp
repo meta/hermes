@@ -410,6 +410,11 @@ Runtime::Runtime(
 
   GCScope scope(*this);
 
+  struct : public Locals {
+    PinnedValue<JSObject> jsBuiltinsObj;
+  } lv;
+  LocalsRAII lraii(*this, &lv);
+
   // Explicitly initialize the specialCodeBlockRuntimeModule_ without CJS
   // modules.
   specialCodeBlockRuntimeModule_->initializeWithoutCJSModulesMayAllocate(
@@ -473,7 +478,7 @@ Runtime::Runtime(
   // FIXME: temporarily disable JIT for internal bytecode
   jitContext_.setEnabled(false);
   // Execute our internal bytecode.
-  auto jsBuiltinsObj = runInternalJavaScript();
+  lv.jsBuiltinsObj = runInternalJavaScript();
   jitContext_.setEnabled(runtimeConfig.getEnableJIT());
   jitContext_.setForceJIT(runtimeConfig.getForceJIT());
   jitContext_.setDefaultExecThreshold(runtimeConfig.getJITThreshold());
@@ -485,7 +490,7 @@ Runtime::Runtime(
   codeCoverageProfiler_->restore();
 
   // Populate JS builtins returned from internal bytecode to the builtins table.
-  initJSBuiltins(jsBuiltinsObj);
+  initJSBuiltins(lv.jsBuiltinsObj);
 
 #if HERMESVM_SAMPLING_PROFILER_AVAILABLE
   if (runtimeConfig.getEnableSampleProfiling())
@@ -1198,6 +1203,8 @@ CallResult<HermesValue> Runtime::runBytecode(
 
   struct : public Locals {
     PinnedValue<Domain> domain;
+    PinnedValue<StringPrimitive> str;
+    PinnedValue<RequireContext> requireContext;
   } lv;
   LocalsRAII lraii(*this, &lv);
 
@@ -1222,11 +1229,11 @@ CallResult<HermesValue> Runtime::runBytecode(
 #endif
 
   if (runtimeModule->hasCJSModules()) {
-    auto requireContext = RequireContext::create(
-        *this, lv.domain, getPredefinedStringHandle(Predefined::dotSlash));
+    lv.str = getPredefinedString(Predefined::dotSlash);
+    lv.requireContext = RequireContext::create(*this, lv.domain, lv.str);
     return runRequireCall(
         *this,
-        requireContext,
+        lv.requireContext,
         lv.domain,
         *lv.domain->getCJSModuleOffset(
             *this, lv.domain->getCJSEntryModuleID()));
@@ -1284,12 +1291,13 @@ ExecutionStatus Runtime::loadSegment(
   return ExecutionStatus::RETURNED;
 }
 
-Handle<JSObject> Runtime::runInternalJavaScript() {
+PseudoHandle<JSObject> Runtime::runInternalJavaScript() {
 #ifdef HERMESVM_INTERNAL_JAVASCRIPT_NATIVE
   SHLegacyValue resOrExc;
   if (_sh_unit_init_guarded(
           getSHRuntime(*this), &sh_export_internal_unit, &resOrExc))
-    return makeHandle<JSObject>(HermesValue::fromRaw(resOrExc.raw));
+    return createPseudoHandle(
+        vmcast<JSObject>(HermesValue::fromRaw(resOrExc.raw)));
   hermes_fatal("Error evaluating internal unit.");
 #else
   llvh::ArrayRef<uint8_t> module = getInternalBytecode();
@@ -1345,7 +1353,7 @@ Handle<JSObject> Runtime::runInternalJavaScript() {
       res->isObject() &&
       "Completion value of internal bytecode must be an object");
 
-  return makeHandle<JSObject>(*res);
+  return createPseudoHandle(vmcast<JSObject>(*res));
 #endif
 }
 
@@ -1779,30 +1787,28 @@ void Runtime::initRootHiddenClasses() {
   lazyObjectClass_ = lv.clazz;
 }
 
-Handle<StringPrimitive> Runtime::allocateCharacterString(char16_t ch) {
+PseudoHandle<StringPrimitive> Runtime::allocateCharacterString(char16_t ch) {
   // This can in theory throw when called out of initialization phase.
   // However there is only that many character strings and in practice this
   // is not a problem.  Note that we allocate these as "long-lived" objects,
   // so we don't have to scan the charStrings_ array in
   // young-generation collections.
 
-  PinnedHermesValue strRes;
-  if (LLVM_LIKELY(ch < 128)) {
-    strRes = ignoreAllocationFailure(
-        StringPrimitive::createLongLived(*this, ASCIIRef(ch)));
-  } else {
-    strRes = ignoreAllocationFailure(
-        StringPrimitive::createLongLived(*this, UTF16Ref(ch)));
-  }
-  return makeHandle<StringPrimitive>(strRes);
+  HermesValue strRes = LLVM_LIKELY(ch < 128)
+      ? ignoreAllocationFailure(
+            StringPrimitive::createLongLived(*this, ASCIIRef(ch)))
+      : ignoreAllocationFailure(
+            StringPrimitive::createLongLived(*this, UTF16Ref(ch)));
+  return createPseudoHandle(vmcast<StringPrimitive>(strRes));
 }
 
-Handle<StringPrimitive> Runtime::getCharacterString(char16_t ch) {
+PseudoHandle<StringPrimitive> Runtime::getCharacterString(char16_t ch) {
   if (LLVM_LIKELY(ch < 256))
-    return Handle<StringPrimitive>::vmcast(&charStrings_[ch]);
+    return createPseudoHandle(vmcast<StringPrimitive>(charStrings_[ch]));
 
-  return makeHandle<StringPrimitive>(
-      ignoreAllocationFailure(StringPrimitive::create(*this, UTF16Ref(ch))));
+  return createPseudoHandle(
+      vmcast<StringPrimitive>(ignoreAllocationFailure(
+          StringPrimitive::create(*this, UTF16Ref(ch)))));
 }
 
 static constexpr uint16_t FROZEN_FLAG = 0x8000;
@@ -2211,8 +2217,7 @@ uint64_t Runtime::gcStableHashJSObject(JSObject *object) {
 }
 
 bool Runtime::symbolEqualsToStringPrim(SymbolID id, StringPrimitive *strPrim) {
-  auto view = identifierTable_.getStringView(*this, id);
-  return strPrim->equals(view);
+  return identifierTable_.symbolEqualsToStringPrim(id, strPrim);
 }
 
 void Runtime::dumpCallFrames(llvh::raw_ostream &OS) {

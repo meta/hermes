@@ -57,21 +57,21 @@ LeftToRightVector compactRawData(HermesValue bigint) {
 // always expected to be non-negative. Thus, it is tested separately.
 TEST_F(BigIntPrimitiveTest, CreateZero) {
   // Must create the correct zero from a signed 0.
-  auto H0 = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
+  auto H0 = fromSignedNoThrowForTest(runtime, 0);
   EXPECT_FALSE(H0->sign());
   EXPECT_EQ(compactRawData(H0), noDigits());
   EXPECT_EQ(fullRawData(H0), noDigits());
 
   // Must create the correct zero from the canonical (i.e., empty) digit
   // sequence.
-  H0 = BigIntPrimitive::fromBytesNoThrow(runtime, noDigits());
+  H0 = fromBytesNoThrowForTest(runtime, noDigits());
   EXPECT_FALSE(H0->sign());
   EXPECT_EQ(compactRawData(H0), noDigits());
   EXPECT_EQ(fullRawData(H0), noDigits());
 
   // Must create the correct zero from the non-canonical (i.e., non-empty)
   // digit sequence.
-  H0 = BigIntPrimitive::fromBytesNoThrow(runtime, digit(0));
+  H0 = fromBytesNoThrowForTest(runtime, digit(0));
   EXPECT_FALSE(H0->sign());
   EXPECT_EQ(compactRawData(H0), noDigits());
   EXPECT_EQ(fullRawData(H0), noDigits());
@@ -79,7 +79,7 @@ TEST_F(BigIntPrimitiveTest, CreateZero) {
   auto digitZero = digit(0, 0, 0, 0, 0, 0, 0, 0);
   auto lotsOfZeros = digitZero + digitZero + digitZero + digitZero + digitZero +
       digitZero + digitZero + digitZero;
-  H0 = BigIntPrimitive::fromBytesNoThrow(runtime, lotsOfZeros);
+  H0 = fromBytesNoThrowForTest(runtime, lotsOfZeros);
   EXPECT_FALSE(H0->sign());
   EXPECT_EQ(compactRawData(H0), noDigits());
   EXPECT_EQ(fullRawData(H0), noDigits());
@@ -87,19 +87,19 @@ TEST_F(BigIntPrimitiveTest, CreateZero) {
 
 TEST_F(BigIntPrimitiveTest, Create) {
   // Need to be able to create from signed.
-  auto HNeg1 = BigIntPrimitive::fromSignedNoThrow(runtime, -1);
+  auto HNeg1 = fromSignedNoThrowForTest(runtime, -1);
   EXPECT_TRUE(HNeg1->sign());
   EXPECT_EQ(compactRawData(HNeg1), digit(0xff));
   EXPECT_EQ(
       fullRawData(HNeg1),
       digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
 
-  auto H1 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
+  auto H1 = fromSignedNoThrowForTest(runtime, 1);
   EXPECT_FALSE(H1->sign());
   EXPECT_EQ(compactRawData(H1), digit(1));
   EXPECT_EQ(fullRawData(H1), digit(0, 0, 0, 0, 0, 0, 0, 1));
 
-  auto HNeg1234568 = BigIntPrimitive::fromSignedNoThrow(runtime, -1234568);
+  auto HNeg1234568 = fromSignedNoThrowForTest(runtime, -1234568);
   EXPECT_TRUE(HNeg1234568->sign());
   EXPECT_EQ(compactRawData(HNeg1234568), digit(0xed, 0x29, 0x78));
   EXPECT_EQ(
@@ -107,32 +107,32 @@ TEST_F(BigIntPrimitiveTest, Create) {
       digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xed, 0x29, 0x78));
 
   // Need to be able to create from short byte array.
-  auto HHfe = BigIntPrimitive::fromBytesNoThrow(runtime, digit(0xfe));
+  auto HHfe = fromBytesNoThrowForTest(runtime, digit(0xfe));
   EXPECT_TRUE(HHfe->sign());
   EXPECT_EQ(compactRawData(HHfe), digit(0xfe));
   EXPECT_EQ(
       fullRawData(HHfe), digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe));
 
-  auto HH4e = BigIntPrimitive::fromBytesNoThrow(runtime, digit(0x4e));
+  auto HH4e = fromBytesNoThrowForTest(runtime, digit(0x4e));
   EXPECT_FALSE(HH4e->sign());
   EXPECT_EQ(compactRawData(HH4e), digit(0x4e));
   EXPECT_EQ(fullRawData(HH4e), digit(0, 0, 0, 0, 0, 0, 0, 0x4e));
 
-  auto HH8000 = BigIntPrimitive::fromBytesNoThrow(runtime, digit(0x80, 0x00));
+  auto HH8000 = fromBytesNoThrowForTest(runtime, digit(0x80, 0x00));
   EXPECT_TRUE(HH8000->sign());
   EXPECT_EQ(compactRawData(HH8000), digit(0x80, 0x00));
   EXPECT_EQ(
       fullRawData(HH8000),
       digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x80, 0x00));
 
-  auto HH4000 = BigIntPrimitive::fromBytesNoThrow(runtime, digit(0x40, 0x00));
+  auto HH4000 = fromBytesNoThrowForTest(runtime, digit(0x40, 0x00));
   EXPECT_FALSE(HH4000->sign());
   EXPECT_EQ(compactRawData(HH4000), digit(0x40, 0x00));
   EXPECT_EQ(fullRawData(HH4000), digit(0, 0, 0, 0, 0, 0, 0x40, 0x00));
 
   // Need to be able to create from array that's as long as a digit without
   // adding extra digits.
-  auto HHffffffffffffffff = BigIntPrimitive::fromBytesNoThrow(
+  auto HHffffffffffffffff = fromBytesNoThrowForTest(
       runtime, digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
   EXPECT_TRUE(HHffffffffffffffff->sign());
   EXPECT_EQ(compactRawData(HHffffffffffffffff), digit(0xff));
@@ -140,7 +140,7 @@ TEST_F(BigIntPrimitiveTest, Create) {
       fullRawData(HHffffffffffffffff),
       digit(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
 
-  auto HH7fffffffffffffff = BigIntPrimitive::fromBytesNoThrow(
+  auto HH7fffffffffffffff = fromBytesNoThrowForTest(
       runtime, digit(0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
   EXPECT_FALSE(HH7fffffffffffffff->sign());
   EXPECT_EQ(
@@ -151,7 +151,7 @@ TEST_F(BigIntPrimitiveTest, Create) {
       digit(0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
 
   // Need to be able to create from arrays that are over WordType in size.
-  auto HH400000000000000000 = BigIntPrimitive::fromBytesNoThrow(
+  auto HH400000000000000000 = fromBytesNoThrowForTest(
       runtime, digit(0x40) + digit(0, 0, 0, 0, 0, 0, 0, 0));
   EXPECT_FALSE(HH400000000000000000->sign());
   EXPECT_EQ(
@@ -161,7 +161,7 @@ TEST_F(BigIntPrimitiveTest, Create) {
       fullRawData(HH400000000000000000),
       digit(0, 0, 0, 0, 0, 0, 0, 0x40) + digit(0, 0, 0, 0, 0, 0, 0, 0));
 
-  auto HH800000000000000000 = BigIntPrimitive::fromBytesNoThrow(
+  auto HH800000000000000000 = fromBytesNoThrowForTest(
       runtime, digit(0x80) + digit(0, 0, 0, 0, 0, 0, 0, 0));
   EXPECT_TRUE(HH800000000000000000->sign());
   EXPECT_EQ(
@@ -257,12 +257,12 @@ TEST_F(BigIntPrimitiveTest, FromDouble) {
 }
 
 TEST_F(BigIntPrimitiveTest, Compare) {
-  auto H0 = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
-  auto H1 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
-  auto HM1 = BigIntPrimitive::fromSignedNoThrow(runtime, -1);
-  auto HH10000000000000000 = BigIntPrimitive::fromBytesNoThrow(
+  auto H0 = fromSignedNoThrowForTest(runtime, 0);
+  auto H1 = fromSignedNoThrowForTest(runtime, 1);
+  auto HM1 = fromSignedNoThrowForTest(runtime, -1);
+  auto HH10000000000000000 = fromBytesNoThrowForTest(
       runtime, digit(1) + digit(0, 0, 0, 0, 0, 0, 0, 0));
-  auto HH80000000000000000 = BigIntPrimitive::fromBytesNoThrow(
+  auto HH80000000000000000 = fromBytesNoThrowForTest(
       runtime, digit(0x80) + digit(0, 0, 0, 0, 0, 0, 0, 0));
 
   // H0 == H0
@@ -312,13 +312,13 @@ TEST_F(BigIntPrimitiveTest, Compare) {
 }
 
 TEST_F(BigIntPrimitiveTest, CompareSigned) {
-  auto H0 = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
-  auto H1 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
-  auto HM1 = BigIntPrimitive::fromSignedNoThrow(runtime, -1);
-  auto HH7fffffffffffffff = BigIntPrimitive::fromBytesNoThrow(
+  auto H0 = fromSignedNoThrowForTest(runtime, 0);
+  auto H1 = fromSignedNoThrowForTest(runtime, 1);
+  auto HM1 = fromSignedNoThrowForTest(runtime, -1);
+  auto HH7fffffffffffffff = fromBytesNoThrowForTest(
       runtime, digit(0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
-  auto HH8000000000000000 = BigIntPrimitive::fromBytesNoThrow(
-      runtime, digit(0x80, 0, 0, 0, 0, 0, 0, 0));
+  auto HH8000000000000000 =
+      fromBytesNoThrowForTest(runtime, digit(0x80, 0, 0, 0, 0, 0, 0, 0));
 
   // 0n == 0
   EXPECT_EQ(H0->compare(0), 0);
@@ -352,14 +352,14 @@ TEST_F(BigIntPrimitiveTest, CompareSigned) {
   EXPECT_LT(HH8000000000000000->compare(0x7fffffffffffffffll), 0);
 
   // 0x00_0000000000000000_8000000000000000_0000000000000000n
-  auto a = BigIntPrimitive::fromBytesNoThrow(
+  auto a = fromBytesNoThrowForTest(
       runtime,
       digit(0x00) + digit(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) +
           digit(0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) +
           digit(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00));
 
   // 0x80n
-  auto b = BigIntPrimitive::fromBytesNoThrow(runtime, digit(0x80));
+  auto b = fromBytesNoThrowForTest(runtime, digit(0x80));
 
   // 0x00_0000000000000000_8000000000000000_0000000000000000n > 0
   EXPECT_GT(a->compare(0), 0);

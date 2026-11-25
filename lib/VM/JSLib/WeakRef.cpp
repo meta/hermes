@@ -25,6 +25,7 @@ HermesValue createWeakRefConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -45,11 +46,12 @@ HermesValue createWeakRefConstructor(Runtime &runtime) {
   /// The initial value is the String value "WeakRef".
   // This property has the attributes-
   // { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }.
+  lv.str = runtime.getPredefinedString(Predefined::WeakRef);
   defineProperty(
       runtime,
       weakRefPrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::WeakRef),
+      lv.str,
       dpf);
 
   // WeakRef.prototype.deref method

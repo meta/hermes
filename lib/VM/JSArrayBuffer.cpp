@@ -80,7 +80,7 @@ PseudoHandle<JSArrayBuffer> JSArrayBuffer::createWithInternalDataBlock(
   return self;
 }
 
-CallResult<Handle<JSArrayBuffer>> JSArrayBuffer::clone(
+CallResult<PseudoHandle<JSArrayBuffer>> JSArrayBuffer::clone(
     Runtime &runtime,
     Handle<JSArrayBuffer> src,
     size_type srcOffset,
@@ -89,20 +89,24 @@ CallResult<Handle<JSArrayBuffer>> JSArrayBuffer::clone(
     return runtime.raiseTypeError("Cannot clone from a detached buffer");
   }
 
-  auto arr = runtime.makeHandle(
-      JSArrayBuffer::create(
-          runtime, Handle<JSObject>::vmcast(&runtime.arrayBufferPrototype)));
+  struct : public Locals {
+    PinnedValue<JSArrayBuffer> arr;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  lv.arr = JSArrayBuffer::create(
+      runtime, Handle<JSObject>::vmcast(&runtime.arrayBufferPrototype));
 
   // Don't need to zero out the data since we'll be copying into it immediately.
-  if (createDataBlock(runtime, arr, srcSize, false) ==
+  if (createDataBlock(runtime, lv.arr, srcSize, false) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   if (srcSize != 0) {
     JSArrayBuffer::copyDataBlockBytes(
-        runtime, *arr, 0, *src, srcOffset, srcSize);
+        runtime, *lv.arr, 0, *src, srcOffset, srcSize);
   }
-  return arr;
+  return createPseudoHandle(*lv.arr);
 }
 
 void JSArrayBuffer::copyDataBlockBytes(

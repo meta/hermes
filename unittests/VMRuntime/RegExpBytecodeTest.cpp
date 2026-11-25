@@ -95,7 +95,10 @@ Handle<JSRegExp> callForRegExp(Runtime &runtime, Handle<JSFunction> fn) {
 /// \return whether \p re matches the ASCII string \p str, searching from 0.
 bool matches(Runtime &runtime, Handle<JSRegExp> re, const char *str) {
   CallResult<RegExpMatch> m = JSRegExp::search(
-      re, runtime, StringPrimitive::createNoThrow(runtime, str), 0);
+      re,
+      runtime,
+      runtime.makeHandle(StringPrimitive::createNoThrow(runtime, str)),
+      0);
   EXPECT_NE(ExecutionStatus::EXCEPTION, m.getStatus());
   return !m->empty();
 }
@@ -339,7 +342,8 @@ TEST_F(RegExpBytecodeTest, FastCopySharesOnlyCachedBytecode) {
             self,
             runtime,
             other,
-            StringPrimitive::createNoThrow(runtime, flags)));
+            runtime.makeHandle(
+                StringPrimitive::createNoThrow(runtime, flags))));
     return self;
   };
 
@@ -410,8 +414,7 @@ TEST_F(RegExpBytecodeTest, SHUnitSharesPrecompiledBytecode) {
 
   auto symbol = [&](const char *str) {
     CallResult<Handle<SymbolID>> sym =
-        runtime.getIdentifierTable().getSymbolHandle(
-            runtime, createASCIIRef(str));
+        getSymbolHandleForTest(runtime, createASCIIRef(str));
     EXPECT_NE(ExecutionStatus::EXCEPTION, sym.getStatus());
     return sym->get().unsafeGetRaw();
   };

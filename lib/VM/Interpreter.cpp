@@ -126,11 +126,13 @@ CallResult<PseudoHandle<JSGeneratorObject>> Interpreter::createGenerator_RJS(
   struct : public Locals {
     PinnedValue<JSFunction> innerFunc;
     PinnedValue<JSObject> prototype;
+    PinnedValue<Domain> domain;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  lv.domain = runtimeModule->getDomainUnsafe(runtime);
   auto innerFuncPH = JSFunction::create(
       runtime,
-      runtimeModule->getDomain(runtime),
+      lv.domain,
       Handle<JSObject>::vmcast(&runtime.functionPrototype),
       envHandle,
       runtimeModule->getCodeBlockMayAllocate(funcIndex));
@@ -166,7 +168,7 @@ CallResult<PseudoHandle<JSGeneratorObject>> Interpreter::createGenerator_RJS(
   return JSGeneratorObject::create(runtime, lv.innerFunc, prototype);
 }
 
-CallResult<Handle<Arguments>> Interpreter::reifyArgumentsSlowPath(
+CallResult<PseudoHandle<Arguments>> Interpreter::reifyArgumentsSlowPath(
     Runtime &runtime,
     Handle<Callable> curFunction,
     bool strictMode) {
@@ -177,16 +179,20 @@ CallResult<Handle<Arguments>> Interpreter::reifyArgumentsSlowPath(
   if (LLVM_UNLIKELY(argRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<Arguments> args = runtime.makeHandle(std::move(*argRes));
+  struct : public Locals {
+    PinnedValue<Arguments> args;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.args = std::move(*argRes);
 
   for (uint32_t argIndex = 0; argIndex < argCount; ++argIndex) {
     SmallHermesValue shv =
         SmallHermesValue::encodeHermesValue(frame.getArgRef(argIndex), runtime);
-    Arguments::unsafeSetExistingElementAt(*args, runtime, argIndex, shv);
+    Arguments::unsafeSetExistingElementAt(*lv.args, runtime, argIndex, shv);
   }
 
   // The returned value should already be set from the create call.
-  return args;
+  return createPseudoHandle(*lv.args);
 }
 
 CallResult<PseudoHandle<>> Interpreter::getArgumentsPropByValSlowPath_RJS(
@@ -650,7 +656,7 @@ CallResult<HermesValue> Interpreter::interpretFunction(
   LocalsRAII lvraii(runtime, &lv);
   CallResult<HermesValue> res{ExecutionStatus::EXCEPTION};
   CallResult<PseudoHandle<>> resPH{ExecutionStatus::EXCEPTION};
-  CallResult<Handle<Arguments>> resArgs{ExecutionStatus::EXCEPTION};
+  CallResult<PseudoHandle<Arguments>> resArgs{ExecutionStatus::EXCEPTION};
   CallResult<bool> boolRes{ExecutionStatus::EXCEPTION};
   // Start of the bytecode file, used to calculate IP offset in crash traces.
   const uint8_t *bytecodeFileStart;
@@ -1683,16 +1689,21 @@ tailCall:
       }
     createClosure: {
       auto *runtimeModule = curCodeBlock->getRuntimeModule();
+      // Pin the domain in the loop's scratch slot: getCodeBlockMayAllocate and
+      // the closure allocation are safepoints.
+      lv.tmp = HermesValue::encodeObjectValue(
+          runtimeModule->getDomainUnsafe(runtime));
       CAPTURE_IP(
           O1REG(CreateClosure) =
               JSFunction::createWithInferredParent(
                   runtime,
-                  runtimeModule->getDomain(runtime),
+                  Handle<Domain>::vmcast(Handle<>(lv.tmp)),
                   O2REG(CreateClosure).isUndefined()
                       ? Runtime::makeNullHandle<Environment>()
                       : Handle<Environment>::vmcast(&O2REG(CreateClosure)),
                   runtimeModule->getCodeBlockMayAllocate(idVal))
                   .getHermesValue());
+      lv.tmp.clear();
       gcScope.flushToSmallCount(KEEP_HANDLES);
       ip = nextIP;
       DISPATCH;

@@ -27,11 +27,10 @@
 namespace hermes {
 namespace vm {
 
-/// \return a SymbolID  for a given C string \p s.
-static inline CallResult<Handle<SymbolID>> symbolForCStr(
-    Runtime &rt,
-    const char *s) {
-  return rt.getIdentifierTable().getSymbolHandle(rt, ASCIIRef{s, strlen(s)});
+/// \return a SymbolID  for a given C string \p s. The caller must pin it before
+/// the next safepoint.
+static inline CallResult<SymbolID> symbolForCStr(Runtime &rt, const char *s) {
+  return rt.getIdentifierTable().getSymbolID(rt, ASCIIRef{s, strlen(s)});
 }
 
 // ES7 24.1.1.3
@@ -76,9 +75,9 @@ CallResult<HermesValue> hermesInternalGetEpilogues(void *, Runtime &runtime) {
       if (result == ExecutionStatus::EXCEPTION) {
         return ExecutionStatus::EXCEPTION;
       }
-      auto ta = result.getValue();
+      auto ta = std::move(*result);
       std::memcpy(ta->data(runtime), eps[i].begin(), innerLen);
-      const auto shv = SmallHermesValue::encodeObjectValue(*ta, runtime);
+      const auto shv = SmallHermesValue::encodeObjectValue(ta.get(), runtime);
       JSArray::unsafeSetExistingElementAt(*lv.outer, runtime, i, shv);
     }
   }
@@ -112,24 +111,26 @@ CallResult<HermesValue> hermesInternalGetInstrumentedStats(
     PinnedValue<JSObject> resultHandle;
     PinnedValue<JSObject> specificStatsHandle;
     PinnedValue<> valHandle;
+    PinnedValue<SymbolID> keySym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.resultHandle = JSObject::create(runtime);
 
   /// Adds \p key with \p val to the resultHandle object.
   auto addToResultHandle =
-      [&gcScope, &runtime](
+      [&gcScope, &runtime, &lv](
           Handle<JSObject> obj, llvh::StringRef key, Handle<> val) {
         GCScopeMarkerRAII marker{gcScope};
         auto keySym = symbolForCStr(runtime, key.data());
         if (LLVM_UNLIKELY(keySym == ExecutionStatus::EXCEPTION)) {
           return ExecutionStatus::EXCEPTION;
         }
+        lv.keySym = *keySym;
 
         return JSObject::defineNewOwnProperty(
             obj,
             runtime,
-            **keySym,
+            *lv.keySym,
             PropertyFlags::defaultNewNamedPropertyFlags(),
             val);
       };
@@ -239,6 +240,7 @@ CallResult<HermesValue> hermesInternalGetRuntimeProperties(
   struct : public Locals {
     PinnedValue<JSObject> resultHandle;
     PinnedValue<> tmpHandle;
+    PinnedValue<SymbolID> keySym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.resultHandle = JSObject::create(runtime);
@@ -250,10 +252,11 @@ CallResult<HermesValue> hermesInternalGetRuntimeProperties(
     if (LLVM_UNLIKELY(keySym == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
+    lv.keySym = *keySym;
     return JSObject::defineNewOwnProperty(
         lv.resultHandle,
         runtime,
-        **keySym,
+        *lv.keySym,
         PropertyFlags::defaultNewNamedPropertyFlags(),
         value);
   };
@@ -774,6 +777,7 @@ HermesValue createHermesInternalObject(
   struct : public Locals {
     PinnedValue<JSObject> intern;
     PinnedValue<> propRes;
+    PinnedValue<SymbolID> sym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.intern = JSObject::create(runtime);
@@ -801,13 +805,13 @@ HermesValue createHermesInternalObject(
   auto defineInternMethodAndSymbol =
       [&](const char *name, NativeFunctionPtr func, uint8_t count = 0) {
         ASCIIRef ref = createASCIIRef(name);
-        Handle<SymbolID> symHandle = runtime.ignoreAllocationFailure(
-            runtime.getIdentifierTable().getSymbolHandle(runtime, ref));
+        lv.sym = runtime.ignoreAllocationFailure(
+            runtime.getIdentifierTable().getSymbolID(runtime, ref));
         (void)defineMethod(
             runtime,
             lv.intern,
-            *symHandle,
-            *symHandle,
+            *lv.sym,
+            *lv.sym,
             nullptr /* context */,
             func,
             count,

@@ -55,36 +55,38 @@ void JSErrorBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
 /// Given an object \p targetHandle which may be nullptr:
 /// 1. Look for [[CapturedError]] in the object or its prototype chain and
 ///    return it a JSError.
-/// 2. Otherwise, return llvh::None.
-static llvh::Optional<Handle<JSError>> getErrorFromStackTarget(
+/// 2. Otherwise, return a null PseudoHandle.
+static PseudoHandle<JSError> getErrorFromStackTarget(
     Runtime &runtime,
     Handle<JSObject> targetHandle) {
-  MutableHandle<JSObject> mutHnd =
-      runtime.makeMutableHandle<JSObject>(targetHandle.get());
-  targetHandle = mutHnd;
+  struct : public Locals {
+    PinnedValue<JSObject> cur;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.cur = targetHandle.get();
 
-  while (targetHandle) {
+  while (*lv.cur) {
     NamedPropertyDescriptor desc;
     bool exists = JSObject::getOwnNamedDescriptor(
-        targetHandle,
+        lv.cur,
         runtime,
         Predefined::getSymbolID(Predefined::InternalPropertyCapturedError),
         desc);
     if (exists) {
-      auto sv = JSObject::getNamedSlotValueUnsafe(*targetHandle, runtime, desc);
-      return runtime.makeHandle(vmcast<JSError>(sv.getObject(runtime)));
+      auto sv = JSObject::getNamedSlotValueUnsafe(*lv.cur, runtime, desc);
+      return createPseudoHandle(vmcast<JSError>(sv.getObject(runtime)));
     }
-    if (vmisa<JSError>(*targetHandle)) {
-      return Handle<JSError>::vmcast(targetHandle);
-    }
-
-    if (LLVM_UNLIKELY(targetHandle->isProxyObject(runtime))) {
-      return llvh::None;
+    if (vmisa<JSError>(*lv.cur)) {
+      return createPseudoHandle(vmcast<JSError>(*lv.cur));
     }
 
-    mutHnd.set(targetHandle->getParent(runtime));
+    if (LLVM_UNLIKELY(lv.cur->isProxyObject(runtime))) {
+      return PseudoHandle<JSError>();
+    }
+
+    lv.cur = lv.cur->getParent(runtime);
   }
-  return llvh::None;
+  return PseudoHandle<JSError>();
 }
 
 CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
@@ -93,16 +95,17 @@ CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
   struct : public Locals {
     PinnedValue<> prepareStackTraceVal;
     PinnedValue<> stackTraceFormatted;
+    PinnedValue<JSError> errorHandle;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
   auto targetHandle = args.dyncastThis<JSObject>();
-  auto errorHandleOpt = getErrorFromStackTarget(runtime, targetHandle);
-  if (!errorHandleOpt.hasValue()) {
+  auto errorRes = getErrorFromStackTarget(runtime, targetHandle);
+  if (!errorRes) {
     return HermesValue::encodeUndefinedValue();
   }
-  auto errorHandle = *errorHandleOpt;
-  if (!errorHandle->stacktrace_) {
+  lv.errorHandle = std::move(errorRes);
+  if (!lv.errorHandle->stacktrace_) {
     // Stacktrace has not been set, we simply return empty string.
     // This is different from other VMs where stacktrace is created when
     // the error object is created. We only set it when the error
@@ -137,7 +140,8 @@ CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
 
     runtime.setFormattingStackTrace(true);
 
-    auto callSitesRes = JSError::constructCallSitesArray(runtime, errorHandle);
+    auto callSitesRes =
+        JSError::constructCallSitesArray(runtime, lv.errorHandle);
 
     if (LLVM_UNLIKELY(callSitesRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -154,7 +158,7 @@ CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
     lv.stackTraceFormatted = std::move(*prepareRes);
   } else {
     if (JSError::constructStackTraceString_RJS(
-            runtime, errorHandle, targetHandle, stack) ==
+            runtime, lv.errorHandle, targetHandle, stack) ==
         ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -233,9 +237,17 @@ PseudoHandle<JSError> JSError::createUncatchable(
   return JSObjectInit::initToPseudoHandle(runtime, cell);
 }
 
-CallResult<Handle<StringPrimitive>> JSError::toString(
+CallResult<PseudoHandle<StringPrimitive>> JSError::toString(
     Handle<JSObject> O,
     Runtime &runtime) {
+  struct : public Locals {
+    PinnedValue<> name;
+    PinnedValue<> msg;
+    PinnedValue<StringPrimitive> nameStr;
+    PinnedValue<StringPrimitive> msgStr;
+    PinnedValue<StringPrimitive> resultStr;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // 20.5.3.4 Error.prototype.toString ( )
 
   // 1. and 2. don't apply -- O is already an Object.
@@ -246,19 +258,18 @@ CallResult<Handle<StringPrimitive>> JSError::toString(
   if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<> name = runtime.makeHandle(std::move(*propRes));
+  lv.name = std::move(*propRes);
 
   // 4. If name is undefined, set name to "Error"; otherwise set name to ?
   // ToString(name).
-  MutableHandle<StringPrimitive> nameStr{runtime};
-  if (name->isUndefined()) {
-    nameStr = runtime.getPredefinedString(Predefined::Error);
+  if (lv.name->isUndefined()) {
+    lv.nameStr = runtime.getPredefinedString(Predefined::Error);
   } else {
-    auto strRes = toString_RJS(runtime, name);
+    auto strRes = toString_RJS(runtime, lv.name);
     if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    nameStr = strRes->get();
+    lv.nameStr = std::move(*strRes);
   }
 
   // 5. Let msg be ? Get(O, "message").
@@ -270,47 +281,49 @@ CallResult<Handle<StringPrimitive>> JSError::toString(
                PropOpFlags())) == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<> msg = runtime.makeHandle(std::move(*propRes));
+  lv.msg = std::move(*propRes);
 
   // 6. If msg is undefined, set msg to the empty String;
   //    otherwise set msg to ? ToString(msg).
-  MutableHandle<StringPrimitive> msgStr{runtime};
-  if (msg->isUndefined()) {
+  if (lv.msg->isUndefined()) {
     // If msg is undefined, then let msg be the empty String.
-    msgStr = runtime.getPredefinedString(Predefined::emptyString);
+    lv.msgStr = runtime.getPredefinedString(Predefined::emptyString);
   } else {
-    auto strRes = toString_RJS(runtime, msg);
+    auto strRes = toString_RJS(runtime, lv.msg);
     if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    msgStr = strRes->get();
+    lv.msgStr = std::move(*strRes);
   }
 
   // 7. If name is the empty String, return msg.
-  if (nameStr->getStringLength() == 0) {
-    return msgStr;
+  if (lv.nameStr->getStringLength() == 0) {
+    return createPseudoHandle(*lv.msgStr);
   }
 
   // 8. If msg is the empty String, return name.
-  if (msgStr->getStringLength() == 0) {
-    return nameStr;
+  if (lv.msgStr->getStringLength() == 0) {
+    return createPseudoHandle(*lv.nameStr);
   }
 
   // 9. Return the string-concatenation of name, the code unit 0x003A (COLON),
   // the code unit 0x0020 (SPACE), and msg.
-  SafeUInt32 length{nameStr->getStringLength()};
+  SafeUInt32 length{lv.nameStr->getStringLength()};
   length.add(2);
-  length.add(msgStr->getStringLength());
+  length.add(lv.msgStr->getStringLength());
   CallResult<StringBuilder> builderRes = StringBuilder::createStringBuilder(
-      runtime, length, nameStr->isASCII() && msgStr->isASCII());
+      runtime,
+      lv.resultStr,
+      length,
+      lv.nameStr->isASCII() && lv.msgStr->isASCII());
   if (LLVM_UNLIKELY(builderRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
   auto builder = std::move(*builderRes);
-  builder.appendStringPrim(nameStr);
+  builder.appendStringPrim(lv.nameStr);
   builder.appendASCIIRef({": ", 2});
-  builder.appendStringPrim(msgStr);
-  return builder.getStringPrimitive();
+  builder.appendStringPrim(lv.msgStr);
+  return createPseudoHandle(*lv.resultStr);
 }
 
 ExecutionStatus JSError::setMessage(
@@ -346,21 +359,26 @@ ExecutionStatus JSError::setMessage(
 /// property of each Callable on the stack. Accessors are skipped. If a
 /// Callable does not have a name, or if the name is an accessor, undefined is
 /// set. Names are returned in reverse order (topmost frame is first).
-/// In case of error returns a nullptr handle.
+/// In case of error returns a null PseudoHandle.
 /// \param skipTopFrame if true, skip the top frame.
-static Handle<PropStorage> getCallStackFunctionNames(
+static PseudoHandle<PropStorage> getCallStackFunctionNames(
     Runtime &runtime,
     bool skipTopFrame,
     size_t sizeHint) {
+  struct : public Locals {
+    PinnedValue<PropStorage> names;
+    PinnedValue<> name;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   auto arrRes = PropStorage::create(runtime, sizeHint);
   if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
     runtime.clearThrownValue();
-    return Runtime::makeNullHandle<PropStorage>();
+    return PseudoHandle<PropStorage>();
   }
-  MutableHandle<PropStorage> names{runtime, vmcast<PropStorage>(*arrRes)};
+  lv.names.castAndSetHermesValue<PropStorage>(*arrRes);
 
   GCScope gcScope(runtime);
-  MutableHandle<> name{runtime};
   auto marker = gcScope.createMarker();
 
   uint32_t frameIndex = 0;
@@ -369,7 +387,7 @@ static Handle<PropStorage> getCallStackFunctionNames(
     if (frameIndex++ == 0 && skipTopFrame)
       continue;
 
-    name = HermesValue::encodeUndefinedValue();
+    lv.name = HermesValue::encodeUndefinedValue();
     if (auto callableHandle = Handle<Callable>::dyn_vmcast(
             Handle<>(&cf.getCalleeClosureOrCBRef()))) {
       NamedPropertyDescriptor desc;
@@ -384,10 +402,10 @@ static Handle<PropStorage> getCallStackFunctionNames(
       if (propObj && !desc.flags.accessor &&
           LLVM_LIKELY(!desc.flags.proxyObject) &&
           LLVM_LIKELY(!desc.flags.hostObject)) {
-        name = JSObject::getNamedSlotValueUnsafe(propObj, runtime, desc)
-                   .unboxToHV(runtime);
+        lv.name = JSObject::getNamedSlotValueUnsafe(propObj, runtime, desc)
+                      .unboxToHV(runtime);
       } else if (desc.flags.proxyObject) {
-        name = HermesValue::encodeStringValue(
+        lv.name = HermesValue::encodeStringValue(
             runtime.getPredefinedString(Predefined::proxyTrap));
       }
     } else if (!cf.getCalleeClosureOrCBRef().isObject()) {
@@ -396,22 +414,22 @@ static Handle<PropStorage> getCallStackFunctionNames(
       auto *cb =
           cf.getCalleeClosureOrCBRef().getNativePointer<const CodeBlock>();
       if (cb->getNameMayAllocate().isValid())
-        name = HermesValue::encodeStringValue(
+        lv.name = HermesValue::encodeStringValue(
             runtime.getStringPrimFromSymbolID(cb->getNameMayAllocate()));
     }
-    if (PropStorage::resize(names, runtime, namesIndex + 1) ==
+    if (PropStorage::resize(lv.names, runtime, namesIndex + 1) ==
         ExecutionStatus::EXCEPTION) {
       runtime.clearThrownValue();
-      return Runtime::makeNullHandle<PropStorage>();
+      return PseudoHandle<PropStorage>();
     }
     auto shv =
-        SmallHermesValue::encodeHermesValue(name.getHermesValue(), runtime);
-    names->set(namesIndex, shv, runtime.getHeap());
+        SmallHermesValue::encodeHermesValue(lv.name.getHermesValue(), runtime);
+    lv.names->set(namesIndex, shv, runtime.getHeap());
     ++namesIndex;
     gcScope.flushToMarker(marker);
   }
 
-  return std::move(names);
+  return createPseudoHandle(*lv.names);
 }
 
 ExecutionStatus JSError::recordStackTrace(
@@ -535,7 +553,7 @@ ExecutionStatus JSError::recordStackTrace(
       "Function names and stack trace must have same size.");
 
   selfHandle->stacktrace_ = std::move(stack);
-  selfHandle->funcNames_.set(runtime, *funcNames, runtime.getHeap());
+  selfHandle->funcNames_.set(runtime, funcNames.get(), runtime.getHeap());
   return ExecutionStatus::RETURNED;
 }
 
@@ -554,13 +572,14 @@ OptValue<hbc::DebugSourceLocation> JSError::getDebugInfo(
       ->getLocationForAddress(offset.getValue(), bytecodeOffset);
 }
 
-Handle<StringPrimitive> JSError::getFunctionNameAtIndex(
+PseudoHandle<StringPrimitive> JSError::getFunctionNameAtIndex(
     Runtime &runtime,
     Handle<JSError> selfHandle,
     size_t index) {
   IdentifierTable &idt = runtime.getIdentifierTable();
-  MutableHandle<StringPrimitive> name{
-      runtime, runtime.getPredefinedString(Predefined::emptyString)};
+  // No safepoint separates a read of \c name from its last use, so a raw
+  // pointer is sufficient.
+  StringPrimitive *name = runtime.getPredefinedString(Predefined::emptyString);
 
   // If funcNames_ is set and contains a string primitive, use that.
   if (selfHandle->funcNames_) {
@@ -584,10 +603,10 @@ Handle<StringPrimitive> JSError::getFunctionNameAtIndex(
   }
 
   if (!name || name->getStringLength() == 0) {
-    return runtime.makeNullHandle<StringPrimitive>();
+    return PseudoHandle<StringPrimitive>();
   }
 
-  return std::move(name);
+  return createPseudoHandle(name);
 }
 
 bool JSError::appendFunctionNameAtIndex(
@@ -624,7 +643,7 @@ ExecutionStatus JSError::constructStackTraceString_RJS(
   LocalsRAII lraii(runtime, &lv);
   // First of all, the stacktrace string starts with
   // %Error.prototype.toString%(target).
-  CallResult<Handle<StringPrimitive>> res =
+  CallResult<PseudoHandle<StringPrimitive>> res =
       JSError::toString(targetHandle, runtime);
   // Keep track whether targetHandle.toString() threw. If it did, the error
   // message will contain a string letting the user know that something went

@@ -235,6 +235,7 @@ CallResult<HermesValue> copyDataPropertiesSlowPath_RJS(
   struct : public Locals {
     PinnedValue<> nextKeyHandle;
     PinnedValue<> propValueHandle;
+    PinnedValue<JSArray> keys;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -249,15 +250,15 @@ CallResult<HermesValue> copyDataPropertiesSlowPath_RJS(
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto keys = *cr;
+  lv.keys = std::move(*cr);
 
   GCScopeMarkerRAII marker{runtime};
   // 6. For each element nextKey of keys in List order, do
-  for (uint32_t nextKeyIdx = 0, endIdx = keys->getEndIndex();
+  for (uint32_t nextKeyIdx = 0, endIdx = lv.keys->getEndIndex();
        nextKeyIdx < endIdx;
        ++nextKeyIdx) {
     marker.flush();
-    lv.nextKeyHandle = keys->at(runtime, nextKeyIdx).unboxToHV(runtime);
+    lv.nextKeyHandle = lv.keys->at(runtime, nextKeyIdx).unboxToHV(runtime);
     if (lv.nextKeyHandle->isNumber()) {
       CallResult<PseudoHandle<StringPrimitive>> strRes =
           toString_RJS(runtime, lv.nextKeyHandle);
@@ -576,6 +577,7 @@ CallResult<HermesValue> hermesBuiltinCopyRestArgs(void *, Runtime &runtime) {
 CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   struct : public Locals {
+    PinnedValue<JSObject> next;
     PinnedValue<> nextValue;
     PinnedValue<> idxHandle;
   } lv;
@@ -664,10 +666,9 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
     if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    Handle<JSObject> next = *nextRes;
 
     // b. If next is false, return nextIndex.
-    if (!next) {
+    if (!*nextRes) {
       // Set the length even if nothing was copied, so that it also covers any
       // elisions right before the spread.
       if (LLVM_UNLIKELY(
@@ -677,9 +678,10 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
       }
       return HermesValue::encodeTrustedNumberValue(nextIndex);
     }
+    lv.next = std::move(*nextRes);
     // c. Let nextValue be ? IteratorValue(next).
     auto nextItemRes = JSObject::getNamed_RJS(
-        next, runtime, Predefined::getSymbolID(Predefined::value));
+        lv.next, runtime, Predefined::getSymbolID(Predefined::value));
     if (LLVM_UNLIKELY(nextItemRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -1004,6 +1006,7 @@ CallResult<HermesValue> hermesBuiltinSetFunctionName(void *, Runtime &runtime) {
   struct : public Locals {
     PinnedValue<JSObject> F;
     PinnedValue<StringPrimitive> computedName;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1050,7 +1053,7 @@ CallResult<HermesValue> hermesBuiltinSetFunctionName(void *, Runtime &runtime) {
 
   len.add(lv.computedName->getStringLength());
   auto builderRes = StringBuilder::createStringBuilder(
-      runtime, len, lv.computedName->isASCII());
+      runtime, lv.result, len, lv.computedName->isASCII());
   if (LLVM_UNLIKELY(builderRes == ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
   auto builder = *builderRes;
@@ -1185,13 +1188,12 @@ void createHermesBuiltins(Runtime &runtime) {
                                 Predefined::Str symID,
                                 NativeFunctionPtr func,
                                 uint8_t count = 0) {
-    auto methodRes = NativeFunction::create(
+    lv.method = NativeFunction::create(
         runtime,
         nullptr /* context */,
         func,
         Predefined::getSymbolID(symID),
         count);
-    lv.method = std::move(*methodRes);
     runtime.registerBuiltin(builtinIndex, *lv.method);
   };
 

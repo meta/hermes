@@ -239,15 +239,15 @@ class StringPrimitive : public VariableSizeRuntimeCell {
 
   /// Copy a UTF-16 sequence into a new StringPrim without throwing.
   /// This function should only be used during VM initialization, where OOM
-  /// should never happen.
-  static inline Handle<StringPrimitive> createNoThrow(
+  /// should never happen. The result is not rooted.
+  static inline PseudoHandle<StringPrimitive> createNoThrow(
       Runtime &runtime,
       UTF16Ref str);
 
   /// Copy a UTF-16 sequence into a new StringPrim without throwing.
   /// This function should only be used during VM initialization, where OOM
-  /// should never happen.
-  static inline Handle<StringPrimitive> createNoThrow(
+  /// should never happen. The result is not rooted.
+  static inline PseudoHandle<StringPrimitive> createNoThrow(
       Runtime &runtime,
       llvh::StringRef ascii);
 
@@ -941,24 +941,24 @@ inline llvh::raw_ostream &operator<<(
   return OS << str->castToUTF16Ref();
 }
 
-/*static*/ inline Handle<StringPrimitive> StringPrimitive::createNoThrow(
+/*static*/ inline PseudoHandle<StringPrimitive> StringPrimitive::createNoThrow(
     Runtime &runtime,
     UTF16Ref str) {
   auto strRes = create(runtime, str);
   if (strRes == ExecutionStatus::EXCEPTION) {
     hermes_fatal("String allocation failed");
   }
-  return runtime.makeHandle<StringPrimitive>(*strRes);
+  return createPseudoHandle(vmcast<StringPrimitive>(*strRes));
 }
 
-/*static*/ inline Handle<StringPrimitive> StringPrimitive::createNoThrow(
+/*static*/ inline PseudoHandle<StringPrimitive> StringPrimitive::createNoThrow(
     Runtime &runtime,
     llvh::StringRef ascii) {
   auto strRes = create(runtime, ASCIIRef(ascii.data(), ascii.size()));
   if (strRes == ExecutionStatus::EXCEPTION) {
     hermes_fatal("String allocation failed");
   }
-  return runtime.makeHandle<StringPrimitive>(*strRes);
+  return createPseudoHandle(vmcast<StringPrimitive>(*strRes));
 }
 
 inline CallResult<HermesValue>

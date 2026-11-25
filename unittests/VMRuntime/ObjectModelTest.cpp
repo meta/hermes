@@ -46,7 +46,7 @@ static inline Handle<Callable> makeSimpleJSFunction(
   }
   return runtime.makeHandle<JSFunction>(JSFunction::create(
       runtime,
-      runtimeModule->getDomain(runtime),
+      runtime.makeHandle(runtimeModule->getDomainUnsafe(runtime)),
       Runtime::makeNullHandle<JSObject>(),
       Runtime::makeNullHandle<Environment>(),
       codeBlock));
@@ -66,10 +66,8 @@ using ObjectModelTest = RuntimeTestFixture;
 TEST_F(ObjectModelTest, SmokeTest) {
   CallResult<bool> cr{false};
 
-  auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop2"));
+  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
 
   auto nullObj = runtime.makeHandle<JSObject>(nullptr);
   auto obj1 = runtime.makeHandle(JSObject::create(runtime, nullObj));
@@ -110,10 +108,8 @@ TEST_F(ObjectModelTest, SmokeTest) {
 
 /// Non-exhaustive test of prototype functionality.
 TEST_F(ObjectModelTest, SimplePrototypeTest) {
-  auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop2"));
+  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
 
   // Create and populate a prototype object.
   auto nullObj = runtime.makeHandle<JSObject>(nullptr);
@@ -161,10 +157,8 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
   auto *runtimeModule = RuntimeModule::createUninitialized(runtime, domain);
   CallResult<bool> cr{false};
 
-  auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop2"));
+  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
 
   auto nullObj = runtime.makeHandle<JSObject>(nullptr);
 
@@ -357,10 +351,8 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
 TEST_F(ObjectModelTest, SimpleReadOnlyTest) {
   CallResult<bool> cr(false);
 
-  auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop2"));
+  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
 
   auto nullObj = runtime.makeHandle<JSObject>(nullptr);
   auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
@@ -447,14 +439,10 @@ TEST_F(ObjectModelTest, SimpleReadOnlyTest) {
 TEST_F(ObjectModelTest, SimpleDeleteTest) {
   NamedPropertyDescriptor desc;
 
-  auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
-  auto prop2ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop2"));
-  auto prop3ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop3"));
-  auto prop4ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop4"));
+  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+  auto prop2ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop2"));
+  auto prop3ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop3"));
+  auto prop4ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop4"));
 
   auto nullObj = runtime.makeHandle<JSObject>(nullptr);
   auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
@@ -563,10 +551,9 @@ TEST_F(ObjectModelTest, NonArrayComputedTest) {
   LocalsRAII lraii{runtime, &lv};
   GCScope gcScope{runtime, "ObjectModelTest.NonArrayComputedTest", 128};
 
-  auto prop1Name = StringPrimitive::createNoThrow(runtime, "prop1");
-  auto prop1ID = *runtime.getIdentifierTable().getSymbolHandleFromPrimitive(
-      runtime, prop1Name);
-  auto prop2Name = StringPrimitive::createNoThrow(runtime, "prop2");
+  auto prop1Name = createNoThrowForTest(runtime, "prop1");
+  auto prop1ID = *stringToSymbolIDForTest(runtime, prop1Name);
+  auto prop2Name = createNoThrowForTest(runtime, "prop2");
   auto index5 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(5));
   auto index6 = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(6));
 
@@ -660,12 +647,10 @@ TEST_F(ObjectModelTest, NamedOrIndexed) {
   GCScope gcScope{runtime, "ObjectModelTest.NamedOrIndexed", 128};
   CallResult<bool> cr{false};
 
-  auto nonIndexID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
-  auto indexID1 = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"2"));
-  auto indexID2 = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"100000000"));
+  auto nonIndexID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
+  auto indexID1 = *getSymbolHandleForTest(runtime, createUTF16Ref(u"2"));
+  auto indexID2 =
+      *getSymbolHandleForTest(runtime, createUTF16Ref(u"100000000"));
 
   auto nullObj = runtime.makeHandle<JSObject>(nullptr);
   auto nonIndexObj = runtime.makeHandle(JSObject::create(runtime, nullObj));
@@ -757,17 +742,14 @@ TEST_F(ObjectModelTest, NamedOrIndexed) {
 TEST_F(ObjectModelTest, HasProperty) {
   GCScope gcScope{runtime, "ObjectModelTest.HasProperty", 256};
 
-  auto nonIndexID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
+  auto nonIndexID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
   auto nonIndexIDString = runtime.makeHandle(
       HermesValue::encodeStringValue(
           runtime.getIdentifierTable().getStringPrim(runtime, *nonIndexID)));
-  auto indexID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"5"));
+  auto indexID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"5"));
   auto indexIDNum =
       runtime.makeHandle(HermesValue::encodeTrustedNumberValue(5));
-  auto indexID2 = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"10"));
+  auto indexID2 = *getSymbolHandleForTest(runtime, createUTF16Ref(u"10"));
   auto indexID2Num =
       runtime.makeHandle(HermesValue::encodeTrustedNumberValue(10));
 
@@ -818,12 +800,9 @@ TEST_F(ObjectModelTest, HasProperty) {
 TEST_F(ObjectModelTest, UpdatePropertyFlagsWithoutTransitionsTest) {
   GCScope gcScope{
       runtime, "ObjectModelTest.UpdatePropertyFlagsWithoutTransitionsTest", 48};
-  auto aHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"a"));
-  auto bHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"b"));
-  auto cHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"c"));
+  auto aHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"));
+  auto bHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"b"));
+  auto cHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"c"));
 
   auto nullObj = runtime.makeHandle<JSObject>(nullptr);
   auto obj = runtime.makeHandle(JSObject::create(runtime, nullObj));
@@ -951,8 +930,7 @@ TEST_F(ObjectModelTest, IsFrozenClassFlag) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  auto propID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("prop"));
+  auto propID = *getSymbolHandleForTest(runtime, createASCIIRef("prop"));
   lv.obj = JSObject::create(runtime);
 
   DefinePropertyFlags dpf{};
@@ -984,10 +962,8 @@ TEST_F(ObjectModelTest, ClassFlagsTransitionShared) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  auto propID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("prop"));
-  auto otherID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("other"));
+  auto propID = *getSymbolHandleForTest(runtime, createASCIIRef("prop"));
+  auto otherID = *getSymbolHandleForTest(runtime, createASCIIRef("other"));
   auto val = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(1));
 
   enum class Op { Freeze, Seal, PreventExtensions };
@@ -1064,8 +1040,8 @@ TEST_F(ObjectModelTest, AddNewOwnPropertyInSlotLongStorage) {
   std::vector<SymbolID> names;
   for (unsigned i = 0; i < kNumNames; ++i) {
     std::string s = "p" + std::to_string(i);
-    names.push_back(**runtime.getIdentifierTable().getSymbolHandle(
-        runtime, createASCIIRef(s.c_str())));
+    names.push_back(
+        **getSymbolHandleForTest(runtime, createASCIIRef(s.c_str())));
   }
   auto valueOf = [](unsigned i) {
     return HermesValue::encodeTrustedNumberValue(100 + i);
@@ -1158,12 +1134,9 @@ TEST_F(ObjectModelTest, TryGetOwnNamedDescriptorOfKeyFast) {
   LocalsRAII lraii{runtime, &lv};
   GCScope scope{runtime, "TryGetOwnNamedDescriptorOfKeyFast", 32};
 
-  SymbolID a = **runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("a"));
-  SymbolID b = **runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("b"));
-  SymbolID zz = **runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("zz"));
+  SymbolID a = **getSymbolHandleForTest(runtime, createASCIIRef("a"));
+  SymbolID b = **getSymbolHandleForTest(runtime, createASCIIRef("b"));
+  SymbolID zz = **getSymbolHandleForTest(runtime, createASCIIRef("zz"));
   lv.uniquedA = runtime.getStringPrimFromSymbolID(a);
   lv.uniquedZz = runtime.getStringPrimFromSymbolID(zz);
   lv.builtA.castAndSetHermesValue<StringPrimitive>(

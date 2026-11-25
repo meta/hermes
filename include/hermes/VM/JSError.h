@@ -90,7 +90,7 @@ class JSError final : public JSObject {
       Runtime &runtime);
 
   /// Implements steps 3 through 9 for ES2023 20.5.3.4 Error.prototype.toString.
-  static CallResult<Handle<StringPrimitive>> toString(
+  static CallResult<PseudoHandle<StringPrimitive>> toString(
       Handle<JSObject> O,
       Runtime &runtime);
 
@@ -131,8 +131,9 @@ class JSError final : public JSObject {
       CodeBlock *codeBlock,
       uint32_t bytecodeOffset);
 
-  /// \return the name of the function at \p index.
-  static Handle<StringPrimitive> getFunctionNameAtIndex(
+  /// \return the name of the function at \p index, or a null PseudoHandle if
+  /// there is none.
+  static PseudoHandle<StringPrimitive> getFunctionNameAtIndex(
       Runtime &runtime,
       Handle<JSError> selfHandle,
       size_t index);

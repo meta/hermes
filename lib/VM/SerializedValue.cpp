@@ -878,7 +878,7 @@ ExecutionStatus serializeArrayProperties(
   if (LLVM_UNLIKELY(propKeyResult == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  lv.propertyKeys = *propKeyResult;
+  lv.propertyKeys = std::move(*propKeyResult);
   uint32_t keysLength = JSArray::getLength(*lv.propertyKeys, runtime);
   uint32_t firstStringPropIndex = keysLength;
 
@@ -1006,12 +1006,12 @@ ExecutionStatus deserializeProperties(
 
     // 2. Let result be ! CreateDataProperty(value, entry.[[Key]],
     // deserializedValue).
-    auto symbolIDRes =
-        stringToSymbolID(runtime, createPseudoHandle(*lv.keyStrPrim));
-    if (LLVM_UNLIKELY(symbolIDRes == ExecutionStatus::EXCEPTION)) {
+    if (LLVM_UNLIKELY(
+            stringToSymbolID(
+                runtime, createPseudoHandle(*lv.keyStrPrim), lv.keySym) ==
+            ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    lv.keySym = std::move(*symbolIDRes);
     auto result = JSObject::defineNewOwnProperty(
         selfObject,
         runtime,
@@ -1258,13 +1258,18 @@ ExecutionStatus serializeDataView(
     SerializedValue &serialized,
     Handle<JSDataView> selfView,
     SerializationValueDenseMap &memoryMap) {
-  Handle<JSArrayBuffer> buffer = selfView->getBuffer(runtime);
+  struct : Locals {
+    PinnedValue<JSArrayBuffer> buffer;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  lv.buffer = selfView->getBuffer(runtime);
   uint32_t byteLength = selfView->byteLength();
   uint32_t byteOffset = selfView->byteOffset();
   // 1. If IsArrayBufferViewOutOfBounds(value) is true, then throw a
   // "DataCloneError" DOMException.
   if (!selfView->attached(runtime) ||
-      byteOffset + byteLength > buffer->size()) {
+      byteOffset + byteLength > lv.buffer->size()) {
     return runtime.raiseError("DataView is out of bounds");
   }
   // 2. Let buffer be the value of value's [[ViewedArrayBuffer]] internal slot.
@@ -1274,7 +1279,7 @@ ExecutionStatus serializeDataView(
   // "ResizableArrayBuffer", "SharedArrayBuffer", or
   // "GrowableSharedArrayBuffer".
 
-  auto res = serializeImpl(runtime, buffer, serialized, memoryMap);
+  auto res = serializeImpl(runtime, lv.buffer, serialized, memoryMap);
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }

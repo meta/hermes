@@ -140,10 +140,11 @@ uint8_t JSTypedArrayBase::getByteWidth() const {
   return widths[static_cast<size_t>(getKind()) - firstKind];
 }
 
-CallResult<Handle<JSTypedArrayBase>> JSTypedArrayBase::allocate(
+CallResult<PseudoHandle<JSTypedArrayBase>> JSTypedArrayBase::allocate(
     Runtime &runtime,
     size_type length) {
-  using AllocateFn = CallResult<Handle<JSTypedArrayBase>>(Runtime &, size_type);
+  using AllocateFn =
+      CallResult<PseudoHandle<JSTypedArrayBase>>(Runtime &, size_type);
   static constexpr AllocateFn *allocateFns[] = {
 #define TYPED_ARRAY(name, type) name##Array::allocate,
 #include "hermes/VM/TypedArrays.def"
@@ -155,17 +156,23 @@ CallResult<Handle<JSTypedArrayBase>> JSTypedArrayBase::allocate(
       runtime, length);
 }
 
-CallResult<Handle<JSTypedArrayBase>> JSTypedArrayBase::allocateToSameBuffer(
+CallResult<PseudoHandle<JSTypedArrayBase>>
+JSTypedArrayBase::allocateToSameBuffer(
     Runtime &runtime,
     Handle<JSTypedArrayBase> src,
     size_type beginIndex,
     size_type endIndex) {
+  struct : public Locals {
+    PinnedValue<JSTypedArrayBase> newArr;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   auto result =
       JSTypedArrayBase::allocateSpecies(runtime, src, endIndex - beginIndex);
   if (result == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto newArr = result.getValue();
+  lv.newArr = std::move(*result);
   auto beginScaled = beginIndex * src->getByteWidth();
   auto endScaled = endIndex * src->getByteWidth();
   if (!src->attached(runtime)) {
@@ -173,19 +180,19 @@ CallResult<Handle<JSTypedArrayBase>> JSTypedArrayBase::allocateToSameBuffer(
   }
   setBuffer(
       runtime,
-      *newArr,
+      *lv.newArr,
       src->getBuffer(runtime),
       beginScaled + src->getByteOffset(),
       endScaled - beginScaled,
       src->getByteWidth());
-  return Handle<JSTypedArrayBase>::vmcast(newArr);
+  return createPseudoHandle(*lv.newArr);
 }
 
-CallResult<Handle<JSTypedArrayBase>> JSTypedArrayBase::allocateSpecies(
+CallResult<PseudoHandle<JSTypedArrayBase>> JSTypedArrayBase::allocateSpecies(
     Runtime &runtime,
     Handle<JSTypedArrayBase> self,
     size_type length) {
-  using AllocateSpeciesFn = CallResult<Handle<JSTypedArrayBase>>(
+  using AllocateSpeciesFn = CallResult<PseudoHandle<JSTypedArrayBase>>(
       Handle<JSTypedArrayBase>, Runtime &, size_type);
   static constexpr AllocateSpeciesFn *allocateFns[] = {
 #define TYPED_ARRAY(name, type) name##Array::allocateSpecies,
@@ -242,10 +249,16 @@ ExecutionStatus JSTypedArrayBase::setToCopyOfBuffer(
   if (possibleArr == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto arr = possibleArr.getValue();
+  // No safepoint between clone and setBuffer, so no need to pin.
+  PseudoHandle<JSArrayBuffer> arr = std::move(*possibleArr);
   assert(arr->size() == count && "Created buffer is not of the correct size");
   setBuffer(
-      runtime, *dst, *arr, dstByteOffset, arr->size(), dst->getByteWidth());
+      runtime,
+      *dst,
+      arr.get(),
+      dstByteOffset,
+      arr->size(),
+      dst->getByteWidth());
   return ExecutionStatus::RETURNED;
 }
 
@@ -357,45 +370,54 @@ const ObjectVTable JSTypedArray<T, C>::vt{
 #undef TYPED_ARRAY
 
 template <typename T, CellKind C>
-CallResult<Handle<JSTypedArrayBase>> JSTypedArray<T, C>::allocate(
+CallResult<PseudoHandle<JSTypedArrayBase>> JSTypedArray<T, C>::allocate(
     Runtime &runtime,
     size_type length) {
-  Handle<JSTypedArrayBase> ta = runtime.makeHandle(
-      JSTypedArray<T, C>::create(
-          runtime,
-          JSTypedArray<T, C>::getPrototype(runtime),
-          JSTypedArray<T, C>::getRootHiddenClass(runtime)));
-  if (JSTypedArrayBase::createBuffer(runtime, ta, length) ==
+  struct : public Locals {
+    PinnedValue<JSTypedArrayBase> ta;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  lv.ta = JSTypedArray<T, C>::create(
+      runtime,
+      JSTypedArray<T, C>::getPrototype(runtime),
+      JSTypedArray<T, C>::getRootHiddenClass(runtime));
+  if (JSTypedArrayBase::createBuffer(runtime, lv.ta, length) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  return ta;
+  return createPseudoHandle(*lv.ta);
 }
 
 template <typename T, CellKind C>
-CallResult<Handle<JSTypedArrayBase>> JSTypedArray<T, C>::allocateSpecies(
+CallResult<PseudoHandle<JSTypedArrayBase>> JSTypedArray<T, C>::allocateSpecies(
     Handle<JSTypedArrayBase> self,
     Runtime &runtime,
     size_type length) {
+  struct : public Locals {
+    PinnedValue<> lengthArg;
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   auto defaultConstructor = JSTypedArray<T, C>::getConstructor(runtime);
   auto possibleCons = speciesConstructor(self, runtime, defaultConstructor);
   if (possibleCons == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto callRes = Callable::executeConstruct1(
-      *possibleCons,
-      runtime,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(length)));
+  lv.lengthArg = HermesValue::encodeTrustedNumberValue(length);
+  auto callRes =
+      Callable::executeConstruct1(*possibleCons, runtime, lv.lengthArg);
   if (callRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto obj = runtime.makeHandle<JSObject>(callRes->get());
+  lv.obj.template castAndSetHermesValue<JSObject>(callRes->getHermesValue());
   // validate that the constructed object is a TypedArray.
-  if (JSTypedArrayBase::validateTypedArray(runtime, obj) ==
+  if (JSTypedArrayBase::validateTypedArray(runtime, lv.obj) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  return Handle<JSTypedArrayBase>::vmcast(obj);
+  return createPseudoHandle(vmcast<JSTypedArrayBase>(*lv.obj));
 }
 
 template <typename T, CellKind C>

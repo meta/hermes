@@ -29,6 +29,8 @@ HermesValue createErrorConstructor(Runtime &runtime) {
     PinnedValue<> nameValue;
     PinnedValue<> messageValue;
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<NativeFunction> getter;
+    PinnedValue<NativeFunction> setter;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -61,14 +63,14 @@ HermesValue createErrorConstructor(Runtime &runtime) {
       Predefined::getSymbolID(Predefined::message),
       lv.messageValue);
 
-  auto getter = NativeFunction::create(
+  lv.getter = NativeFunction::create(
       runtime,
       nullptr,
       errorStackGetter,
       Predefined::getSymbolID(Predefined::emptyString),
       0);
 
-  auto setter = NativeFunction::create(
+  lv.setter = NativeFunction::create(
       runtime,
       nullptr,
       errorStackSetter,
@@ -77,7 +79,7 @@ HermesValue createErrorConstructor(Runtime &runtime) {
 
   // Save the accessors on the runtime so we can use them for captureStackTrace.
   runtime.jsErrorStackAccessor =
-      PropertyAccessor::create(runtime, getter, setter);
+      PropertyAccessor::create(runtime, lv.getter, lv.setter);
 
   auto accessor =
       Handle<PropertyAccessor>::vmcast(&runtime.jsErrorStackAccessor);
@@ -144,11 +146,13 @@ HermesValue createErrorConstructor(Runtime &runtime) {
         errorPrototype,                                                     \
         Predefined::getSymbolID(Predefined::name),                          \
         lv.nameValue);                                                      \
+    lv.nameValue = HermesValue::encodeStringValue(                          \
+        runtime.getPredefinedString(Predefined::emptyString));              \
     defineProperty(                                                         \
         runtime,                                                            \
         errorPrototype,                                                     \
         Predefined::getSymbolID(Predefined::message),                       \
-        runtime.getPredefinedStringHandle(Predefined::emptyString));        \
+        lv.nameValue);                                                      \
     defineSystemConstructor(                                                \
         runtime,                                                            \
         Predefined::getSymbolID(Predefined::error_name),                    \
@@ -263,6 +267,7 @@ static CallResult<HermesValue> constructAggregateErrorObject(
     Handle<JSObject> prototype) {
   struct : public Locals {
     PinnedValue<JSObject> errorObjHandle;
+    PinnedValue<JSArray> errorsList;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -280,11 +285,12 @@ static CallResult<HermesValue> constructAggregateErrorObject(
   lv.errorObjHandle.castAndSetHermesValue<JSObject>(*errorObj);
 
   // 5. Let errorsList be ? IterableToList(errors).
-  CallResult<Handle<JSArray>> errorsList =
+  CallResult<PseudoHandle<JSArray>> errorsList =
       iterableToArray(runtime, args.getArgHandle(0));
   if (LLVM_UNLIKELY(errorsList == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
+  lv.errorsList = std::move(*errorsList);
   // 6. Perform ! DefinePropertyOrThrow(O, "errors", PropertyDescriptor {
   // [[Configurable]]: true, [[Enumerable]]: false, [[Writable]]: true,
   // [[Value]]: CreateArrayFromList(errorsList) }).
@@ -294,7 +300,7 @@ static CallResult<HermesValue> constructAggregateErrorObject(
       runtime,
       Predefined::getSymbolID(Predefined::errors),
       DefinePropertyFlags::getNewNonEnumerableFlags(),
-      *errorsList);
+      lv.errorsList);
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -357,7 +363,7 @@ CallResult<HermesValue> errorPrototypeToString(void *, Runtime &runtime) {
   }
 
   // Steps 3. through 9 are implemented in JSError::toString.
-  CallResult<Handle<StringPrimitive>> toStringRes =
+  CallResult<PseudoHandle<StringPrimitive>> toStringRes =
       JSError::toString(O, runtime);
   if (LLVM_UNLIKELY(toStringRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;

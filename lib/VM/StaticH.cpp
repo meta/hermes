@@ -639,9 +639,10 @@ extern "C" SHLegacyValue _sh_ljs_create_generator_object(
     struct : public Locals {
       PinnedValue<NativeJSFunction> generatorFunction;
       PinnedValue<JSObject> prototype;
+      PinnedValue<NativeJSFunction> innerFunc;
     } lv;
     LocalsRAII lraii{runtime, &lv};
-    Handle<NativeJSFunction> innerFunc = NativeJSFunction::create(
+    lv.innerFunc = NativeJSFunction::create(
         runtime,
         Handle<JSObject>::vmcast(&runtime.functionPrototype),
         env ? Handle<Environment>::vmcast(toPHV(env))
@@ -661,7 +662,7 @@ extern "C" SHLegacyValue _sh_ljs_create_generator_object(
     if (kind == FuncKind::Async) {
       return JSGeneratorObject::create(
                  runtime,
-                 innerFunc,
+                 lv.innerFunc,
                  Handle<JSObject>::vmcast(&runtime.generatorPrototype))
           ->getHermesValue();
     }
@@ -680,7 +681,7 @@ extern "C" SHLegacyValue _sh_ljs_create_generator_object(
       lv.prototype.castAndSetHermesValue<JSObject>(prototypeProp->get());
       prototype = lv.prototype;
     }
-    return JSGeneratorObject::create(runtime, innerFunc, prototype)
+    return JSGeneratorObject::create(runtime, lv.innerFunc, prototype)
         ->getHermesValue();
   }();
 
@@ -706,8 +707,9 @@ extern "C" SHLegacyValue _sh_ljs_create_class(
       [&runtime, env, func, funcInfo, unit](Handle<JSObject> ctorParent) {
         auto envHandle = env ? Handle<Environment>::vmcast(toPHV(env))
                              : HandleRootOwner::makeNullHandle<Environment>();
-        return *NativeJSClass::create(
-            runtime, ctorParent, envHandle, func, funcInfo, unit);
+        return NativeJSClass::create(
+                   runtime, ctorParent, envHandle, func, funcInfo, unit)
+            .get();
       });
   if (classRes == ExecutionStatus::EXCEPTION)
     _sh_throw_current(shr);
@@ -2362,10 +2364,9 @@ extern "C" SHLegacyValue _sh_ljs_get_pname_list_rjs(
     if (cr == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    auto arr = *cr;
     *index = HermesValue::encodeTrustedNumberValue(beginIndex);
     *size = HermesValue::encodeTrustedNumberValue(endIndex);
-    return arr.getHermesValue();
+    return cr->getHermesValue();
   }();
 
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
@@ -2791,31 +2792,34 @@ _sh_string_concat(SHRuntime *shr, uint32_t argCount, ...) {
   va_start(args, argCount);
   CallResult<HermesValue> result = [&]() -> CallResult<HermesValue> {
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<StringPrimitive> outputStr;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     if (firstIsBuffered) {
       // The first argument is a BufferedStringPrimitive, so we can use it and
       // concatenate the rest using StringPrimitive::concat.
-      // Begin with the first argument in a MutableHandle.
-      MutableHandle<StringPrimitive> outputStrHandle{
-          runtime,
-          vmcast<StringPrimitive>(*toPHV(va_arg(args, const SHLegacyValue *)))};
+      // Begin with the first argument in a pinned slot.
+      lv.outputStr =
+          vmcast<StringPrimitive>(*toPHV(va_arg(args, const SHLegacyValue *)));
       // Start with 1 to account for the first arg already being in the handle.
       for (size_t i = 1; i < argCount; ++i) {
         auto argHandle = Handle<StringPrimitive>::vmcast(
             toPHV(va_arg(args, const SHLegacyValue *)));
         // Use concat repeatedly to use a BufferedStringPrimitive for faster
         // concatenation.
-        auto res = StringPrimitive::concat(runtime, outputStrHandle, argHandle);
+        auto res = StringPrimitive::concat(runtime, lv.outputStr, argHandle);
         if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
           return ExecutionStatus::EXCEPTION;
         }
-        outputStrHandle = vmcast<StringPrimitive>(*res);
+        lv.outputStr = vmcast<StringPrimitive>(*res);
       }
-      return outputStrHandle.getHermesValue();
+      return lv.outputStr.getHermesValue();
     } else {
       // Otherwise, avoid allocating intermediate strings by using a
       // StringBuilder.
-      auto builderRes =
-          StringBuilder::createStringBuilder(runtime, resultSize, isASCII);
+      auto builderRes = StringBuilder::createStringBuilder(
+          runtime, lv.outputStr, resultSize, isASCII);
       if (LLVM_UNLIKELY(builderRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }

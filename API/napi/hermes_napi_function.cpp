@@ -190,6 +190,7 @@ napi_status NAPI_CDECL napi_create_function(
   struct : public Locals {
     PinnedValue<Callable> func;
     PinnedValue<JSObject> proto;
+    PinnedValue<SymbolID> name;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -199,7 +200,7 @@ napi_status NAPI_CDECL napi_create_function(
   CallbackBundle *bundle = &env->callbackBundles_.back();
 
   // Determine the function name symbol.
-  SymbolID nameSym = Predefined::getSymbolID(Predefined::emptyString);
+  lv.name = Predefined::getSymbolID(Predefined::emptyString);
   if (utf8name != nullptr) {
     size_t nameLen =
         (length == NAPI_AUTO_LENGTH) ? std::strlen(utf8name) : length;
@@ -212,15 +213,15 @@ napi_status NAPI_CDECL napi_create_function(
         env->callbackBundles_.pop_back();
         return captureRuntimeException(env, napi_generic_failure);
       }
-      auto symRes = runtime.getIdentifierTable().getSymbolHandleFromPrimitive(
-          runtime,
-          PseudoHandle<StringPrimitive>::create(
-              vmcast<StringPrimitive>(*strRes)));
-      if (LLVM_UNLIKELY(symRes == ExecutionStatus::EXCEPTION)) {
+      if (LLVM_UNLIKELY(
+              runtime.getIdentifierTable().getSymbolFromPrimitive(
+                  runtime,
+                  PseudoHandle<StringPrimitive>::create(
+                      vmcast<StringPrimitive>(*strRes)),
+                  lv.name) == ExecutionStatus::EXCEPTION)) {
         env->callbackBundles_.pop_back();
         return captureRuntimeException(env, napi_generic_failure);
       }
-      nameSym = **symRes;
     }
   }
 
@@ -250,7 +251,7 @@ napi_status NAPI_CDECL napi_create_function(
   auto defRes = Callable::defineNameLengthAndPrototype(
       lv.func,
       runtime,
-      nameSym,
+      *lv.name,
       0, // paramCount (.length)
       lv.proto,
       Callable::WritablePrototype::Yes);
@@ -577,6 +578,7 @@ napi_status NAPI_CDECL napi_define_class(
     PinnedValue<Callable> setter;
     PinnedValue<PropertyAccessor> accessor;
     PinnedValue<NativeFunction> method;
+    PinnedValue<SymbolID> propSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -603,15 +605,15 @@ napi_status NAPI_CDECL napi_define_class(
         env->callbackBundles_.pop_back();
         return captureRuntimeException(env, napi_generic_failure);
       }
-      auto symRes = runtime.getIdentifierTable().getSymbolHandleFromPrimitive(
-          runtime,
-          PseudoHandle<StringPrimitive>::create(
-              vmcast<StringPrimitive>(*strRes)));
-      if (LLVM_UNLIKELY(symRes == ExecutionStatus::EXCEPTION)) {
+      if (LLVM_UNLIKELY(
+              runtime.getIdentifierTable().getSymbolFromPrimitive(
+                  runtime,
+                  PseudoHandle<StringPrimitive>::create(
+                      vmcast<StringPrimitive>(*strRes)),
+                  lv.name) == ExecutionStatus::EXCEPTION)) {
         env->callbackBundles_.pop_back();
         return captureRuntimeException(env, napi_generic_failure);
       }
-      lv.name = **symRes;
     }
   }
 
@@ -667,14 +669,11 @@ napi_status NAPI_CDECL napi_define_class(
 
     // Instance property: define on the prototype.
     // Resolve the property key.
-    SymbolID propertySym{};
     if (p->utf8name != nullptr) {
-      CallResult<Handle<SymbolID>> symRes = ExecutionStatus::EXCEPTION;
-      auto internStatus = internUtf8AsSymbol(env, p->utf8name, symRes);
+      auto internStatus = internUtf8AsSymbol(env, p->utf8name, lv.propSym);
       if (internStatus != napi_ok) {
         return internStatus;
       }
-      propertySym = **symRes;
     } else {
       auto *namePhv = reinterpret_cast<PinnedHermesValue *>(p->name);
       RETURN_STATUS_IF_FALSE(
@@ -683,16 +682,16 @@ napi_status NAPI_CDECL napi_define_class(
           napi_name_expected);
 
       if (namePhv->isString()) {
-        auto symRes = runtime.getIdentifierTable().getSymbolHandleFromPrimitive(
-            runtime,
-            PseudoHandle<StringPrimitive>::create(
-                vmcast<StringPrimitive>(*namePhv)));
-        if (LLVM_UNLIKELY(symRes == ExecutionStatus::EXCEPTION)) {
+        if (LLVM_UNLIKELY(
+                runtime.getIdentifierTable().getSymbolFromPrimitive(
+                    runtime,
+                    PseudoHandle<StringPrimitive>::create(
+                        vmcast<StringPrimitive>(*namePhv)),
+                    lv.propSym) == ExecutionStatus::EXCEPTION)) {
           return captureRuntimeException(env, napi_pending_exception);
         }
-        propertySym = **symRes;
       } else {
-        propertySym = namePhv->getSymbol();
+        lv.propSym = namePhv->getSymbol();
       }
     }
 
@@ -704,14 +703,14 @@ napi_status NAPI_CDECL napi_define_class(
       if (p->getter != nullptr) {
         PseudoHandle<NativeFunction> getterFunc{};
         STATUS_CALL(createNapiNativeFunction(
-            env, p->getter, p->data, propertySym, 0, getterFunc));
+            env, p->getter, p->data, *lv.propSym, 0, getterFunc));
         lv.getter.castAndSetHermesValue<Callable>(getterFunc.getHermesValue());
         getterHandle = lv.getter;
       }
       if (p->setter != nullptr) {
         PseudoHandle<NativeFunction> setterFunc{};
         STATUS_CALL(createNapiNativeFunction(
-            env, p->setter, p->data, propertySym, 1, setterFunc));
+            env, p->setter, p->data, *lv.propSym, 1, setterFunc));
         lv.setter.castAndSetHermesValue<Callable>(setterFunc.getHermesValue());
         setterHandle = lv.setter;
       }
@@ -731,7 +730,7 @@ napi_status NAPI_CDECL napi_define_class(
       auto propRes = JSObject::defineOwnProperty(
           lv.proto,
           runtime,
-          propertySym,
+          *lv.propSym,
           dpf,
           lv.accessor,
           PropOpFlags().plusThrowOnError());
@@ -743,7 +742,7 @@ napi_status NAPI_CDECL napi_define_class(
       // Method property on prototype.
       PseudoHandle<NativeFunction> methodFunc{};
       STATUS_CALL(createNapiNativeFunction(
-          env, p->method, p->data, propertySym, 0, methodFunc));
+          env, p->method, p->data, *lv.propSym, 0, methodFunc));
       lv.method = std::move(methodFunc);
 
       DefinePropertyFlags dpf{};
@@ -758,7 +757,7 @@ napi_status NAPI_CDECL napi_define_class(
       auto propRes = JSObject::defineOwnProperty(
           lv.proto,
           runtime,
-          propertySym,
+          *lv.propSym,
           dpf,
           lv.method,
           PropOpFlags().plusThrowOnError());
@@ -783,7 +782,7 @@ napi_status NAPI_CDECL napi_define_class(
       auto propRes = JSObject::defineOwnProperty(
           lv.proto,
           runtime,
-          propertySym,
+          *lv.propSym,
           dpf,
           valHandle,
           PropOpFlags().plusThrowOnError());

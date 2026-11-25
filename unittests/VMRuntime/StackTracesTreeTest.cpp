@@ -189,9 +189,9 @@ struct StackTracesTreeParameterizedTest
     {
       vm::GCScope gcScope(runtime);
       enableAllocationLocationTrackerSym =
-          vm::stringToSymbolID(
+          vm::stringToSymbolIDForTest(
               runtime,
-              vm::StringPrimitive::createNoThrow(
+              vm::createNoThrowForTest(
                   runtime, "enableAllocationLocationTracker"))
               ->getHermesValue()
               .getSymbol();
@@ -202,7 +202,7 @@ struct StackTracesTreeParameterizedTest
             runtime.getGlobal(),
             runtime,
             enableAllocationLocationTrackerSym,
-            runtime.makeHandle<NativeFunction>(*NativeFunction::create(
+            runtime.makeHandle<NativeFunction>(NativeFunction::create(
                 runtime,
                 nullptr,
                 trackerOnByDefault() ? noop : enableAllocationLocationTracker,

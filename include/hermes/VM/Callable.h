@@ -562,7 +562,7 @@ class NativeJSFunction : public Callable {
   /// \param context the context to be passed to the function
   /// \param functionPtr the native function
   /// \param funcInfo pointer to the information describing the function.
-  static Handle<NativeJSFunction> create(
+  static PseudoHandle<NativeJSFunction> create(
       Runtime &runtime,
       Handle<JSObject> parentHandle,
       Handle<Environment> parentEnvHandle,
@@ -576,7 +576,7 @@ class NativeJSFunction : public Callable {
   /// \param context the context to be passed to the function
   /// \param functionPtr the native function
   /// \param funcInfo pointer to the information describing the function.
-  static Handle<NativeJSFunction> createWithInferredParent(
+  static PseudoHandle<NativeJSFunction> createWithInferredParent(
       Runtime &runtime,
       Handle<Environment> parentEnvHandle,
       NativeJSFunctionPtr functionPtr,
@@ -653,7 +653,7 @@ class NativeJSClass : public NativeJSFunction {
   }
 
   /// Create an instance of NativeJSClass.
-  static Handle<NativeJSClass> create(
+  static PseudoHandle<NativeJSClass> create(
       Runtime &runtime,
       Handle<JSObject> parentHandle,
       Handle<Environment> parentEnvHandle,
@@ -753,7 +753,7 @@ class NativeFunction : public Callable {
   /// \param functionPtr the native function
   /// \param name the name property of the function.
   /// \param paramCount number of parameters (excluding `this`)
-  static Handle<NativeFunction> create(
+  static PseudoHandle<NativeFunction> create(
       Runtime &runtime,
       void *context,
       NativeFunctionPtr functionPtr,
@@ -780,7 +780,7 @@ class NativeFunction : public Callable {
   /// \param name the name property of the function.
   /// \param paramCount number of parameters (excluding `this`)
   /// \param prototypeObjectHandle if non-null, set as prototype property.
-  static Handle<NativeFunction> create(
+  static PseudoHandle<NativeFunction> create(
       Runtime &runtime,
       Handle<JSObject> parentHandle,
       Handle<HiddenClass> clazz,
@@ -1041,8 +1041,12 @@ class JSFunction : public Callable {
   static PseudoHandle<JSFunction> create(
       Runtime &runtime,
       Handle<JSObject> parentHandle) {
-    return create(
-        runtime, runtime.makeHandle(Domain::create(runtime)), parentHandle);
+    struct : public Locals {
+      PinnedValue<Domain> domain;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
+    lv.domain = Domain::create(runtime);
+    return create(runtime, lv.domain, parentHandle);
   }
 
   /// \return the code block containing the function code.
@@ -1136,6 +1140,7 @@ static CallResult<std::pair<Callable *, JSObject *>> createClass(
     PinnedValue<JSObject> ctorParent;
     PinnedValue<Callable> F;
     PinnedValue<JSObject> homeObject;
+    PinnedValue<> badProtoParent;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   GCScopeMarkerRAII marker{runtime};
@@ -1183,9 +1188,10 @@ static CallResult<std::pair<Callable *, JSObject *>> createClass(
           auto *protoParentObj = dyn_vmcast<JSObject>(protoParentPH.get())) {
         lv.protoParent = protoParentObj;
       } else {
+        lv.badProtoParent = std::move(protoParentPH);
         return runtime.raiseTypeErrorForValue(
             "Base class .prototype ",
-            runtime.makeHandle(std::move(protoParentPH)),
+            lv.badProtoParent,
             " is neither null nor an object");
       }
       //     iii. Let constructorParent be superclass.

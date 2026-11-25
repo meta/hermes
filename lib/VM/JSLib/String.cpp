@@ -450,8 +450,12 @@ CallResult<HermesValue> stringFromCharCode(void *, Runtime &runtime) {
     allASCII &= ch < 128;
     codeUnits.push_back(ch);
   }
-  auto builder =
-      StringBuilder::createStringBuilder(runtime, SafeUInt32{n}, allASCII);
+  struct : public Locals {
+    PinnedValue<StringPrimitive> result;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  auto builder = StringBuilder::createStringBuilder(
+      runtime, lv.result, SafeUInt32{n}, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -828,6 +832,7 @@ CallResult<HermesValue> stringPrototypeConcat(void *, Runtime &runtime) {
     PinnedValue<StringPrimitive> S;
     PinnedValue<ArrayStorageSmall> strings;
     PinnedValue<StringPrimitive> element;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
@@ -880,7 +885,8 @@ CallResult<HermesValue> stringPrototypeConcat(void *, Runtime &runtime) {
   }
 
   // Allocate the complete result.
-  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
+  auto builder =
+      StringBuilder::createStringBuilder(runtime, lv.result, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -998,9 +1004,14 @@ static CallResult<HermesValue> convertCase(
         }
       }
 
+      struct : public Locals {
+        PinnedValue<StringPrimitive> result;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
       SafeUInt32 len(S->getStringLength());
       // Every character is ASCII (mask <= 127), and so is its case mapping.
-      auto builder = StringBuilder::createStringBuilder(runtime, len, true);
+      auto builder =
+          StringBuilder::createStringBuilder(runtime, lv.result, len, true);
       if (builder == ExecutionStatus::EXCEPTION) {
         return ExecutionStatus::EXCEPTION;
       }
@@ -1409,6 +1420,7 @@ CallResult<HermesValue> stringPrototypeRepeat(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   struct : public Locals {
     PinnedValue<StringPrimitive> S;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1462,8 +1474,8 @@ CallResult<HermesValue> stringPrototypeRepeat(void *, Runtime &runtime) {
   SafeUInt32 finalLen(strLen * n);
 
   // The result is ASCII exactly when S is.
-  auto builderRes =
-      StringBuilder::createStringBuilder(runtime, finalLen, lv.S->isASCII());
+  auto builderRes = StringBuilder::createStringBuilder(
+      runtime, lv.result, finalLen, lv.S->isASCII());
   if (LLVM_UNLIKELY(builderRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1593,11 +1605,9 @@ CallResult<HermesValue> stringPrototypeMatchAll(void *, Runtime &runtime) {
   lv.S = std::move(*strRes);
 
   // 4. Let rx be ? RegExpCreate(regexp, "g").
+  lv.flagsStr = runtime.getCharacterString('g');
   auto regRes = regExpCreate(
-      runtime,
-      regexp,
-      runtime.getCharacterString('g'),
-      MutableHandle<JSRegExp>{lv.rx});
+      runtime, regexp, lv.flagsStr, MutableHandle<JSRegExp>{lv.rx});
   if (regRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -2077,6 +2087,7 @@ CallResult<HermesValue> stringPrototypePad(void *ctx, Runtime &runtime) {
   struct : public Locals {
     PinnedValue<StringPrimitive> S;
     PinnedValue<StringPrimitive> filler;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -2145,7 +2156,7 @@ CallResult<HermesValue> stringPrototypePad(void *ctx, Runtime &runtime) {
   }
 
   auto builderRes = StringBuilder::createStringBuilder(
-      runtime, size, lv.S->isASCII() && lv.filler->isASCII());
+      runtime, lv.result, size, lv.S->isASCII() && lv.filler->isASCII());
   if (LLVM_UNLIKELY(builderRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -2442,9 +2453,10 @@ CallResult<HermesValue> stringPrototypeCharAt(void *, Runtime &runtime) {
     return HermesValue::encodeStringValue(
         runtime.getPredefinedString(Predefined::emptyString));
   }
-  auto result = runtime.getCharacterString(
-      StringPrimitive::createStringView(runtime, lv.S)[position]);
-  return HermesValue::encodeStringValue(result.get());
+  return runtime
+      .getCharacterString(
+          StringPrimitive::createStringView(runtime, lv.S)[position])
+      .getHermesValue();
 }
 
 CallResult<HermesValue> stringPrototypeSlice(void *, Runtime &runtime) {

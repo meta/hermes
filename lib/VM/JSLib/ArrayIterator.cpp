@@ -19,6 +19,11 @@ namespace hermes {
 namespace vm {
 
 void populateArrayIteratorPrototype(Runtime &runtime) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   auto proto = Handle<JSObject>::vmcast(&runtime.arrayIteratorPrototype);
 
   defineMethod(
@@ -32,11 +37,12 @@ void populateArrayIteratorPrototype(Runtime &runtime) {
   auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::ArrayIterator);
   defineProperty(
       runtime,
       proto,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::ArrayIterator),
+      lv.str,
       dpf);
 }
 

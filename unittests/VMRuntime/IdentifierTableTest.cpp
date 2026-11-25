@@ -31,6 +31,11 @@ using IdentifierTableLargeHeapTest = LargeHeapRuntimeTestFixture;
 // in the test, so we can't reliably assert about the create symbol index.
 #if HERMESVM_SANITIZE_HANDLES == 0
 TEST_F(IdentifierTableLargeHeapTest, LookupTest) {
+  struct : public Locals {
+    PinnedValue<SymbolID> sa;
+    PinnedValue<SymbolID> sb;
+  } lv;
+  LocalsRAII lraii_lv(runtime, &lv);
   IdentifierTable &table = runtime.getIdentifierTable();
 
   uint32_t predefinedCount = table.getSymbolsEnd();
@@ -39,47 +44,44 @@ TEST_F(IdentifierTableLargeHeapTest, LookupTest) {
   UTF16Ref b{u"ab", 2};
   UTF16Ref c{u"foo", 3};
 
-  SymbolID sa = table.getSymbolHandle(runtime, a).getValue().get();
+  lv.sa = table.getSymbolID(runtime, a).getValue();
+  SymbolID sa = *lv.sa;
   ASSERT_GE(sa.unsafeGetIndex(), predefinedCount);
-  SymbolID sb = table.getSymbolHandle(runtime, b).getValue().get();
+  lv.sb = table.getSymbolID(runtime, b).getValue();
+  SymbolID sb = *lv.sb;
   ASSERT_GE(sb.unsafeGetIndex(), predefinedCount);
 
   EXPECT_EQ(0u, sa.unsafeGetIndex() - predefinedCount);
   EXPECT_EQ(1u, sb.unsafeGetIndex() - predefinedCount);
   EXPECT_EQ(
       0u,
-      table.getSymbolHandle(runtime, a).getValue().get().unsafeGetIndex() -
+      table.getSymbolID(runtime, a).getValue().unsafeGetIndex() -
           predefinedCount);
   EXPECT_EQ(
       0u,
-      table.getSymbolHandle(runtime, c).getValue().get().unsafeGetIndex() -
+      table.getSymbolID(runtime, c).getValue().unsafeGetIndex() -
           predefinedCount);
 
-  auto d = StringPrimitive::createNoThrow(runtime, llvh::StringRef("foo"));
+  auto d = createNoThrowForTest(runtime, llvh::StringRef("foo"));
   EXPECT_EQ(
       0u,
-      table.getSymbolHandleFromPrimitive(runtime, d)
-              .getValue()
-              .get()
-              .unsafeGetIndex() -
+      stringToSymbolIDForTest(runtime, d).getValue().get().unsafeGetIndex() -
           predefinedCount);
 
-  auto e = StringPrimitive::createNoThrow(runtime, llvh::StringRef("ab"));
+  auto e = createNoThrowForTest(runtime, llvh::StringRef("ab"));
   EXPECT_EQ(
       1u,
-      table.getSymbolHandleFromPrimitive(runtime, e)
-              .getValue()
-              .get()
-              .unsafeGetIndex() -
+      stringToSymbolIDForTest(runtime, e).getValue().get().unsafeGetIndex() -
           predefinedCount);
 
-  EXPECT_TRUE(table.getStringView(runtime, sa).equals(a));
-  EXPECT_TRUE(table.getStringView(runtime, sb).equals(b));
+  MutableHandle<StringPrimitive> storage{runtime};
+  EXPECT_TRUE(table.getStringView(sa, storage).equals(a));
+  EXPECT_TRUE(table.getStringView(sb, storage).equals(b));
   SmallU16String<8> tmp;
-  table.getStringView(runtime, sa).appendUTF16String(tmp);
+  table.getStringView(sa, storage).appendUTF16String(tmp);
   EXPECT_EQ(a, tmp.arrayRef());
   tmp.clear();
-  table.getStringView(runtime, sb).appendUTF16String(tmp);
+  table.getStringView(sb, storage).appendUTF16String(tmp);
   EXPECT_EQ(b, tmp.arrayRef());
 
   // Ensure allocations are aligned.
@@ -113,8 +115,7 @@ TEST_F(IdentifierTableLargeHeapTest, HashTableBoundedWithDeletedEntries) {
       // alive by the handle scope and can be freed by the collection below.
       GCScopeMarkerRAII marker{runtime};
       std::string s = "unique_ident_" + std::to_string(counter++);
-      auto symRes =
-          table.getSymbolHandle(runtime, ASCIIRef{s.data(), s.size()});
+      auto symRes = table.getSymbolID(runtime, ASCIIRef{s.data(), s.size()});
       ASSERT_FALSE(isException(symRes));
     }
     // With no remaining references, the just-interned symbols are freed,
@@ -188,7 +189,8 @@ TEST_F(IdentifierTableTest, NotUniquedSymbol) {
         runtime.makeHandle(*idTable.createNotUniquedSymbol(runtime, id1));
     EXPECT_TRUE((*sym).isNotUniqued());
     EXPECT_FALSE((*sym).isUniqued());
-    EXPECT_TRUE(idTable.getStringView(runtime, *sym).equals(asdf));
+    MutableHandle<StringPrimitive> storage{runtime};
+    EXPECT_TRUE(idTable.getStringView(*sym, storage).equals(asdf));
   }
 }
 

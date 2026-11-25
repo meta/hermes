@@ -28,14 +28,10 @@ TEST_F(HiddenClassTest, SmokeTest) {
 
   runtime.collect("test");
 
-  auto aHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"a"));
-  auto bHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"b"));
-  auto cHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"c"));
-  auto dHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"d"));
+  auto aHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"));
+  auto bHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"b"));
+  auto cHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"c"));
+  auto dHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"d"));
 
   // We will simulate and verify the following property operations, starting
   // from the same root.
@@ -67,7 +63,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
   x = *rootHnd;
   {
     // x.a
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         x, runtime, *aHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(0u, addRes->second);
@@ -76,7 +72,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
   }
   {
     // x.b
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         x, runtime, *bHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(1u, addRes->second);
@@ -87,7 +83,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
   y = *rootHnd;
   {
     // y.a
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         y, runtime, *aHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(0u, addRes->second);
@@ -95,7 +91,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
   }
   {
     // y.b
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         y, runtime, *bHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(1u, addRes->second);
@@ -104,7 +100,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
   }
   {
     // x.c
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         x, runtime, *cHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(2u, addRes->second);
@@ -116,7 +112,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
   }
   {
     // y.d
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         y, runtime, *dHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(2u, addRes->second);
@@ -151,7 +147,8 @@ TEST_F(HiddenClassTest, SmokeTest) {
     ASSERT_TRUE(desc.flags.writable);
 
     desc.flags.writable = false;
-    auto newClz = HiddenClass::updateProperty(x, runtime, *found, desc.flags);
+    auto newClz = runtime.makeHandle(
+        HiddenClass::updateProperty(x, runtime, *found, desc.flags));
     ASSERT_NE(*x, *newClz);
     ASSERT_EQ(x->getNumProperties(), newClz->getNumProperties());
     x = *newClz;
@@ -166,7 +163,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
   z = *rootHnd;
   {
     // z.a
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         z, runtime, *aHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(0u, addRes->second);
@@ -174,7 +171,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
   }
   {
     // z.b
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         z, runtime, *bHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(1u, addRes->second);
@@ -182,7 +179,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
   }
   {
     // z.c
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         z, runtime, *cHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(2u, addRes->second);
@@ -197,7 +194,8 @@ TEST_F(HiddenClassTest, SmokeTest) {
     ASSERT_TRUE(desc.flags.writable);
 
     desc.flags.writable = false;
-    auto newClz = HiddenClass::updateProperty(z, runtime, *found, desc.flags);
+    auto newClz = runtime.makeHandle(
+        HiddenClass::updateProperty(z, runtime, *found, desc.flags));
     ASSERT_NE(*z, *newClz);
     ASSERT_EQ(z->getNumProperties(), newClz->getNumProperties());
     z = *newClz;
@@ -210,10 +208,10 @@ TEST_F(HiddenClassTest, SmokeTest) {
     ASSERT_EQ(*x, *z);
   }
 
-  y1 = HiddenClass::freeze(y, runtime);
-  y2 = HiddenClass::freeze(y, runtime);
+  y1 = runtime.makeHandle(HiddenClass::freeze(y, runtime));
+  y2 = runtime.makeHandle(HiddenClass::freeze(y, runtime));
   ASSERT_EQ(*y1, *y2);
-  y3 = HiddenClass::freeze(y1, runtime);
+  y3 = runtime.makeHandle(HiddenClass::freeze(y1, runtime));
   ASSERT_EQ(*y1, *y3);
 
   // Turn x into a dictionary by erasing x.a
@@ -223,7 +221,8 @@ TEST_F(HiddenClassTest, SmokeTest) {
     ASSERT_TRUE(found);
     ASSERT_EQ(0u, desc.slot);
 
-    auto x1 = HiddenClass::deleteProperty(x, runtime, *found);
+    auto x1 =
+        runtime.makeHandle(HiddenClass::deleteProperty(x, runtime, *found));
     ASSERT_NE(*x, *x1);
     ASSERT_FALSE(x->isDictionary());
     ASSERT_TRUE(x1->isDictionary());
@@ -237,7 +236,7 @@ TEST_F(HiddenClassTest, SmokeTest) {
 
   {
     // x.a (again)
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         x, runtime, *aHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(0u, addRes->second);
@@ -249,14 +248,10 @@ TEST_F(HiddenClassTest, SmokeTest) {
 TEST_F(HiddenClassTest, AccessorsTest) {
   GCScope gcScope{runtime, "HiddenClassTest.SmokeTest", 48};
   runtime.collect("test");
-  auto aSym = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"a"));
-  auto bSym = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"b"));
-  auto cSym = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"c"));
-  auto dSym = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"d"));
+  auto aSym = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"));
+  auto bSym = *getSymbolHandleForTest(runtime, createUTF16Ref(u"b"));
+  auto cSym = *getSymbolHandleForTest(runtime, createUTF16Ref(u"c"));
+  auto dSym = *getSymbolHandleForTest(runtime, createUTF16Ref(u"d"));
   auto defaultFlags = PropertyFlags::defaultNewNamedPropertyFlags();
   auto accessorFlags = PropertyFlags::defaultNewNamedPropertyFlags();
   accessorFlags.accessor = true;
@@ -278,25 +273,25 @@ TEST_F(HiddenClassTest, AccessorsTest) {
   x = *rootCls;
   {
     // x.a
-    auto addRes = HiddenClass::addProperty(x, runtime, *aSym, defaultFlags);
+    auto addRes = addPropertyForTest(x, runtime, *aSym, defaultFlags);
     x = *addRes->first;
     ASSERT_FALSE(x->getMayHaveAccessor());
   }
   {
     // x.b
-    auto addRes = HiddenClass::addProperty(x, runtime, *bSym, defaultFlags);
+    auto addRes = addPropertyForTest(x, runtime, *bSym, defaultFlags);
     x = *addRes->first;
     ASSERT_FALSE(x->getMayHaveAccessor());
   }
   {
     // x.c accessor
-    auto addRes = HiddenClass::addProperty(x, runtime, *cSym, accessorFlags);
+    auto addRes = addPropertyForTest(x, runtime, *cSym, accessorFlags);
     x = *addRes->first;
     ASSERT_TRUE(x->getMayHaveAccessor());
   }
   {
     // x.d
-    auto addRes = HiddenClass::addProperty(x, runtime, *dSym, defaultFlags);
+    auto addRes = addPropertyForTest(x, runtime, *dSym, defaultFlags);
     x = *addRes->first;
     // Since there may be an accessor in the chain, we must still return
     // true.
@@ -307,13 +302,13 @@ TEST_F(HiddenClassTest, AccessorsTest) {
   y = *rootCls;
   {
     // y.a
-    auto addRes = HiddenClass::addProperty(y, runtime, *aSym, accessorFlags);
+    auto addRes = addPropertyForTest(y, runtime, *aSym, accessorFlags);
     y = *addRes->first;
     ASSERT_TRUE(y->getMayHaveAccessor());
   }
   {
     // y.b
-    auto addRes = HiddenClass::addProperty(y, runtime, *bSym, defaultFlags);
+    auto addRes = addPropertyForTest(y, runtime, *bSym, defaultFlags);
     y = *addRes->first;
     ASSERT_TRUE(y->getMayHaveAccessor());
   }
@@ -323,12 +318,12 @@ TEST_F(HiddenClassTest, AccessorsTest) {
     auto found = HiddenClass::findProperty(y, runtime, *aSym, desc);
     ASSERT_TRUE(found);
     ASSERT_EQ(0u, desc.slot);
-    y = HiddenClass::deleteProperty(y, runtime, *found);
+    y = runtime.makeHandle(HiddenClass::deleteProperty(y, runtime, *found));
     ASSERT_TRUE(y->getMayHaveAccessor());
   }
   {
     // y.d
-    auto addRes = HiddenClass::addProperty(y, runtime, *cSym, defaultFlags);
+    auto addRes = addPropertyForTest(y, runtime, *cSym, defaultFlags);
     y = *addRes->first;
     // Since there may still be an accessor in the chain, we must still return
     // true.
@@ -344,8 +339,7 @@ TEST_F(HiddenClassTest, FindPropertyNoAllocFlagsTransitionTest) {
       runtime, "HiddenClassTest.FindPropertyNoAllocFlagsTransitionTest", 48};
 
   auto getSym = [this](const char16_t *name) {
-    return *runtime.getIdentifierTable().getSymbolHandle(
-        runtime, createUTF16Ref(name));
+    return *getSymbolHandleForTest(runtime, createUTF16Ref(name));
   };
   auto aHnd = getSym(u"a");
   auto bHnd = getSym(u"b");
@@ -357,7 +351,7 @@ TEST_F(HiddenClassTest, FindPropertyNoAllocFlagsTransitionTest) {
   clazz = HiddenClass::createRoot(
       runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{});
   auto add = [this, &clazz](Handle<SymbolID> name) {
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         clazz, runtime, *name, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     clazz = *addRes->first;
@@ -369,11 +363,13 @@ TEST_F(HiddenClassTest, FindPropertyNoAllocFlagsTransitionTest) {
     auto found = HiddenClass::findProperty(clazz, runtime, *name, desc);
     ASSERT_TRUE(found);
     desc.flags.writable = false;
-    clazz = *HiddenClass::updateProperty(clazz, runtime, *found, desc.flags);
+    clazz =
+        HiddenClass::updateProperty(clazz, runtime, *found, desc.flags).get();
     found = HiddenClass::findProperty(clazz, runtime, *name, desc);
     ASSERT_TRUE(found);
     desc.flags.enumerable = false;
-    clazz = *HiddenClass::updateProperty(clazz, runtime, *found, desc.flags);
+    clazz =
+        HiddenClass::updateProperty(clazz, runtime, *found, desc.flags).get();
   };
 
   // {a, b, c}, then b's flags change twice. b keeps slot 1, while the
@@ -424,14 +420,10 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
 
   runtime.collect("test");
 
-  auto aHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"a"));
-  auto bHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"b"));
-  auto cHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"c"));
-  auto dHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"d"));
+  auto aHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"));
+  auto bHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"b"));
+  auto cHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"c"));
+  auto dHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"d"));
 
   // Add y.a, y.b, y.c
   MutableHandle<HiddenClass> y{
@@ -440,7 +432,7 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
           runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{})};
   {
     // y.a
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         y, runtime, *aHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(0u, addRes->second);
@@ -448,7 +440,7 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
   }
   {
     // y.b
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         y, runtime, *bHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(1u, addRes->second);
@@ -456,7 +448,7 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
   }
   {
     // y.c
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         y, runtime, *cHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(2u, addRes->second);
@@ -472,8 +464,9 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
 
   ASSERT_FALSE(y->isDictionary());
   // y is not a dictionary so we will get a new hidden class.
-  auto yClone = HiddenClass::updatePropertyFlagsWithoutTransitions(
-      y, runtime, clearFlags, setFlags, llvh::None);
+  auto yClone = runtime.makeHandle(
+      HiddenClass::updatePropertyFlagsWithoutTransitions(
+          y, runtime, clearFlags, setFlags, llvh::None));
   ASSERT_NE(*y, *yClone);
   ASSERT_EQ(y->getNumProperties(), yClone->getNumProperties());
   ASSERT_TRUE(yClone->isDictionary());
@@ -501,13 +494,14 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
   ASSERT_TRUE(found);
   ASSERT_EQ(0u, desc.slot);
 
-  auto y3 = HiddenClass::deleteProperty(y, runtime, *found);
+  auto y3 = runtime.makeHandle(HiddenClass::deleteProperty(y, runtime, *found));
   ASSERT_NE(*y, *y3);
   ASSERT_TRUE(y3->isDictionary());
   ASSERT_EQ(2u, y3->getNumProperties());
   // We should not create a new hidden class in this case.
-  auto y4 = HiddenClass::updatePropertyFlagsWithoutTransitions(
-      y3, runtime, clearFlags, setFlags, llvh::None);
+  auto y4 = runtime.makeHandle(
+      HiddenClass::updatePropertyFlagsWithoutTransitions(
+          y3, runtime, clearFlags, setFlags, llvh::None));
   ASSERT_EQ(*y4, *y3);
 
   // Only freeze y.a and y.c
@@ -516,13 +510,13 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
   propsToFreeze.push_back(*cHnd);
   propsToFreeze.push_back(*dHnd); // This is not in the map yet.
   // Freeze while only create a singleton hidden class.
-  auto partlyFrozenSingleton =
+  auto partlyFrozenSingleton = runtime.makeHandle(
       HiddenClass::updatePropertyFlagsWithoutTransitions(
           y,
           runtime,
           clearFlags,
           setFlags,
-          llvh::ArrayRef<SymbolID>(propsToFreeze));
+          llvh::ArrayRef<SymbolID>(propsToFreeze)));
 
   ASSERT_NE(*y, *partlyFrozenSingleton);
   ASSERT_EQ(y->getNumProperties(), partlyFrozenSingleton->getNumProperties());
@@ -550,7 +544,7 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
   ASSERT_FALSE(desc.flags.configurable);
 
   // We can still add another property to it.
-  auto addRes = HiddenClass::addProperty(
+  auto addRes = addPropertyForTest(
       partlyFrozenSingleton,
       runtime,
       *dHnd,
@@ -567,14 +561,12 @@ TEST_F(HiddenClassTest, ForEachProperty) {
       HiddenClass::createRoot(
           runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{})};
 
-  auto aHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"a"));
-  auto bHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"b"));
+  auto aHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"a"));
+  auto bHnd = *getSymbolHandleForTest(runtime, createUTF16Ref(u"b"));
 
   {
     // clazz.a
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         clazz, runtime, *aHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(0u, addRes->second);
@@ -582,7 +574,7 @@ TEST_F(HiddenClassTest, ForEachProperty) {
   }
   {
     // clazz.b
-    auto addRes = HiddenClass::addProperty(
+    auto addRes = addPropertyForTest(
         clazz, runtime, *bHnd, PropertyFlags::defaultNewNamedPropertyFlags());
     ASSERT_RETURNED(addRes);
     ASSERT_EQ(1u, addRes->second);
@@ -620,8 +612,7 @@ TEST_F(HiddenClassTest, TypedObjectTest) {
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
-  Handle<SymbolID> aHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("a"));
+  Handle<SymbolID> aHnd = *getSymbolHandleForTest(runtime, createASCIIRef("a"));
 
   lv.hc = vmcast<HiddenClass>(HiddenClass::createForTypedObject(
       runtime, Runtime::makeNullHandle<JSObject>(), 2));

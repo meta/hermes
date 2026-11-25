@@ -132,8 +132,7 @@ TEST_F(JSLibTest, ObjectSealTest) {
   auto isSealedFn = runtime.makeHandle<Callable>((std::move(*propRes)));
 
   // Create a property "obj.prop1".
-  auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
+  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
   ASSERT_TRUE(
       JSObject::putNamed_RJS(
           obj,
@@ -205,8 +204,7 @@ TEST_F(JSLibTest, ObjectFreezeTest) {
   auto isFrozenFn = runtime.makeHandle<Callable>(std::move(*propRes));
 
   // Create a property "obj.prop1".
-  auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
+  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
   ASSERT_TRUE(
       JSObject::putNamed_RJS(
           obj,
@@ -335,8 +333,7 @@ TEST_F(JSLibTest, ObjectGetPrototypeOfTest) {
   auto objProto = runtime.makeHandle<JSObject>(std::move(*callRes));
 
   // Create a property "objProto.prop1".
-  auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"prop1"));
+  auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
   ASSERT_TRUE(
       JSObject::putNamed_RJS(
           objProto,
@@ -381,8 +378,7 @@ TEST_F(JSLibTest, ObjectGetOwnPropertyDescriptorTest) {
         runtime.makeHandle<Callable>(std::move(*propRes));
 
     // Create a property "objProto.prop1".
-    auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-        runtime, createUTF16Ref(u"prop1"));
+    auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
     ASSERT_TRUE(
         JSObject::putNamed_RJS(
             obj,
@@ -436,8 +432,7 @@ TEST_F(JSLibTest, ObjectGetOwnPropertyDescriptorTest) {
         runtime.makeHandle<Callable>(std::move(*propRes));
 
     // Create a property "objProto.prop1".
-    auto prop1ID = *runtime.getIdentifierTable().getSymbolHandle(
-        runtime, createUTF16Ref(u"prop1"));
+    auto prop1ID = *getSymbolHandleForTest(runtime, createUTF16Ref(u"prop1"));
 
     DefinePropertyFlags dpf{};
     dpf.setGetter = 1;
@@ -456,13 +451,13 @@ TEST_F(JSLibTest, ObjectGetOwnPropertyDescriptorTest) {
     auto *codeBlock = createSimpleCodeBlock(runtimeModule, runtime, BMG);
     auto getter = runtime.makeHandle<JSFunction>(JSFunction::create(
         runtime,
-        runtimeModule->getDomain(runtime),
+        runtime.makeHandle(runtimeModule->getDomainUnsafe(runtime)),
         runtime.makeNullHandle<JSObject>(),
         runtime.makeNullHandle<Environment>(),
         codeBlock));
     auto setter = runtime.makeHandle<JSFunction>(JSFunction::create(
         runtime,
-        runtimeModule->getDomain(runtime),
+        runtime.makeHandle(runtimeModule->getDomainUnsafe(runtime)),
         runtime.makeNullHandle<JSObject>(),
         runtime.makeNullHandle<Environment>(),
         codeBlock));
@@ -553,8 +548,7 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
             .getValue());
 
     // Call Object.defineProperty() with prop.
-    auto propHandle =
-        StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"newkey"));
+    auto propHandle = createNoThrowForTest(runtime, createUTF16Ref(u"newkey"));
     ASSERT_RETURNED(
         definePropertyFn
             ->executeCall3(
@@ -569,7 +563,7 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
 
     // Now fetch the property/value and verify it matches the setup.
     NamedPropertyDescriptor desc;
-    auto propID = valueToSymbolID(runtime, propHandle).getValue();
+    auto propID = valueToSymbolIDForTest(runtime, propHandle).getValue();
     JSObject::getNamedDescriptorUnsafe(objectCons, runtime, *propID, desc);
     EXPECT_TRUE(desc.flags.enumerable);
     EXPECT_TRUE(desc.flags.configurable);
@@ -612,8 +606,7 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
     // Call Object.defineProperty() with prop.
     auto prop = runtime.makeHandle(
         HermesValue::encodeStringValue(
-            StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"newkey1"))
-                .get()));
+            createNoThrowForTest(runtime, createUTF16Ref(u"newkey1")).get()));
     ASSERT_RETURNED(
         definePropertyFn
             ->executeCall3(
@@ -628,7 +621,7 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
 
     // Now fetch the property/value and verify it matches the setup.
     NamedPropertyDescriptor desc;
-    auto propID = valueToSymbolID(runtime, prop).getValue();
+    auto propID = valueToSymbolIDForTest(runtime, prop).getValue();
     JSObject::getNamedDescriptorUnsafe(objectCons, runtime, *propID, desc);
     EXPECT_TRUE(desc.flags.accessor);
     EXPECT_FALSE(desc.flags.writable);
@@ -662,17 +655,15 @@ TEST_F(JSLibTest, ObjectDefinePropertiesTest) {
   GCScope scope{runtime, "JSLibTest.ObjectDefinePropertiesTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
-  auto str1 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"key1")).get();
+  auto str1 = createNoThrowForTest(runtime, createUTF16Ref(u"key1")).get();
   auto id1 =
-      valueToSymbolID(
+      valueToSymbolIDForTest(
           runtime, runtime.makeHandle(HermesValue::encodeStringValue(str1)))
           .getValue();
 
-  auto str2 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"key2")).get();
+  auto str2 = createNoThrowForTest(runtime, createUTF16Ref(u"key2")).get();
   auto id2 =
-      valueToSymbolID(
+      valueToSymbolIDForTest(
           runtime, runtime.makeHandle(HermesValue::encodeStringValue(str2)))
           .getValue();
 
@@ -798,17 +789,15 @@ TEST_F(JSLibTest, ObjectCreateTest) {
   GCScope scope{runtime, "JSLibTest.ObjectCreateTest", 128};
   CallResult<PseudoHandle<>> propRes{ExecutionStatus::EXCEPTION};
 
-  auto str1 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"key1")).get();
+  auto str1 = createNoThrowForTest(runtime, createUTF16Ref(u"key1")).get();
   auto id1 =
-      valueToSymbolID(
+      valueToSymbolIDForTest(
           runtime, runtime.makeHandle(HermesValue::encodeStringValue(str1)))
           .getValue();
 
-  auto str2 =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"key2")).get();
+  auto str2 = createNoThrowForTest(runtime, createUTF16Ref(u"key2")).get();
   auto id2 =
-      valueToSymbolID(
+      valueToSymbolIDForTest(
           runtime, runtime.makeHandle(HermesValue::encodeStringValue(str2)))
           .getValue();
 

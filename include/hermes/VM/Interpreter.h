@@ -43,7 +43,7 @@ class Interpreter {
   /// It assumes that the fast path has handled the case when 'lazyReg' is
   /// already initialized. It creates a new 'arguments' object and populates it
   /// with the argument values.
-  static CallResult<Handle<Arguments>> reifyArgumentsSlowPath(
+  static CallResult<PseudoHandle<Arguments>> reifyArgumentsSlowPath(
       Runtime &runtime,
       Handle<Callable> curFunction,
       bool strictMode);

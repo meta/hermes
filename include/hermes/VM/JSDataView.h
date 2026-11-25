@@ -40,10 +40,10 @@ class JSDataView final : public JSObject {
       Runtime &runtime,
       Handle<JSObject> prototype);
 
-  /// Retrieves a pointer to the held buffer.
-  Handle<JSArrayBuffer> getBuffer(Runtime &runtime) {
-    assert(buffer_ && "Cannot get a null buffer");
-    return runtime.makeHandle(buffer_);
+  /// \return the held buffer, which must not be null. The pointer is not
+  /// rooted: pin it before the next allocation.
+  JSArrayBuffer *getBuffer(Runtime &runtime) const {
+    return buffer_.getNonNull(runtime);
   }
 
   /// \return the number of bytes viewed by this DataView.

@@ -327,10 +327,8 @@ class RuntimeModule final : public llvh::ilist_node<RuntimeModule> {
     return !getBytecode()->getCJSModuleTableStatic().empty();
   }
 
-  /// \return the domain which owns this RuntimeModule.
-  inline Handle<Domain> getDomain(Runtime &);
-
-  /// \return a raw pointer to the domain which owns this RuntimeModule.
+  /// \return a raw pointer to the domain which owns this RuntimeModule. It
+  /// must be pinned before the next GC safepoint.
   inline Domain *getDomainUnsafe(Runtime &);
 
   /// \return a raw pointer to the domain which owns this RuntimeModule.

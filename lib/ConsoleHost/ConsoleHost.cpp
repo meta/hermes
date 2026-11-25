@@ -338,10 +338,10 @@ static vm::CallResult<vm::HermesValue> hermescliLoadFile(
   if (result == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto ta = result.getValue();
+  auto ta = std::move(*result);
   std::memcpy(ta->data(runtime), (*fileBufRes)->getBufferStart(), len);
 
-  return HermesValue::encodeObjectValue(*ta);
+  return HermesValue::encodeObjectValue(ta.get());
 }
 
 /// Load and execute HBC bytecode from a Uint8Array or ArrayBuffer.
@@ -446,6 +446,8 @@ static vm::CallResult<vm::HermesValue> hermescliGetScriptArgs(
 static void initTest262Harness(vm::Runtime &runtime) {
   struct : public vm::Locals {
     vm::PinnedValue<vm::JSObject> test262Obj;
+    vm::PinnedValue<> prop;
+    vm::PinnedValue<> hermesInternal;
   } lv;
   vm::LocalsRAII lraii{runtime, &lv};
   lv.test262Obj = vm::JSObject::create(runtime);
@@ -463,12 +465,12 @@ static void initTest262Harness(vm::Runtime &runtime) {
           nonEnumerableDPF,
           global));
 
-  /// Try to get defined property on given JSObject \p selfHandle. If it does
-  /// not exist, return None.
-  auto tryGetDefinedProperty =
-      [&runtime](
-          vm::Handle<vm::JSObject> selfHandle,
-          vm::SymbolID name) -> llvh::Optional<vm::Handle<>> {
+  /// Try to get defined property on given JSObject \p selfHandle into \p out.
+  /// If it does not exist, return false.
+  auto tryGetDefinedProperty = [&runtime](
+                                   vm::Handle<vm::JSObject> selfHandle,
+                                   vm::SymbolID name,
+                                   vm::PinnedValue<> &out) -> bool {
     auto propRes = vm::JSObject::getNamed_RJS(selfHandle, runtime, name);
     if (propRes == vm::ExecutionStatus::EXCEPTION) {
       struct : public vm::Locals {
@@ -477,33 +479,34 @@ static void initTest262Harness(vm::Runtime &runtime) {
       vm::LocalsRAII lraii{runtime, &lv};
       lv.thrown = runtime.getThrownValue();
       runtime.printException(llvh::outs(), lv.thrown);
-      return llvh::None;
+      return false;
     }
 
     // It may not really exist, e.g., HermesInternal.detachArrayBuffer.
     if (propRes.getValue()->isUndefined()) {
-      return llvh::None;
+      return false;
     }
 
-    return runtime.makeHandle(std::move(*propRes));
+    out = std::move(*propRes);
+    return true;
   };
 
   /// Try to copy the defined property \p srcName on \p srcSelfHandle to
   /// \p tgtSelfHandle with given name \p tgtName. If \p srcName does not exist,
   /// do nothing.
-  auto tryCopyProperty = [&runtime, &nonEnumerableDPF, &tryGetDefinedProperty](
-                             vm::Handle<vm::JSObject> srcSelfHandle,
-                             vm::SymbolID srcName,
-                             vm::Handle<vm::JSObject> tgtSelfHandle,
-                             vm::SymbolID tgtName) {
-    auto prop = tryGetDefinedProperty(srcSelfHandle, srcName);
-    if (!prop)
-      return;
+  auto tryCopyProperty =
+      [&runtime, &nonEnumerableDPF, &tryGetDefinedProperty, &lv](
+          vm::Handle<vm::JSObject> srcSelfHandle,
+          vm::SymbolID srcName,
+          vm::Handle<vm::JSObject> tgtSelfHandle,
+          vm::SymbolID tgtName) {
+        if (!tryGetDefinedProperty(srcSelfHandle, srcName, lv.prop))
+          return;
 
-    runtime.ignoreAllocationFailure(
-        vm::JSObject::defineOwnProperty(
-            tgtSelfHandle, runtime, tgtName, nonEnumerableDPF, *prop));
-  };
+        runtime.ignoreAllocationFailure(
+            vm::JSObject::defineOwnProperty(
+                tgtSelfHandle, runtime, tgtName, nonEnumerableDPF, lv.prop));
+      };
 
   // Define $262.evalScript
   tryCopyProperty(
@@ -513,13 +516,12 @@ static void initTest262Harness(vm::Runtime &runtime) {
       vm::Predefined::getSymbolID(vm::Predefined::evalScript));
 
   // Define $262.detachArrayBuffer
-  auto prop = tryGetDefinedProperty(
-      global, vm::Predefined::getSymbolID(vm::Predefined::HermesInternal));
-  if (prop) {
-    vm::Handle<vm::JSObject> hermesInternalObj =
-        vm::Handle<vm::JSObject>::vmcast(*prop);
+  if (tryGetDefinedProperty(
+          global,
+          vm::Predefined::getSymbolID(vm::Predefined::HermesInternal),
+          lv.hermesInternal)) {
     tryCopyProperty(
-        hermesInternalObj,
+        vm::Handle<vm::JSObject>::vmcast(&lv.hermesInternal),
         vm::Predefined::getSymbolID(vm::Predefined::detachArrayBuffer),
         lv.test262Obj,
         vm::Predefined::getSymbolID(vm::Predefined::detachArrayBuffer));
@@ -555,18 +557,29 @@ void installConsoleBindings(
     vm::PinnedValue<vm::JSObject> console;
     vm::PinnedValue<> print;
     vm::PinnedValue<vm::JSObject> hermescliObj;
+    vm::PinnedValue<vm::SymbolID> sym;
+    vm::PinnedValue<vm::NativeFunction> func;
   } lv;
   vm::LocalsRAII lraii{runtime, &lv};
+
+  // Intern \p name and pin the SymbolID in lv.sym, which keeps it alive until
+  // the next call.
+  auto internSym = [&](const char *name) -> vm::SymbolID {
+    lv.sym = runtime.ignoreAllocationFailure(
+        runtime.getIdentifierTable().getSymbolID(
+            runtime, llvh::createASCIIRef(name)));
+    return *lv.sym;
+  };
 
   auto defineGlobalFunc = [&](vm::SymbolID name,
                               vm::NativeFunctionPtr functionPtr,
                               void *context,
                               unsigned paramCount) -> void {
     vm::GCScopeMarkerRAII marker{runtime};
-    auto func = vm::NativeFunction::create(
+    lv.func = vm::NativeFunction::create(
         runtime, context, functionPtr, name, paramCount);
     auto res = vm::JSObject::defineOwnProperty(
-        runtime.getGlobal(), runtime, name, normalDPF, func);
+        runtime.getGlobal(), runtime, name, normalDPF, lv.func);
     (void)res;
     assert(
         res != vm::ExecutionStatus::EXCEPTION && *res &&
@@ -580,14 +593,7 @@ void installConsoleBindings(
 #ifdef HERMES_ENABLE_NAPI
   // Define 'gc_()' — triggers a full garbage collection.
   // Used by NAPI tests (common.js gcUntil helper).
-  defineGlobalFunc(
-      runtime
-          .ignoreAllocationFailure(runtime.getIdentifierTable().getSymbolHandle(
-              runtime, llvh::createASCIIRef("gc_")))
-          .get(),
-      triggerGC,
-      nullptr,
-      0);
+  defineGlobalFunc(internSym("gc_"), triggerGC, nullptr, 0);
 #endif
   defineGlobalFunc(
       vm::Predefined::getSymbolID(vm::Predefined::createHeapSnapshot),
@@ -597,42 +603,18 @@ void installConsoleBindings(
 
   // Define the 'loadSegment' function.
   defineGlobalFunc(
-      runtime
-          .ignoreAllocationFailure(runtime.getIdentifierTable().getSymbolHandle(
-              runtime, llvh::createASCIIRef("loadSegment")))
-          .get(),
+      internSym("loadSegment"),
       loadSegment,
       reinterpret_cast<void *>(const_cast<std::string *>(filename)),
       2);
 
 #ifdef HERMES_ENABLE_NAPI
   // Define the 'loadNativeModule' function for loading NAPI addons.
-  defineGlobalFunc(
-      runtime
-          .ignoreAllocationFailure(runtime.getIdentifierTable().getSymbolHandle(
-              runtime, llvh::createASCIIRef("loadNativeModule")))
-          .get(),
-      loadNativeModule,
-      nullptr,
-      1);
+  defineGlobalFunc(internSym("loadNativeModule"), loadNativeModule, nullptr, 1);
 #endif
 
-  defineGlobalFunc(
-      runtime
-          .ignoreAllocationFailure(runtime.getIdentifierTable().getSymbolHandle(
-              runtime, llvh::createASCIIRef("setTimeout")))
-          .get(),
-      setTimeout,
-      &ctx,
-      2);
-  defineGlobalFunc(
-      runtime
-          .ignoreAllocationFailure(runtime.getIdentifierTable().getSymbolHandle(
-              runtime, llvh::createASCIIRef("clearTimeout")))
-          .get(),
-      clearTimeout,
-      &ctx,
-      1);
+  defineGlobalFunc(internSym("setTimeout"), setTimeout, &ctx, 2);
+  defineGlobalFunc(internSym("clearTimeout"), clearTimeout, &ctx, 1);
 
   // Define `setImmediate` to be the same as `setTimeout` here.
   // `setTimeout` doesn't use the time provided to it, and due to this
@@ -640,25 +622,14 @@ void installConsoleBindings(
   // This allows the Promise polyfill to work enough for testing in the
   // terminal, though other hosts should provide their own implementation of the
   // event loop.
-  defineGlobalFunc(
-      runtime
-          .ignoreAllocationFailure(runtime.getIdentifierTable().getSymbolHandle(
-              runtime, llvh::createASCIIRef("setImmediate")))
-          .get(),
-      setTimeout,
-      &ctx,
-      1);
+  defineGlobalFunc(internSym("setImmediate"), setTimeout, &ctx, 1);
 
   lv.console = vm::JSObject::create(runtime);
   runtime.ignoreAllocationFailure(
       vm::JSObject::defineOwnProperty(
           runtime.getGlobal(),
           runtime,
-          runtime
-              .ignoreAllocationFailure(
-                  runtime.getIdentifierTable().getSymbolHandle(
-                      runtime, llvh::createASCIIRef("console")))
-              .get(),
+          internSym("console"),
           normalDPF,
           lv.console));
   lv.print = runtime.ignoreAllocationFailure(
@@ -686,15 +657,11 @@ void installConsoleBindings(
                             void *context,
                             unsigned paramCount) {
       vm::GCScopeMarkerRAII marker{runtime};
-      auto sym = runtime
-                     .ignoreAllocationFailure(
-                         runtime.getIdentifierTable().getSymbolHandle(
-                             runtime, llvh::createASCIIRef(name)))
-                     .get();
-      auto func = vm::NativeFunction::create(
+      auto sym = internSym(name);
+      lv.func = vm::NativeFunction::create(
           runtime, context, functionPtr, sym, paramCount);
       auto res = vm::JSObject::defineOwnProperty(
-          lv.hermescliObj, runtime, sym, normalDPF, func);
+          lv.hermescliObj, runtime, sym, normalDPF, lv.func);
       (void)res;
       assert(
           res != vm::ExecutionStatus::EXCEPTION && *res &&
@@ -709,11 +676,7 @@ void installConsoleBindings(
         vm::JSObject::defineOwnProperty(
             runtime.getGlobal(),
             runtime,
-            runtime
-                .ignoreAllocationFailure(
-                    runtime.getIdentifierTable().getSymbolHandle(
-                        runtime, llvh::createASCIIRef("hermescli")))
-                .get(),
+            internSym("hermescli"),
             normalDPF,
             lv.hermescliObj));
   }
@@ -1001,6 +964,11 @@ bool executeHBCBytecodeImpl(
   setEventLoopInterface->setEventLoopControl(&eventLoopControl);
 
   vm::GCScope scope(*runtime);
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::Domain> domain;
+    vm::PinnedValue<vm::Callable> task;
+  } lv;
+  vm::LocalsRAII lraii{*runtime, &lv};
   ConsoleHostContext ctx{*runtime};
   ctx.enableTestMethods_ =
       options.runtimeConfig.getEnableHermesInternalTestMethods();
@@ -1017,12 +985,11 @@ bool executeHBCBytecodeImpl(
   }
 
   if (options.stopAfterInit) {
-    vm::Handle<vm::Domain> domain =
-        runtime->makeHandle(vm::Domain::create(*runtime));
+    lv.domain = vm::Domain::create(*runtime);
     if (LLVM_UNLIKELY(
             vm::RuntimeModule::create(
                 *runtime,
-                domain,
+                lv.domain,
                 facebook::hermes::debugger::kInvalidLocation,
                 std::move(bytecode),
                 flags) == vm::ExecutionStatus::EXCEPTION)) {
@@ -1058,8 +1025,7 @@ bool executeHBCBytecodeImpl(
   if (threwException) {
     // Make sure stdout catches up to stderr.
     llvh::outs().flush();
-    runtime->printException(
-        llvh::errs(), runtime->makeHandle(runtime->getThrownValue()));
+    microtask::printThrownValue(*runtime);
   }
 
   // Perform a microtask checkpoint after running script.
@@ -1068,16 +1034,14 @@ bool executeHBCBytecodeImpl(
   if (!ctx.tasksEmpty()) {
     vm::GCScopeMarkerRAII marker{scope};
     // Run the tasks until there are no more.
-    vm::MutableHandle<vm::Callable> task{*runtime};
     while (auto optTask = ctx.dequeueTask()) {
-      task = std::move(*optTask);
+      lv.task = std::move(*optTask);
       auto callRes = vm::Callable::executeCall0(
-          task, *runtime, vm::Runtime::getUndefinedValue(), false);
+          lv.task, *runtime, vm::Runtime::getUndefinedValue(), false);
       if (LLVM_UNLIKELY(callRes == vm::ExecutionStatus::EXCEPTION)) {
         threwException = true;
         llvh::outs().flush();
-        runtime->printException(
-            llvh::errs(), runtime->makeHandle(runtime->getThrownValue()));
+        microtask::printThrownValue(*runtime);
         break;
       }
 

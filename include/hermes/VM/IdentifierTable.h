@@ -11,6 +11,7 @@
 #include "hermes/ADT/PtrOrInt.h"
 #include "hermes/ADT/TransparentConservativeVector.h"
 #include "hermes/Support/HashString.h"
+#include "hermes/Support/OptValue.h"
 #include "hermes/VM/CallResult.h"
 #include "hermes/VM/GC.h"
 #include "hermes/VM/Handle.h"
@@ -82,26 +83,22 @@ class IdentifierTable {
   /// the same SymbolID will be returned on subsequent calls.
   /// Note it is not safe to pass pointers to potentially GC-heap allocated
   /// strings here. Only strings not managed by the GC may be passed here.
-  CallResult<Handle<SymbolID>>
-  getSymbolHandle(Runtime &runtime, UTF16Ref str, uint32_t hash);
-  CallResult<Handle<SymbolID>> getSymbolHandle(Runtime &runtime, UTF16Ref str) {
-    return getSymbolHandle(runtime, str, hermes::hashString(str));
+  /// The returned SymbolID is not rooted: if the string was not already in
+  /// the table, the caller must pin it (e.g. in a PinnedValue<SymbolID>)
+  /// before the next GC safepoint.
+  CallResult<SymbolID>
+  getSymbolID(Runtime &runtime, UTF16Ref str, uint32_t hash);
+  CallResult<SymbolID> getSymbolID(Runtime &runtime, UTF16Ref str) {
+    return getSymbolID(runtime, str, hermes::hashString(str));
   }
 
   /// Given a ASCII string \p str, retrieve a unique SymbolID for that
-  /// string.
-  CallResult<Handle<SymbolID>>
-  getSymbolHandle(Runtime &runtime, ASCIIRef str, uint32_t hash);
-  CallResult<Handle<SymbolID>> getSymbolHandle(Runtime &runtime, ASCIIRef str) {
-    return getSymbolHandle(runtime, str, hermes::hashString(str));
-  }
-
-  /// Like getSymbolHandle, but returns SymbolID directly without allocating
-  /// a GCScope handle.
-  CallResult<SymbolID>
-  getSymbolID(Runtime &runtime, UTF16Ref str, uint32_t hash);
+  /// string. See the UTF16 overload for rooting requirements.
   CallResult<SymbolID>
   getSymbolID(Runtime &runtime, ASCIIRef str, uint32_t hash);
+  CallResult<SymbolID> getSymbolID(Runtime &runtime, ASCIIRef str) {
+    return getSymbolID(runtime, str, hermes::hashString(str));
+  }
 
   /// Given a UTF16 string \p str, if an equal string is already in the table,
   /// return it as a StringPrimitive, otherwise return nullptr.
@@ -130,21 +127,40 @@ class IdentifierTable {
   SymbolID
   registerLazyIdentifier(Runtime &runtime, UTF16Ref str, uint32_t hash);
 
-  /// \return the SymbolID of the string primitive \p str.
-  CallResult<Handle<SymbolID>> getSymbolHandleFromPrimitive(
+  /// Set \p out to the SymbolID of the string primitive \p str. The result
+  /// is written directly into the caller's rooted slot, since for a string
+  /// that is not already uniqued nothing else roots the new symbol.
+  ExecutionStatus getSymbolFromPrimitive(
       Runtime &runtime,
-      PseudoHandle<StringPrimitive> str);
+      PseudoHandle<StringPrimitive> str,
+      MutableHandle<SymbolID> out);
 
   /// Given a \c SymbolID \p id, get the unique string str such that
   /// getIdentifier(str) == id.
   StringPrimitive *getStringPrim(Runtime &runtime, SymbolID id);
 
   /// Given an \c SymbolID \p id, get a view of the unique string str such
-  /// that getIdentifier(str) == id.
-  StringView getStringView(Runtime &runtime, SymbolID id) const;
+  /// that getIdentifier(str) == id. If the identifier has a materialized
+  /// string, the view refers to \p storage (which is set to that string).
+  /// \p storage must be a rooted slot that outlives the view and is not
+  /// reused while the view is in use. Does not allocate.
+  StringView getStringView(SymbolID id, MutableHandle<StringPrimitive> storage)
+      const;
 
-  /// Like \c getStringView but also shows some special SymbolIDs for debugging.
-  StringView getStringViewForDev(Runtime &runtime, SymbolID id) const;
+  /// \return the array index (as in \c toArrayIndex) that the string of \p id
+  /// represents, if any. Does not allocate or materialize lazy identifiers.
+  OptValue<uint32_t> symbolToArrayIndex(SymbolID id) const;
+
+  /// \return true if \p strPrim has the same contents as the string of \p id.
+  /// Does not allocate or materialize lazy identifiers.
+  bool symbolEqualsToStringPrim(SymbolID id, const StringPrimitive *strPrim)
+      const;
+
+  /// Like \c getStringView(SymbolID, storage) but also shows some special
+  /// SymbolIDs for debugging.
+  StringView getStringViewForDev(
+      SymbolID id,
+      MutableHandle<StringPrimitive> storage) const;
 
   /// Convert a SymbolID into the name it represents, encoded as UTF-8.
   /// This function does not perform any GC operations, such as allocations,

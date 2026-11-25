@@ -13,6 +13,7 @@
 #include "hermes/Public/GCConfig.h"
 #include "hermes/Public/JSOutOfMemoryError.h"
 #include "hermes/Public/RuntimeConfig.h"
+#include "hermes/VM/BigIntPrimitive.h"
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/CodeBlock.h"
 #include "hermes/VM/Domain.h"
@@ -182,8 +183,7 @@ inline const GCConfig TestGCConfigFixedSize(
   do {                                                                      \
     GCScopeMarkerRAII marker{runtime};                                      \
     auto xHandle = runtime.makeHandle(x);                                   \
-    Handle<StringPrimitive> strHandle =                                     \
-        StringPrimitive::createNoThrow(runtime, str);                       \
+    Handle<StringPrimitive> strHandle = createNoThrowForTest(runtime, str); \
     EXPECT_TRUE(                                                            \
         isSameValue(strHandle.getHermesValue(), xHandle.getHermesValue())); \
   } while (0)
@@ -475,6 +475,91 @@ inline CodeBlock *createSimpleCodeBlock(
       hbc::BCProviderFromBuffer::createBCProviderFromBuffer(std::move(buffer))
           .first);
   return runtimeModule->getCodeBlockMayAllocate(0);
+}
+
+/// Test-only convenience: uniqued SymbolID of \p str, as a Handle in the
+/// topmost GCScope.
+inline CallResult<Handle<SymbolID>> stringToSymbolIDForTest(
+    Runtime &runtime,
+    PseudoHandle<StringPrimitive> str) {
+  MutableHandle<SymbolID> handle{runtime};
+  if (LLVM_UNLIKELY(
+          stringToSymbolID(runtime, std::move(str), handle) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  return Handle<SymbolID>(handle);
+}
+
+/// Test-only convenience: SymbolID of \p value, as a Handle in the topmost
+/// GCScope.
+inline CallResult<Handle<SymbolID>> valueToSymbolIDForTest(
+    Runtime &runtime,
+    Handle<> value) {
+  MutableHandle<SymbolID> handle{runtime};
+  if (LLVM_UNLIKELY(
+          valueToSymbolID(runtime, value, handle) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  return Handle<SymbolID>(handle);
+}
+
+/// Test-only convenience: intern \p str and return a Handle<SymbolID> that
+/// lives in the topmost GCScope.
+template <typename Ref>
+inline CallResult<Handle<SymbolID>> getSymbolHandleForTest(
+    Runtime &runtime,
+    Ref str) {
+  auto res = runtime.getIdentifierTable().getSymbolID(runtime, str);
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  return runtime.makeHandle(*res);
+}
+
+/// Test-only convenience: HiddenClass::addProperty returning the new class as
+/// a Handle that lives in the topmost GCScope.
+inline CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> addPropertyForTest(
+    Handle<HiddenClass> selfHandle,
+    Runtime &runtime,
+    SymbolID name,
+    PropertyFlags propertyFlags) {
+  auto out = runtime.makeMutableHandle<HiddenClass>(nullptr);
+  auto res =
+      HiddenClass::addProperty(selfHandle, runtime, name, propertyFlags, out);
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  return std::make_pair(Handle<HiddenClass>(out), *res);
+}
+
+/// Test-only convenience: StringPrimitive::createNoThrow returning a Handle
+/// in the topmost GCScope.
+inline Handle<StringPrimitive> createNoThrowForTest(
+    Runtime &runtime,
+    UTF16Ref str) {
+  return runtime.makeHandle(StringPrimitive::createNoThrow(runtime, str));
+}
+inline Handle<StringPrimitive> createNoThrowForTest(
+    Runtime &runtime,
+    llvh::StringRef ascii) {
+  return runtime.makeHandle(StringPrimitive::createNoThrow(runtime, ascii));
+}
+
+/// Test-only convenience: a new BigIntPrimitive for a signed integer, as a
+/// Handle in the topmost GCScope. Brings down the VM on OOM.
+template <typename T>
+inline Handle<BigIntPrimitive> fromSignedNoThrowForTest(
+    Runtime &runtime,
+    T value) {
+  return runtime.makeHandle<BigIntPrimitive>(runtime.ignoreAllocationFailure(
+      BigIntPrimitive::fromSigned(runtime, value)));
+}
+
+/// Test-only convenience: a new BigIntPrimitive from \p bytes, as a Handle in
+/// the topmost GCScope. Brings down the VM on OOM.
+inline Handle<BigIntPrimitive> fromBytesNoThrowForTest(
+    Runtime &runtime,
+    llvh::ArrayRef<uint8_t> bytes) {
+  return runtime.makeHandle<BigIntPrimitive>(runtime.ignoreAllocationFailure(
+      BigIntPrimitive::fromBytes(runtime, bytes)));
 }
 
 } // namespace vm

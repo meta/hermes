@@ -74,18 +74,22 @@ NativeFunction *defineMethod(
     unsigned paramCount,
     DefinePropertyFlags dpf) {
   GCScope gcScope{runtime};
+  struct : public Locals {
+    PinnedValue<NativeFunction> method;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
-  auto method = NativeFunction::create(
+  lv.method = NativeFunction::create(
       runtime, context, nativeFunctionPtr, methodName, paramCount);
 
   auto res = JSObject::defineOwnProperty(
-      objectHandle, runtime, propertyName, dpf, method);
+      objectHandle, runtime, propertyName, dpf, lv.method);
   (void)res;
   assert(
       res != ExecutionStatus::EXCEPTION && *res &&
       "defineOwnProperty() failed");
 
-  return method.get();
+  return lv.method.get();
 }
 
 Handle<NativeConstructor> defineSystemConstructor(
@@ -146,11 +150,14 @@ void defineAccessor(
     PinnedValue<NativeFunction> getter;
     PinnedValue<NativeFunction> setter;
     PinnedValue<PropertyAccessor> accessor;
+    PinnedValue<SymbolID> getterName;
+    PinnedValue<SymbolID> setterName;
+    PinnedValue<StringPrimitive> methodNameStr;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
   StringView nameView =
-      runtime.getIdentifierTable().getStringView(runtime, methodName);
+      runtime.getIdentifierTable().getStringView(methodName, lv.methodNameStr);
   assert(nameView.isASCII() && "Only ASCII accessors are supported");
   if (getterFunc) {
     // Set the name by prepending "get ".
@@ -160,16 +167,14 @@ void defineAccessor(
 
     auto strRes = runtime.ignoreAllocationFailure(
         StringPrimitive::create(runtime, getterName));
-    SymbolID getterFuncName =
-        runtime
-            .ignoreAllocationFailure(
-                runtime.getIdentifierTable().getSymbolHandleFromPrimitive(
-                    runtime,
-                    createPseudoHandle(vmcast<StringPrimitive>(strRes))))
-            .get();
+    runtime.ignoreAllocationFailure(
+        runtime.getIdentifierTable().getSymbolFromPrimitive(
+            runtime,
+            createPseudoHandle(vmcast<StringPrimitive>(strRes)),
+            lv.getterName));
 
     auto funcRes =
-        NativeFunction::create(runtime, context, getterFunc, getterFuncName, 0);
+        NativeFunction::create(runtime, context, getterFunc, *lv.getterName, 0);
     lv.getter = funcRes.get();
   }
   if (setterFunc) {
@@ -180,16 +185,14 @@ void defineAccessor(
 
     auto strRes = runtime.ignoreAllocationFailure(
         StringPrimitive::create(runtime, setterName));
-    SymbolID setterFuncName =
-        runtime
-            .ignoreAllocationFailure(
-                runtime.getIdentifierTable().getSymbolHandleFromPrimitive(
-                    runtime,
-                    createPseudoHandle(vmcast<StringPrimitive>(strRes))))
-            .get();
+    runtime.ignoreAllocationFailure(
+        runtime.getIdentifierTable().getSymbolFromPrimitive(
+            runtime,
+            createPseudoHandle(vmcast<StringPrimitive>(strRes)),
+            lv.setterName));
 
     auto funcRes =
-        NativeFunction::create(runtime, context, setterFunc, setterFuncName, 1);
+        NativeFunction::create(runtime, context, setterFunc, *lv.setterName, 1);
     lv.setter = funcRes.get();
   }
 
@@ -298,6 +301,7 @@ CallResult<HermesValue> createDynamicFunction(
     PinnedValue<StringPrimitive> body;
     PinnedValue<StringPrimitive> param;
     PinnedValue<StringPrimitive> element;
+    PinnedValue<StringPrimitive> result;
     PinnedValue<JSFunction> function;
     PinnedValue<JSObject> fallbackProto;
     PinnedValue<JSObject> selfParent;
@@ -432,7 +436,8 @@ CallResult<HermesValue> createDynamicFunction(
 
   auto separator = createASCIIRef(",");
 
-  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
+  auto builder =
+      StringBuilder::createStringBuilder(runtime, lv.result, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }

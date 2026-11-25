@@ -25,6 +25,7 @@ void createJSONObject(Runtime &runtime, MutableHandle<JSObject> result) {
 
   struct : public Locals {
     PinnedValue<JSJSON> json;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -48,11 +49,12 @@ void createJSONObject(Runtime &runtime, MutableHandle<JSObject> result) {
   auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::JSON);
   defineProperty(
       runtime,
       lv.json,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::JSON),
+      lv.str,
       dpf);
 
   result.set(lv.json.get());

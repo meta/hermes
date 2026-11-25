@@ -44,7 +44,7 @@ class JSRegExp final : public JSObject {
   /// Creates the hidden class for Regular Expression match objects.
   /// \p arrayClass should be hidden class for JSArray objects, and it will be
   /// augmented with properties "index", "input", and "groups".
-  static Handle<HiddenClass> createMatchClass(
+  static PseudoHandle<HiddenClass> createMatchClass(
       Runtime &runtime,
       Handle<HiddenClass> arrayClass);
 
@@ -114,7 +114,9 @@ class JSRegExp final : public JSObject {
     return bytecode_.get();
   }
 
-  Handle<JSObject> getGroupNameMappings(Runtime &runtime);
+  /// \return the group name mappings object, or null if there are none. The
+  /// pointer is not rooted: pin it before the next allocation.
+  JSObject *getGroupNameMappings(Runtime &runtime);
 
   void setGroupNameMappings(Runtime &runtime, JSObject *groupObj);
 

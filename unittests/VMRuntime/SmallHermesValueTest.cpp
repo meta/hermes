@@ -204,8 +204,7 @@ TEST_F(SmallHermesValueRuntimeTest, SymbolTest) {
 
 TEST_F(SmallHermesValueRuntimeTest, StringTest) {
   // Encode a string.
-  auto message =
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hello"));
+  auto message = createNoThrowForTest(runtime, createUTF16Ref(u"hello"));
   auto SHV = SmallHermesValue::encodeHermesValue(
       HermesValue::encodeStringValue(message.get()), runtime);
   EXPECT_TRUE(SHV.isPointer());
@@ -274,7 +273,7 @@ TEST_F(
 
 TEST_F(SmallHermesValueRuntimeTest, BigIntTest) {
   // Encode a bigint.
-  auto H = BigIntPrimitive::fromSignedNoThrow(runtime, 0x123);
+  auto H = fromSignedNoThrowForTest(runtime, 0x123);
   auto SHV = SmallHermesValue::encodeHermesValue(
       HermesValue::encodeBigIntValue(H.get()), runtime);
   EXPECT_TRUE(SHV.isPointer());
@@ -408,8 +407,7 @@ TEST_F(SmallHermesValueRuntimeTest, EncodeDecodeAsHV64) {
 
   // SHV of String
   {
-    auto str = StringPrimitive::createNoThrow(
-        runtime, createUTF16Ref(u"I'm a string"));
+    auto str = createNoThrowForTest(runtime, createUTF16Ref(u"I'm a string"));
     SmallHermesValue SHV = SmallHermesValue::encodeStringValue(*str, runtime);
     HermesValue HV = SHV.encodeAsHermesValue();
     EXPECT_TRUE(HV.isRawHV32());
@@ -477,8 +475,7 @@ TEST_F(SmallHermesValueRuntimeTest, EncodeDecodeAsHV64) {
 
   // SHV of String
   {
-    auto str = StringPrimitive::createNoThrow(
-        runtime, createUTF16Ref(u"I'm a string"));
+    auto str = createNoThrowForTest(runtime, createUTF16Ref(u"I'm a string"));
     SmallHermesValue SHV = SmallHermesValue::encodeStringValue(*str, runtime);
     HermesValue HV = SHV.encodeAsHermesValue();
     EXPECT_TRUE(HV.isRawHV32());

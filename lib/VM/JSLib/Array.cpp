@@ -792,15 +792,17 @@ CallResult<HermesValue> arrayPrototypeToLocaleString(void *, Runtime &runtime) {
     PinnedValue<JSArray> strings;
     PinnedValue<StringPrimitive> strElement;
     PinnedValue<> tmpValue;
+    PinnedValue<StringPrimitive> emptyString;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
   lv.array.castAndSetHermesValue<JSObject>(objRes.getValue());
 
-  auto emptyString = runtime.getPredefinedStringHandle(Predefined::emptyString);
+  lv.emptyString = runtime.getPredefinedString(Predefined::emptyString);
 
   if (runtime.insertVisitedObject(*lv.array))
-    return emptyString.getHermesValue();
+    return lv.emptyString.getHermesValue();
   auto cycleScope = llvh::make_scope_exit(
       [&lv, &runtime] { runtime.removeVisitedObject(*lv.array); });
 
@@ -815,7 +817,7 @@ CallResult<HermesValue> arrayPrototypeToLocaleString(void *, Runtime &runtime) {
   }
   uint64_t len = *lenRes;
   if (len == 0) {
-    return emptyString.getHermesValue();
+    return lv.emptyString.getHermesValue();
   }
   // We use a JSArray to store intermediate strings, which is limited to
   // uint32_t elements.
@@ -851,7 +853,7 @@ CallResult<HermesValue> arrayPrototypeToLocaleString(void *, Runtime &runtime) {
     if (lv.E->isUndefined() || lv.E->isNull()) {
       // Empty string for undefined or null element. No need to add to size.
       if (LLVM_UNLIKELY(
-              JSArray::setElementAt(lv.strings, runtime, i, emptyString) ==
+              JSArray::setElementAt(lv.strings, runtime, i, lv.emptyString) ==
               ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
     } else {
@@ -918,7 +920,8 @@ CallResult<HermesValue> arrayPrototypeToLocaleString(void *, Runtime &runtime) {
   }
 
   // Create and then populate the result string.
-  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
+  auto builder =
+      StringBuilder::createStringBuilder(runtime, lv.result, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1000,6 +1003,7 @@ CallResult<HermesValue> arrayPrototypeConcat(void *, Runtime &runtime) {
     PinnedValue<JSArray> A;
     PinnedValue<> k;
     PinnedValue<> n;
+    PinnedValue<SymbolID> sym;
     PinnedValue<> tmp;
     PinnedValue<JSObject> obj;
     PinnedValue<JSObject> prop;
@@ -1159,7 +1163,7 @@ CallResult<HermesValue> arrayPrototypeConcat(void *, Runtime &runtime) {
           return ExecutionStatus::EXCEPTION;
       } else {
         lv.n = HermesValue::encodeTrustedNumberValue(n);
-        auto cr = valueToSymbolID(runtime, lv.n);
+        auto cr = valueToSymbolID(runtime, lv.n, lv.sym);
         if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION)) {
           return ExecutionStatus::EXCEPTION;
         }
@@ -1167,7 +1171,7 @@ CallResult<HermesValue> arrayPrototypeConcat(void *, Runtime &runtime) {
                 JSArray::defineOwnProperty(
                     lv.A,
                     runtime,
-                    **cr,
+                    *lv.sym,
                     DefinePropertyFlags::getDefaultNewPropertyFlags(),
                     lv.tmp) == ExecutionStatus::EXCEPTION)) {
           return ExecutionStatus::EXCEPTION;
@@ -1203,6 +1207,7 @@ CallResult<HermesValue> arrayPrototypeJoin(void *, Runtime &runtime) {
     PinnedValue<> elem;
     PinnedValue<StringPrimitive> elementStr;
     PinnedValue<JSArray::StorageType> inputStorage;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
@@ -1390,7 +1395,8 @@ CallResult<HermesValue> arrayPrototypeJoin(void *, Runtime &runtime) {
   }
 
   // Allocate the complete result.
-  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
+  auto builder =
+      StringBuilder::createStringBuilder(runtime, lv.result, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -5572,6 +5578,7 @@ CallResult<HermesValue> arrayFrom(void *, Runtime &runtime) {
   struct : Locals {
     PinnedValue<Callable> mapfn;
     PinnedValue<> T;
+    PinnedValue<JSObject> next;
     PinnedValue<> iteratorSym;
     PinnedValue<JSObject> A;
     PinnedValue<> usingIterator;
@@ -5657,7 +5664,7 @@ CallResult<HermesValue> arrayFrom(void *, Runtime &runtime) {
         return ExecutionStatus::EXCEPTION;
       }
       // iv. If next is false, then
-      if (!next.getValue()) {
+      if (!*next) {
         // 1. Let setStatus be Set(A, "length", k, true).
         // 2. ReturnIfAbrupt(setStatus).
         // 3. Return A.
@@ -5674,8 +5681,9 @@ CallResult<HermesValue> arrayFrom(void *, Runtime &runtime) {
       }
       // v. Let nextValue be IteratorValue(next).
       // vi. ReturnIfAbrupt(nextValue).
+      lv.next = std::move(*next);
       auto propRes = JSObject::getNamed_RJS(
-          *next, runtime, Predefined::getSymbolID(Predefined::value));
+          lv.next, runtime, Predefined::getSymbolID(Predefined::value));
       if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }

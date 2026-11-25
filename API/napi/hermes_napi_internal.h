@@ -25,13 +25,14 @@ inline napi_status captureRuntimeException(napi_env env, napi_status status) {
 
 /// Helper: intern a UTF-8 name as a SymbolID. The name is first
 /// created as a StringPrimitive (handling all UTF-8 correctly), then
-/// interned via the identifier table. Returns the SymbolID via
-/// \p symRes. On failure, captures the runtime exception and returns
-/// the error status. Requires an active GCScope.
+/// interned via the identifier table. Stores the SymbolID in \p symOut, which
+/// must be a rooted slot (e.g. a PinnedValue<SymbolID> in the caller's
+/// Locals). On failure, captures the runtime exception and returns
+/// the error status.
 inline napi_status internUtf8AsSymbol(
     napi_env env,
     const char *utf8name,
-    hermes::vm::CallResult<hermes::vm::Handle<hermes::vm::SymbolID>> &symRes) {
+    hermes::vm::MutableHandle<hermes::vm::SymbolID> symOut) {
   using namespace hermes::vm;
 
   Runtime &runtime = env->runtime;
@@ -46,10 +47,12 @@ inline napi_status internUtf8AsSymbol(
   }
 
   // Intern the string to get a SymbolID.
-  symRes = runtime.getIdentifierTable().getSymbolHandleFromPrimitive(
-      runtime,
-      PseudoHandle<StringPrimitive>::create(vmcast<StringPrimitive>(*strRes)));
-  if (LLVM_UNLIKELY(symRes == ExecutionStatus::EXCEPTION)) {
+  if (LLVM_UNLIKELY(
+          runtime.getIdentifierTable().getSymbolFromPrimitive(
+              runtime,
+              PseudoHandle<StringPrimitive>::create(
+                  vmcast<StringPrimitive>(*strRes)),
+              symOut) == ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_pending_exception);
   }
 

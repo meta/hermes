@@ -159,11 +159,6 @@ class ArrayImpl : public JSObject {
                               : SmallHermesValue::encodeEmptyValue();
   }
 
-  /// Return the value at index \p index.
-  Handle<> handleAt(Runtime &runtime, size_type index) const {
-    return runtime.makeHandle(at(runtime, index).unboxToHV(runtime));
-  }
-
   /// Get a pointer to the indexed storage for this array. The returned value
   /// may be null if there is no indexed storage.
   StorageType *getIndexedStorageNullable(PointerBase &base) const {
@@ -407,11 +402,14 @@ class JSArray final : public ArrayImpl {
       uint32_t newValue,
       PropOpFlags opFlags = PropOpFlags{}) {
     // TODO: optimize this now that we know the index of the property slot.
+    // A number is not a heap pointer, so a stack slot needs no rooting.
+    PinnedHermesValue newValueHV{
+        HermesValue::encodeTrustedNumberValue(newValue)};
     return putNamed_RJS(
         selfHandle,
         runtime,
         Predefined::getSymbolID(Predefined::length),
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(newValue)),
+        Handle<>(&newValueHV),
         opFlags);
   }
 

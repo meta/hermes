@@ -573,12 +573,10 @@ CallResult<double> Callable::extractOwnLengthProperty_RJS(
         selfHandle, runtime, selfHandle, desc);
   } else if (selfHandle->isProxyObject(runtime)) {
     ComputedPropertyDescriptor desc;
+    lv.propValue = HermesValue::encodeStringValue(
+        runtime.getPredefinedString(Predefined::length));
     CallResult<bool> hasLength = JSProxy::getOwnProperty(
-        selfHandle,
-        runtime,
-        runtime.getPredefinedStringHandle(Predefined::length),
-        desc,
-        nullptr);
+        selfHandle, runtime, lv.propValue, desc, nullptr);
     if (LLVM_UNLIKELY(hasLength == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -763,11 +761,12 @@ ExecutionStatus BoundFunction::initializeLengthAndName_RJS(
   // identifier table. If a new symbol is created, it will disappear
   // after the name string dies, since nothing else refers to it.
   auto &identifierTable = runtime.getIdentifierTable();
-  auto boundNameSym = identifierTable.getSymbolHandle(runtime, boundName);
+  auto boundNameSym = identifierTable.getSymbolID(runtime, boundName);
   if (LLVM_UNLIKELY(boundNameSym == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  lv.boundName = identifierTable.getStringPrim(runtime, **boundNameSym);
+  // The string primitive roots the symbol from here on.
+  lv.boundName = identifierTable.getStringPrim(runtime, *boundNameSym);
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
@@ -996,7 +995,7 @@ std::string NativeJSFunction::_snapshotNameImpl(GCCell *cell, GC &gc) {
 }
 #endif
 
-Handle<NativeJSFunction> NativeJSFunction::create(
+PseudoHandle<NativeJSFunction> NativeJSFunction::create(
     Runtime &runtime,
     Handle<JSObject> parentHandle,
     Handle<Environment> parentEnvHandle,
@@ -1011,12 +1010,12 @@ Handle<NativeJSFunction> NativeJSFunction::create(
       functionPtr,
       funcInfo,
       unit);
-  auto selfHandle = JSObjectInit::initToHandle(runtime, cell);
-  assert(selfHandle->isLazy(runtime) && "NativeJSFunction must be lazy");
-  return selfHandle;
+  auto self = JSObjectInit::initToPseudoHandle(runtime, cell);
+  assert(self->isLazy(runtime) && "NativeJSFunction must be lazy");
+  return self;
 }
 
-Handle<NativeJSFunction> NativeJSFunction::createWithInferredParent(
+PseudoHandle<NativeJSFunction> NativeJSFunction::createWithInferredParent(
     Runtime &runtime,
     Handle<Environment> parentEnvHandle,
     NativeJSFunctionPtr functionPtr,
@@ -1103,7 +1102,7 @@ void NativeJSClassBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.setVTable(&NativeJSClass::vt);
 }
 
-Handle<NativeJSClass> NativeJSClass::create(
+PseudoHandle<NativeJSClass> NativeJSClass::create(
     Runtime &runtime,
     Handle<JSObject> parentHandle,
     Handle<Environment> parentEnvHandle,
@@ -1118,9 +1117,9 @@ Handle<NativeJSClass> NativeJSClass::create(
       functionPtr,
       funcInfo,
       unit);
-  auto selfHandle = JSObjectInit::initToHandle(runtime, cell);
-  assert(selfHandle->isLazy(runtime) && "NativeJSClass must be lazy");
-  return selfHandle;
+  auto self = JSObjectInit::initToPseudoHandle(runtime, cell);
+  assert(self->isLazy(runtime) && "NativeJSClass must be lazy");
+  return self;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1169,7 +1168,7 @@ std::string NativeFunction::_snapshotNameImpl(GCCell *cell, GC &gc) {
 }
 #endif
 
-Handle<NativeFunction> NativeFunction::create(
+PseudoHandle<NativeFunction> NativeFunction::create(
     Runtime &runtime,
     Handle<JSObject> parentHandle,
     Handle<HiddenClass> clazz,
@@ -1181,16 +1180,20 @@ Handle<NativeFunction> NativeFunction::create(
     Handle<JSObject> prototypeObjectHandle) {
   auto *cell = runtime.makeAFixed<NativeFunction>(
       runtime, parentHandle, clazz, parentEnvHandle, context, functionPtr);
-  auto selfHandle = JSObjectInit::initToHandle(runtime, cell);
+  struct : public Locals {
+    PinnedValue<NativeFunction> self;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.self = JSObjectInit::initToPseudoHandle(runtime, cell);
 
   size_t reservedSlots = clazz->getNumProperties();
 
   // Allocate a propStorage if the number of additional slots requires it.
   runtime.ignoreAllocationFailure(
-      JSObject::allocatePropStorage(selfHandle, runtime, reservedSlots));
+      JSObject::allocatePropStorage(lv.self, runtime, reservedSlots));
 
   auto st = defineNameLengthAndPrototype(
-      selfHandle,
+      lv.self,
       runtime,
       name,
       paramCount,
@@ -1200,7 +1203,7 @@ Handle<NativeFunction> NativeFunction::create(
   assert(
       st != ExecutionStatus::EXCEPTION && "defineLengthAndPrototype() failed");
 
-  return selfHandle;
+  return createPseudoHandle(*lv.self);
 }
 
 CallResult<PseudoHandle<>> NativeFunction::_callImpl(

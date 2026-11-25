@@ -22,9 +22,9 @@ using HandleTest = RuntimeTestFixture;
 using HandleDeathTest = RuntimeTestFixture;
 
 TEST_F(HandleTest, AddAndRemoveTest) {
-  auto str1 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"str1"));
-  auto str2 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"str2"));
-  auto str3 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"str3"));
+  auto str1 = createNoThrowForTest(runtime, createUTF16Ref(u"str1"));
+  auto str2 = createNoThrowForTest(runtime, createUTF16Ref(u"str2"));
+  auto str3 = createNoThrowForTest(runtime, createUTF16Ref(u"str3"));
 
   {
     auto h1 = runtime.makeHandle<StringPrimitive>(str1.get());
@@ -185,7 +185,7 @@ TEST_F(HandleTest, PinnedValueHV32Test) {
     ASSERT_TRUE(obj->hvBool.getBool());
   }
 
-  lv.str = StringPrimitive::createNoThrow(runtime, "I'm a string");
+  lv.str = createNoThrowForTest(runtime, "I'm a string");
   auto sym =
       runtime.getIdentifierTable().createNotUniquedSymbol(runtime, lv.str);
   ASSERT_FALSE(isException(sym));
@@ -210,7 +210,7 @@ TEST_F(HandleTest, PinnedValueHV32Test) {
 #if defined(HERMES_SLOW_DEBUG) && defined(ASSERT_DEATH)
 TEST_F(HandleDeathTest, UseFlushedHandle) {
   auto marker = gcScope.createMarker();
-  auto handle = StringPrimitive::createNoThrow(runtime, "hello");
+  auto handle = createNoThrowForTest(runtime, "hello");
   // This flush should destroy the handle created after the marker, using it
   // afterwards should trigger an assertion failure.
   gcScope.flushToMarker(marker);
@@ -220,7 +220,7 @@ TEST_F(HandleDeathTest, UseFlushedHandle) {
 
 TEST_F(HandleDeathTest, UseRAIIFlushedHandle) {
   GCScopeMarkerRAII marker(gcScope);
-  auto handle = StringPrimitive::createNoThrow(runtime, "hello");
+  auto handle = createNoThrowForTest(runtime, "hello");
   // This flush should destroy the handle created after the marker, using it
   // afterwards should trigger an assertion failure.
   marker.flush();
@@ -229,7 +229,7 @@ TEST_F(HandleDeathTest, UseRAIIFlushedHandle) {
 }
 
 TEST_F(HandleDeathTest, FlushToSmallCount) {
-  auto handle = StringPrimitive::createNoThrow(runtime, "hello");
+  auto handle = createNoThrowForTest(runtime, "hello");
   // This flush should destroy the handle created after the marker, using it
   // afterwards should trigger an assertion failure.
   gcScope.flushToSmallCount(0);

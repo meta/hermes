@@ -34,16 +34,16 @@ class JSString final : public JSObject {
   }
 
   /// Create a JSString using the standard String prototype.
-  static CallResult<Handle<JSString>> create(
+  static CallResult<PseudoHandle<JSString>> create(
       Runtime &runtime,
       Handle<StringPrimitive> value);
 
-  static CallResult<Handle<JSString>> create(
+  static CallResult<PseudoHandle<JSString>> create(
       Runtime &runtime,
       Handle<StringPrimitive> value,
       Handle<JSObject> prototype);
 
-  static CallResult<Handle<JSString>> create(
+  static CallResult<PseudoHandle<JSString>> create(
       Runtime &runtime,
       Handle<StringPrimitive> value,
       Handle<JSObject> prototype,
@@ -194,21 +194,26 @@ class JSBigInt final : public JSObject {
     return cell->getKind() == CellKind::JSBigIntKind;
   }
 
-  static Handle<JSBigInt> create(
+  static PseudoHandle<JSBigInt> create(
       Runtime &runtime,
       Handle<BigIntPrimitive> value,
       Handle<JSObject> prototype);
 
-  static CallResult<Handle<JSBigInt>> create(
+  static CallResult<PseudoHandle<JSBigInt>> create(
       Runtime &runtime,
       Handle<JSObject> prototype) {
+    struct : public Locals {
+      PinnedValue<BigIntPrimitive> value;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+
     auto bigIntRes = BigIntPrimitive::fromSigned(runtime, 0);
     if (LLVM_UNLIKELY(bigIntRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
+    lv.value = bigIntRes->getBigInt();
 
-    return create(
-        runtime, runtime.makeHandle(bigIntRes->getBigInt()), prototype);
+    return create(runtime, lv.value, prototype);
   }
 
   /// Return the [[PrimitiveValue]] internal property as a bigint.

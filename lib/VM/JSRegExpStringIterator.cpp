@@ -80,8 +80,7 @@ CallResult<HermesValue> JSRegExpStringIterator::nextElement(
   // 4. If O.[[Done]] is true, then
   if (O->done_) {
     // a. Return ! CreateIterResultObject(undefined, true).
-    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true)
-        .getHermesValue();
+    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true);
   }
   // 5. Let R be O.[[IteratingRegExp]].
   lv.R = O->iteratedRegExp_.getNonNull(runtime);
@@ -104,8 +103,7 @@ CallResult<HermesValue> JSRegExpStringIterator::nextElement(
     // a. Set O.[[Done]] to true.
     O->done_ = true;
     // b. Return ! CreateIterResultObject(undefined, true).
-    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true)
-        .getHermesValue();
+    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true);
   } else {
     // 11. Else,
     lv.matchObj.castAndSetHermesValue<JSObject>(match);
@@ -146,16 +144,14 @@ CallResult<HermesValue> JSRegExpStringIterator::nextElement(
         }
       }
       // iii. Return ! CreateIterResultObject(match, false).
-      return createIterResultObject(runtime, lv.matchObj, false)
-          .getHermesValue();
+      return createIterResultObject(runtime, lv.matchObj, false);
     }
     // b. Else,
     else {
       // i. Set O.[[Done]] to true.
       O->done_ = true;
       // ii. Return ! CreateIterResultObject(match, false).
-      return createIterResultObject(runtime, lv.matchObj, false)
-          .getHermesValue();
+      return createIterResultObject(runtime, lv.matchObj, false);
     }
   }
 }

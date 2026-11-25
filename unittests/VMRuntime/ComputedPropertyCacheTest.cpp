@@ -43,8 +43,7 @@ class ComputedPropertyCacheTest : public RuntimeTestFixtureBase {
 
 /// \return the SymbolID of \p s; its handle stays in the current GCScope.
 SymbolID sym(Runtime &runtime, const char *s) {
-  auto res =
-      runtime.getIdentifierTable().getSymbolHandle(runtime, createASCIIRef(s));
+  auto res = getSymbolHandleForTest(runtime, createASCIIRef(s));
   EXPECT_NE(res.getStatus(), ExecutionStatus::EXCEPTION);
   return res->get();
 }

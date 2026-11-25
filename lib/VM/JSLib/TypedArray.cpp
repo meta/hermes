@@ -874,22 +874,22 @@ CallResult<HermesValue> typedArrayPrototypeSetTypedArray(
   // array.
   // TODO: This could be implemented via a directional copy which either
   // copies forwards or backwards depending on how the regions overlap.
-  auto possibleTA = src->allocate(runtime, srcLength);
-  if (possibleTA == ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  auto newSrc = possibleTA.getValue();
-  // Create a handle directly without going through Locals since this is a
-  // simple operation
   struct : public Locals {
+    PinnedValue<JSTypedArrayBase> newSrc;
     PinnedValue<JSArrayBuffer> srcBuffer;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
+  auto possibleTA = src->allocate(runtime, srcLength);
+  if (possibleTA == ExecutionStatus::EXCEPTION) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  lv.newSrc = std::move(*possibleTA);
+
   lv.srcBuffer = src->getBuffer(runtime);
   if (JSTypedArrayBase::setToCopyOfBuffer(
           runtime,
-          newSrc,
+          lv.newSrc,
           0,
           lv.srcBuffer,
           src->getByteOffset(),
@@ -898,7 +898,7 @@ CallResult<HermesValue> typedArrayPrototypeSetTypedArray(
   }
   // Now copy from newSrc into self.
   if (JSTypedArrayBase::setToCopyOfTypedArray(
-          runtime, self, offset, newSrc, 0, srcLength) ==
+          runtime, self, offset, lv.newSrc, 0, srcLength) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1821,6 +1821,7 @@ CallResult<HermesValue> typedArrayPrototypeMapFilter(
   struct : public Locals {
     PinnedValue<JSArray> values;
     PinnedValue<> storage;
+    PinnedValue<JSTypedArrayBase> TA;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1851,17 +1852,17 @@ CallResult<HermesValue> typedArrayPrototypeMapFilter(
   if (result == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto TA = result.getValue();
+  lv.TA = std::move(*result);
   auto marker = gcScope.createMarker();
   for (JSTypedArrayBase::size_type i = 0; i < insert; ++i) {
     lv.storage = lv.values->at(runtime, i).unboxToHV(runtime);
-    if (JSObject::setOwnIndexed(TA, runtime, i, lv.storage) ==
+    if (JSObject::setOwnIndexed(lv.TA, runtime, i, lv.storage) ==
         ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
     gcScope.flushToMarker(marker);
   }
-  return TA.getHermesValue();
+  return lv.TA.getHermesValue();
 }
 
 /// ES6 22.2.3.17
@@ -1892,6 +1893,7 @@ CallResult<HermesValue> typedArrayPrototypeJoin(void *, Runtime &runtime) {
     PinnedValue<JSArray> strings;
     PinnedValue<> elem;
     PinnedValue<StringPrimitive> element;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1966,7 +1968,8 @@ CallResult<HermesValue> typedArrayPrototypeJoin(void *, Runtime &runtime) {
   }
 
   // Allocate the complete result.
-  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
+  auto builder =
+      StringBuilder::createStringBuilder(runtime, lv.result, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -2145,7 +2148,7 @@ CallResult<HermesValue> typedArrayPrototypeSort(void *, Runtime &runtime) {
       if (LLVM_UNLIKELY(newTypedArrayRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      lv.newTypedArray = *newTypedArrayRes;
+      lv.newTypedArray = std::move(*newTypedArrayRes);
       // This should just call setToCopyOfBytes() and should not throw
       // exception.
       [[maybe_unused]] auto status = JSTypedArrayBase::setToCopyOfTypedArray(
@@ -2213,6 +2216,10 @@ CallResult<HermesValue> typedArrayPrototypeSlice(void *, Runtime &runtime) {
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
+  struct : public Locals {
+    PinnedValue<JSTypedArrayBase> A;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto self = args.vmcastThis<JSTypedArrayBase>();
   double len = self->getLength();
   auto res = toIntegerOrInfinity(runtime, args.getArgHandle(0));
@@ -2242,11 +2249,11 @@ CallResult<HermesValue> typedArrayPrototypeSlice(void *, Runtime &runtime) {
     return runtime.raiseTypeError(
         "Detached the buffer in the species constructor");
   }
-  auto A = status.getValue();
+  lv.A = std::move(*status);
   if (count > 0) {
-    JSTypedArrayBase::setToCopyOfTypedArray(runtime, A, 0, self, k, count);
+    JSTypedArrayBase::setToCopyOfTypedArray(runtime, lv.A, 0, self, k, count);
   }
-  return A.getHermesValue();
+  return lv.A.getHermesValue();
 }
 
 // ES7 22.2.3.27
@@ -2281,7 +2288,7 @@ CallResult<HermesValue> typedArrayPrototypeSubarray(void *, Runtime &runtime) {
   if (result == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  return result.getValue().getHermesValue();
+  return result->getHermesValue();
 }
 
 CallResult<HermesValue> typedArrayPrototypeSymbolToStringTag(
@@ -2316,11 +2323,10 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
   }
   Handle<JSTypedArrayBase> self = args.vmcastThis<JSTypedArrayBase>();
 
-  auto emptyString = runtime.getPredefinedStringHandle(Predefined::emptyString);
-
   const JSTypedArrayBase::size_type len = self->getLength();
   if (len == 0) {
-    return emptyString.getHermesValue();
+    return HermesValue::encodeStringValue(
+        runtime.getPredefinedString(Predefined::emptyString));
   }
 
   // TODO: Get a list-separator String for the host environment's locale.
@@ -2339,8 +2345,12 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
     PinnedValue<> funcValue;
     PinnedValue<StringPrimitive> elementStr;
     PinnedValue<StringPrimitive> element;
+    PinnedValue<StringPrimitive> emptyString;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+
+  lv.emptyString = runtime.getPredefinedString(Predefined::emptyString);
 
   // Array to store each of the strings of the elements.
   auto arrRes = JSArray::create(runtime, len, len);
@@ -2356,7 +2366,7 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
     if (lv.storage.getHermesValue().isUndefined() ||
         lv.storage.getHermesValue().isNull()) {
       if (LLVM_UNLIKELY(
-              JSArray::setElementAt(lv.strings, runtime, i, emptyString) ==
+              JSArray::setElementAt(lv.strings, runtime, i, lv.emptyString) ==
               ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
       continue;
@@ -2405,7 +2415,8 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
     gcScope.flushToMarker(marker);
   }
 
-  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
+  auto builder =
+      StringBuilder::createStringBuilder(runtime, lv.result, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -2650,7 +2661,12 @@ CallResult<HermesValue> uint8ArrayPrototypeToBase64(void *, Runtime &runtime) {
   }
 
   SafeUInt32 safeOutLen{static_cast<uint32_t>(outLen)};
-  auto builder = StringBuilder::createStringBuilder(runtime, safeOutLen, true);
+  struct : public Locals {
+    PinnedValue<StringPrimitive> result;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  auto builder =
+      StringBuilder::createStringBuilder(runtime, lv.result, safeOutLen, true);
   if (builder == ExecutionStatus::EXCEPTION)
     return ExecutionStatus::EXCEPTION;
 
@@ -2733,7 +2749,7 @@ CallResult<HermesValue> uint8ArrayFromBase64(void *, Runtime &runtime) {
   auto arrRes = Uint8Array::allocate(runtime, decoded.bytes.size());
   if (arrRes == ExecutionStatus::EXCEPTION)
     return ExecutionStatus::EXCEPTION;
-  auto arr = arrRes.getValue();
+  auto arr = std::move(*arrRes);
 
   // Copy decoded bytes.
   if (!decoded.bytes.empty()) {
@@ -2772,7 +2788,7 @@ CallResult<HermesValue> uint8ArrayFromHex(void *, Runtime &runtime) {
   auto arrRes = Uint8Array::allocate(runtime, decoded.bytes.size());
   if (arrRes == ExecutionStatus::EXCEPTION)
     return ExecutionStatus::EXCEPTION;
-  auto arr = arrRes.getValue();
+  auto arr = std::move(*arrRes);
 
   if (!decoded.bytes.empty()) {
     std::memcpy(arr->data(runtime), decoded.bytes.data(), decoded.bytes.size());

@@ -26,6 +26,7 @@ void createSymbolConstructor(Runtime &runtime) {
   struct : public Locals {
     PinnedValue<SymbolID> symbolHandle;
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -175,11 +176,12 @@ void createSymbolConstructor(Runtime &runtime) {
   dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::Symbol);
   defineProperty(
       runtime,
       symbolPrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::Symbol),
+      lv.str,
       dpf);
   (void)defineMethod(
       runtime,

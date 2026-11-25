@@ -200,7 +200,7 @@ TEST_F(InterpreterTest, SimpleSmokeTest) {
   ASSERT_EQ(
       vmdetail::mapStringMayAllocate(*runtimeModule, "result="), resultID);
 
-  auto printFn = runtime.makeHandle<NativeFunction>(*NativeFunction::create(
+  auto printFn = runtime.makeHandle<NativeFunction>(NativeFunction::create(
       runtime,
       nullptr,
       print,
@@ -357,7 +357,7 @@ L1:
   Handle<JSFunction> factFn = runtime.makeHandle(
       JSFunction::create(
           runtime,
-          runtimeModule->getDomain(runtime),
+          runtime.makeHandle(runtimeModule->getDomainUnsafe(runtime)),
           runtime.makeNullHandle<JSObject>(),
           runtime.makeNullHandle<Environment>(),
           codeBlock));
@@ -586,7 +586,7 @@ TEST_F(InterpreterTest, FrameSizeTest) {
 
   ASSERT_EQ(vmdetail::mapStringMayAllocate(*runtimeModule, "getSP"), getSPID);
 
-  auto getSPFn = runtime.makeHandle<NativeFunction>(*NativeFunction::create(
+  auto getSPFn = runtime.makeHandle<NativeFunction>(NativeFunction::create(
       runtime,
       nullptr,
       getSP,

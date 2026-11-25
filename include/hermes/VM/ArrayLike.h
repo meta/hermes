@@ -26,7 +26,12 @@ inline CallResult<uint64_t> getArrayLikeLength_RJS(
   if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  return toLengthU64(runtime, runtime.makeHandle(std::move(*propRes)));
+  struct : public Locals {
+    PinnedValue<> prop;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.prop = std::move(*propRes);
+  return toLengthU64(runtime, lv.prop);
 }
 
 /// ES9 7.3.17 CreateListFromArrayLike

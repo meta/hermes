@@ -64,15 +64,6 @@ class BigIntPrimitive final
   }
 
   /// \return a newly allocated BigIntPrimitive representing \p value (a signed
-  /// integer). Brings down the VM on OOM.
-  template <typename T>
-  static std::enable_if_t<std::is_signed<T>::value, Handle<BigIntPrimitive>>
-  fromSignedNoThrow(Runtime &runtime, T value) {
-    return runtime.makeHandle<BigIntPrimitive>(
-        runtime.ignoreAllocationFailure(fromSigned(runtime, value)));
-  }
-
-  /// \return a newly allocated BigIntPrimitive representing \p value (a signed
   /// integer).
   template <typename T>
   static std::enable_if_t<std::is_signed<T>::value, CallResult<HermesValue>>
@@ -98,16 +89,6 @@ class BigIntPrimitive final
 
   /// \return a newly allocated BigIntPrimitive representing Z( R( \p value ) ).
   static CallResult<HermesValue> fromDouble(Runtime &runtime, double value);
-
-  /// \return a newly allocated BigIntPrimitive with digits filled from \p
-  /// bytes, possibly sign-extending to a multiple of DigitType. Brings down the
-  /// VM on OOM.
-  static Handle<BigIntPrimitive> fromBytesNoThrow(
-      Runtime &runtime,
-      llvh::ArrayRef<uint8_t> bytes) {
-    return runtime.makeHandle<BigIntPrimitive>(
-        runtime.ignoreAllocationFailure(fromBytes(runtime, bytes)));
-  }
 
   /// \return a newly allocated BigIntPrimitive with digits filled from \p
   /// bytes.

@@ -336,8 +336,12 @@ CallResult<HermesValue> StringPrimitive::concat(
         .getHermesValue();
   }
 
+  struct : public Locals {
+    PinnedValue<StringPrimitive> result;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto builder = StringBuilder::createStringBuilder(
-      runtime, xyLen, xPtr->isASCII() && yPtr->isASCII());
+      runtime, lv.result, xyLen, xPtr->isASCII() && yPtr->isASCII());
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -365,8 +369,12 @@ CallResult<HermesValue> StringPrimitive::slice(
     return runtime.getCharacterString(ch).getHermesValue();
   }
 
-  auto builder =
-      StringBuilder::createStringBuilder(runtime, safeLen, str->isASCII());
+  struct : public Locals {
+    PinnedValue<StringPrimitive> result;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  auto builder = StringBuilder::createStringBuilder(
+      runtime, lv.result, safeLen, str->isASCII());
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }

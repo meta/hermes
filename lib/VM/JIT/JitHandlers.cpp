@@ -42,9 +42,14 @@ SHLegacyValue _sh_ljs_create_bytecode_closure(
   Runtime &runtime = getRuntime(shr);
   auto *runtimeModule = (RuntimeModule *)shRuntimeModule;
   GCScopeMarkerRAII marker{runtime};
+  struct : public Locals {
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.domain = runtimeModule->getDomainUnsafe(runtime);
   return JSFunction::createWithInferredParent(
              runtime,
-             runtimeModule->getDomain(runtime),
+             lv.domain,
              _sh_ljs_is_undefined(*env)
                  ? Runtime::makeNullHandle<Environment>()
                  : Handle<Environment>::vmcast(toPHV(env)),

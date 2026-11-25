@@ -32,6 +32,7 @@ HermesValue createArrayBufferConstructor(Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<NativeConstructor> cons;
+    PinnedValue<StringPrimitive> str;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -73,11 +74,12 @@ HermesValue createArrayBufferConstructor(Runtime &runtime) {
   auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
+  lv.str = runtime.getPredefinedString(Predefined::ArrayBuffer);
   defineProperty(
       runtime,
       arrayBufferPrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::ArrayBuffer),
+      lv.str,
       dpf);
 
   // ArrayBuffer.xxx() methods.

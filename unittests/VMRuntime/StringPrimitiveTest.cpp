@@ -24,8 +24,8 @@ namespace {
 using StringPrimTest = RuntimeTestFixture;
 
 TEST_F(StringPrimTest, CreateTest) {
-  auto str1 = StringPrimitive::createNoThrow(runtime, "hello");
-  auto str2 = StringPrimitive::createNoThrow(runtime, "foo");
+  auto str1 = createNoThrowForTest(runtime, "hello");
+  auto str2 = createNoThrowForTest(runtime, "foo");
 
   EXPECT_EQ(5u, str1->getStringLength());
   EXPECT_TRUE(
@@ -39,16 +39,16 @@ TEST_F(StringPrimTest, CreateTest) {
 }
 
 TEST_F(StringPrimTest, EqualityTest) {
-  auto s1 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abc"));
-  auto s2 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abc"));
-  auto s3 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abcdef"));
+  auto s1 = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
+  auto s2 = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
+  auto s3 = createNoThrowForTest(runtime, createUTF16Ref(u"abcdef"));
   EXPECT_TRUE(s1->equals(s2.get()));
   EXPECT_FALSE(s1->equals(s3.get()));
 }
 
 TEST_F(StringPrimTest, CreateASCIITest) {
-  auto s1 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hello"));
-  auto s2 = StringPrimitive::createNoThrow(runtime, "hello");
+  auto s1 = createNoThrowForTest(runtime, createUTF16Ref(u"hello"));
+  auto s2 = createNoThrowForTest(runtime, "hello");
   EXPECT_TRUE(s1->equals(s2.get()));
 }
 
@@ -103,11 +103,11 @@ TEST_F(StringPrimTest, CreateEfficientTest) {
 }
 
 TEST_F(StringPrimTest, CompareTest) {
-#define TEST_CMP(v, a, b)                                 \
-  {                                                       \
-    auto s1 = StringPrimitive::createNoThrow(runtime, a); \
-    auto s2 = StringPrimitive::createNoThrow(runtime, b); \
-    EXPECT_EQ(v, s1->compare(s2.get()));                  \
+#define TEST_CMP(v, a, b)                       \
+  {                                             \
+    auto s1 = createNoThrowForTest(runtime, a); \
+    auto s2 = createNoThrowForTest(runtime, b); \
+    EXPECT_EQ(v, s1->compare(s2.get()));        \
   }
 
   TEST_CMP(0, "", "");
@@ -129,8 +129,8 @@ TEST_F(StringPrimTest, CompareTest) {
 
 TEST_F(StringPrimTest, ConcatTest) {
   {
-    auto a = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abc"));
-    auto b = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"def"));
+    auto a = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
+    auto b = createNoThrowForTest(runtime, createUTF16Ref(u"def"));
     auto strRes = StringPrimitive::concat(runtime, a, b);
     ASSERT_NE(ExecutionStatus::EXCEPTION, strRes.getStatus());
     EXPECT_TRUE(
@@ -140,8 +140,8 @@ TEST_F(StringPrimTest, ConcatTest) {
   }
 
   {
-    auto a = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u""));
-    auto b = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abc"));
+    auto a = createNoThrowForTest(runtime, createUTF16Ref(u""));
+    auto b = createNoThrowForTest(runtime, createUTF16Ref(u"abc"));
     auto strRes = StringPrimitive::concat(runtime, a, b);
     ASSERT_NE(ExecutionStatus::EXCEPTION, strRes.getStatus());
     EXPECT_TRUE(
@@ -254,8 +254,8 @@ TEST_F(StringPrimTest, FastConcatTest) {
 
   //=======================================
   // ASCII + ASCII
-  auto a = StringPrimitive::createNoThrow(runtime, bigStrA);
-  auto b = StringPrimitive::createNoThrow(runtime, strB);
+  auto a = createNoThrowForTest(runtime, bigStrA);
+  auto b = createNoThrowForTest(runtime, strB);
   cr = StringPrimitive::concat(runtime, a, b);
   ASSERT_NE(ExecutionStatus::EXCEPTION, cr);
   auto resASCII_1 = runtime.makeHandle<BufferedASCIIStringPrimitive>(*cr);
@@ -298,8 +298,7 @@ TEST_F(StringPrimTest, FastConcatTest) {
   //=======================================
   // ASCII + UTF16
   std::u16string strC(u"utf16\u1234");
-  b = StringPrimitive::createNoThrow(
-      runtime, UTF16Ref(strC.data(), strC.size()));
+  b = createNoThrowForTest(runtime, UTF16Ref(strC.data(), strC.size()));
   cr = StringPrimitive::concat(runtime, resASCII_2, b);
   ASSERT_NE(ExecutionStatus::EXCEPTION, cr);
   auto resUTF_1 = runtime.makeHandle<BufferedUTF16StringPrimitive>(*cr);

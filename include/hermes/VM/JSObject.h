@@ -583,7 +583,7 @@ class JSObject : public GCCell {
   /// okFlags can be used to exclude names and/or symbols, or include
   /// non-enumerable properties.
   /// \returns a JSArray containing the names.
-  static CallResult<Handle<JSArray>> getOwnPropertyKeys(
+  static CallResult<PseudoHandle<JSArray>> getOwnPropertyKeys(
       Handle<JSObject> selfHandle,
       Runtime &runtime,
       OwnKeysFlags okFlags);
@@ -595,7 +595,7 @@ class JSObject : public GCCell {
   /// \param onlyEnumerable if true, only enumerable properties will be
   ///   returned.
   /// \returns a JSArray containing the names.
-  static CallResult<Handle<JSArray>> getOwnPropertyNames(
+  static CallResult<PseudoHandle<JSArray>> getOwnPropertyNames(
       Handle<JSObject> selfHandle,
       Runtime &runtime,
       bool onlyEnumerable) {
@@ -609,7 +609,7 @@ class JSObject : public GCCell {
   /// Return a list of property symbols keys belonging to this object.
   /// The order of properties follows ES2015 - insertion order.
   /// \returns a JSArray containing the symbols.
-  static CallResult<Handle<JSArray>> getOwnPropertySymbols(
+  static CallResult<PseudoHandle<JSArray>> getOwnPropertySymbols(
       Handle<JSObject> selfHandle,
       Runtime &runtime) {
     return getOwnPropertyKeys(
@@ -1147,9 +1147,8 @@ class JSObject : public GCCell {
 #ifdef HERMES_SLOW_DEBUG
     // In slow debug, check if the symbol looks like an array index. If that's
     // the case, it should be using defineOwnComputed instead.
-    auto nameView = runtime.getIdentifierTable().getStringView(runtime, name);
     assert(
-        !toArrayIndex(nameView) &&
+        !runtime.getIdentifierTable().symbolToArrayIndex(name) &&
         "Array index property should use defineOwnComputed instead");
 #endif
     return defineOwnPropertyInternal(
@@ -1500,6 +1499,13 @@ class JSObject : public GCCell {
     clazzDoNotAccessDirectly_.setNonNull(runtime, clazz, runtime.getHeap());
   }
 
+  /// Replace the hidden class of this object with the one returned by \p f.
+  /// \p f is called with a rooted handle to the current class and must return
+  /// the new class. The definition is in JSObject.cpp.
+  template <typename F>
+  static void
+  replaceClass(Handle<JSObject> selfHandle, Runtime &runtime, F &&f);
+
   /// Allocate storage for a new slot after the slot index itself has been
   /// allocated by the hidden class.
   /// Note that slot storage is never truly released once allocated. Released
@@ -1771,7 +1777,7 @@ void JSObject::staticAsserts() {
 /// * a Number which corresponds to an array index
 /// \param[out] beginIndex beginning of the range of indices storing names
 /// \param[out] endIndex end (exclusive) of the range of indices storing names
-CallResult<Handle<ArrayStorageSmall>> getForInPropertyNames(
+CallResult<PseudoHandle<ArrayStorageSmall>> getForInPropertyNames(
     Runtime &runtime,
     Handle<JSObject> obj,
     uint32_t &beginIndex,
@@ -1782,17 +1788,9 @@ CallResult<Handle<ArrayStorageSmall>> getForInPropertyNames(
 /// or with GC::makeA, whose result is passed through one of the init* methods:
 ///
 ///   MyObjectType *obj = runtime.makeAFixed<MyObjectType>();
-///   return JSObjectInit::initToHandle(runtime, obj);
+///   return JSObjectInit::initToPseudoHandle(runtime, obj);
 ///
 namespace JSObjectInit {
-/// Initialize direct properties of obj and return it in a handle.
-template <typename JSObjectType>
-Handle<JSObjectType> initToHandle(Runtime &runtime, JSObjectType *obj) {
-  // Check that the object looks well-formed.
-  assert(JSObjectType::classof(obj) && "Mismatched CellKind");
-  return runtime.makeHandle(JSObjectType::initDirectPropStorage(runtime, obj));
-}
-
 /// Initialize direct properties of \p obj and return the object pointer
 /// directly.
 template <typename JSObjectType>
@@ -1841,8 +1839,12 @@ bool JSObject::forEachOwnPropertyWhile(
     gcMarker.flush();
   }
 
-  return HiddenClass::forEachPropertyWhile(
-      runtime.makeHandle(selfHandle->getClassGCPtr()), runtime, namedCB);
+  struct : public Locals {
+    PinnedValue<HiddenClass> clazz;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.clazz = selfHandle->getClassGCPtr().getNonNull(runtime);
+  return HiddenClass::forEachPropertyWhile(lv.clazz, runtime, namedCB);
 }
 
 inline ExecutionStatus JSObject::allocatePropStorage(
@@ -1989,7 +1991,12 @@ inline CallResult<PseudoHandle<>> JSObject::getNamedSlotValue(
       LLVM_UNLIKELY(desc.flags.hostObject)) {
     SymbolID name = SymbolID::unsafeCreate(desc.slot);
     assert(name.isValid() && "invalid SymbolID in descriptor");
-    return getNamed_RJS(runtime.makeHandle(std::move(self)), runtime, name);
+    struct : public Locals {
+      PinnedValue<JSObject> self;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
+    lv.self = std::move(self);
+    return getNamed_RJS(lv.self, runtime, name);
   }
   return createPseudoHandle(
       getNamedSlotValueUnsafe(self.get(), runtime, desc).unboxToHV(runtime));
@@ -2018,11 +2025,14 @@ inline CallResult<bool> JSObject::setNamedSlotValue(
       LLVM_UNLIKELY(desc.flags.hostObject)) {
     SymbolID name = SymbolID::unsafeCreate(desc.slot);
     assert(name.isValid() && "invalid SymbolID in descriptor");
-    return putNamed_RJS(
-        runtime.makeHandle(std::move(self)),
-        runtime,
-        name,
-        runtime.makeHandle(std::move(value)));
+    struct : public Locals {
+      PinnedValue<JSObject> self;
+      PinnedValue<> value;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
+    lv.self = std::move(self);
+    lv.value = std::move(value);
+    return putNamed_RJS(lv.self, runtime, name, lv.value);
   }
   auto shv = SmallHermesValue::encodeHermesValue(value.get(), runtime);
   setNamedSlotValueUnsafe(self.get(), runtime, desc, shv);
@@ -2078,10 +2088,14 @@ inline CallResult<PseudoHandle<>> JSObject::getComputedSlotValue(
       LLVM_UNLIKELY(desc.flags.hostObject)) {
     SymbolID name = SymbolID::unsafeCreate(desc.slot);
     assert(name.isValid() && "invalid SymbolID in descriptor");
-    return getComputed_RJS(
-        runtime.makeHandle(std::move(self)),
-        runtime,
-        runtime.makeHandle(HermesValue::encodeSymbolValue(name)));
+    struct : public Locals {
+      PinnedValue<JSObject> self;
+      PinnedValue<> key;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
+    lv.self = std::move(self);
+    lv.key = HermesValue::encodeSymbolValue(name);
+    return getComputed_RJS(lv.self, runtime, lv.key);
   }
   return createPseudoHandle(
       getNamedSlotValueUnsafe(
@@ -2120,11 +2134,12 @@ inline CallResult<bool> JSObject::setComputedSlotValue(
       LLVM_UNLIKELY(desc.flags.hostObject)) {
     SymbolID name = SymbolID::unsafeCreate(desc.slot);
     assert(name.isValid() && "invalid SymbolID in descriptor");
-    return putComputed_RJS(
-        selfHandle,
-        runtime,
-        runtime.makeHandle(HermesValue::encodeSymbolValue(name)),
-        value);
+    struct : public Locals {
+      PinnedValue<> key;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
+    lv.key = HermesValue::encodeSymbolValue(name);
+    return putComputed_RJS(selfHandle, runtime, lv.key, value);
   }
   auto shv = SmallHermesValue::encodeHermesValue(value.get(), runtime);
   setNamedSlotValueUnsafe(

@@ -26,7 +26,7 @@ class JSTypedArrayBase : public JSObject {
   using size_type = uint32_t;
   using Super = JSObject;
 
-  CallResult<Handle<JSTypedArrayBase>> allocate(
+  CallResult<PseudoHandle<JSTypedArrayBase>> allocate(
       Runtime &runtime,
       size_type length = 0);
 
@@ -36,13 +36,13 @@ class JSTypedArrayBase : public JSObject {
   /// \p src.
   /// \p beginIndex the first index of \p src to use in the new array.
   /// \p endIndex the last index of \p src to use in the new array.
-  static CallResult<Handle<JSTypedArrayBase>> allocateToSameBuffer(
+  static CallResult<PseudoHandle<JSTypedArrayBase>> allocateToSameBuffer(
       Runtime &runtime,
       Handle<JSTypedArrayBase> src,
       size_type beginIndex,
       size_type endIndex);
 
-  static CallResult<Handle<JSTypedArrayBase>> allocateSpecies(
+  static CallResult<PseudoHandle<JSTypedArrayBase>> allocateSpecies(
       Runtime &runtime,
       Handle<JSTypedArrayBase> self,
       size_type length);
@@ -456,14 +456,14 @@ class JSTypedArray final : public JSTypedArrayBase {
 
   /// Allocate a new instance of a TypedArray of this type.
   /// \p length the length of the TypedArray to create.
-  static CallResult<Handle<JSTypedArrayBase>> allocate(
+  static CallResult<PseudoHandle<JSTypedArrayBase>> allocate(
       Runtime &runtime,
       size_type length = 0);
 
   /// Allocate a new instance of a TypedArray from the species constructor
   /// of the given \p self, and forward the \p length parameter to that
   /// constructor.
-  static CallResult<Handle<JSTypedArrayBase>> allocateSpecies(
+  static CallResult<PseudoHandle<JSTypedArrayBase>> allocateSpecies(
       Handle<JSTypedArrayBase> self,
       Runtime &runtime,
       size_type length);

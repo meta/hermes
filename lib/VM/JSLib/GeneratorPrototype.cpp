@@ -20,6 +20,11 @@ namespace hermes {
 namespace vm {
 
 void populateGeneratorPrototype(Runtime &runtime) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   auto proto = Handle<JSObject>::vmcast(&runtime.generatorPrototype);
 
   defineMethod(
@@ -58,11 +63,12 @@ void populateGeneratorPrototype(Runtime &runtime) {
       runtime.generatorFunctionPrototype,
       dpf);
 
+  lv.str = runtime.getPredefinedString(Predefined::Generator);
   defineProperty(
       runtime,
       proto,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime.getPredefinedStringHandle(Predefined::Generator),
+      lv.str,
       dpf);
 }
 

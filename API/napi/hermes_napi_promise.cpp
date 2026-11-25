@@ -87,6 +87,7 @@ napi_status NAPI_CDECL napi_create_promise(
   struct : public Locals {
     PinnedValue<Callable> promiseCtor;
     PinnedValue<Callable> executor;
+    PinnedValue<SymbolID> promiseSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -95,16 +96,17 @@ napi_status NAPI_CDECL napi_create_promise(
   GCScope gcScope(runtime);
 
   // Look up the global Promise constructor.
-  auto promiseSymRes = runtime.getIdentifierTable().getSymbolHandle(
-      runtime, ASCIIRef("Promise", 7));
+  auto promiseSymRes =
+      runtime.getIdentifierTable().getSymbolID(runtime, ASCIIRef("Promise", 7));
   if (LLVM_UNLIKELY(promiseSymRes == ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_generic_failure);
   }
+  lv.promiseSym = *promiseSymRes;
 
   auto promiseCtorRes = JSObject::getNamed_RJS(
       Handle<JSObject>::vmcast(toPHV(&runtime.global_)),
       runtime,
-      **promiseSymRes);
+      *lv.promiseSym);
   if (LLVM_UNLIKELY(promiseCtorRes == ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_generic_failure);
   }
@@ -123,13 +125,12 @@ napi_status NAPI_CDECL napi_create_promise(
 
   // Create a NativeFunction executor that will capture resolve/reject
   // into the deferred when called by the Promise constructor.
-  auto executorFunc = NativeFunction::create(
+  lv.executor = NativeFunction::create(
       runtime,
       def, // context: pointer to the deferred
       promiseExecutorTrampoline,
       Predefined::getSymbolID(Predefined::emptyString),
       2 /* paramCount: resolve, reject */);
-  lv.executor.castAndSetHermesValue<Callable>(executorFunc.getHermesValue());
 
   // Call `new Promise(executor)` using the standard construct helper.
   auto constructRes =
@@ -242,23 +243,25 @@ napi_is_promise(napi_env env, napi_value value, bool *is_promise) {
   Runtime &runtime = env->runtime;
   struct : public Locals {
     PinnedValue<Callable> promiseCtor;
+    PinnedValue<SymbolID> promiseSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   GCScope gcScope(runtime);
 
   // Look up the global Promise constructor.
-  auto promiseSymRes = runtime.getIdentifierTable().getSymbolHandle(
-      runtime, ASCIIRef("Promise", 7));
+  auto promiseSymRes =
+      runtime.getIdentifierTable().getSymbolID(runtime, ASCIIRef("Promise", 7));
   if (LLVM_UNLIKELY(promiseSymRes == ExecutionStatus::EXCEPTION)) {
     // If we can't look up Promise, just return false.
     runtime.clearThrownValue();
     return napi_clear_last_error(env);
   }
+  lv.promiseSym = *promiseSymRes;
 
   auto promiseCtorRes = JSObject::getNamed_RJS(
       Handle<JSObject>::vmcast(toPHV(&runtime.global_)),
       runtime,
-      **promiseSymRes);
+      *lv.promiseSym);
   if (LLVM_UNLIKELY(promiseCtorRes == ExecutionStatus::EXCEPTION)) {
     runtime.clearThrownValue();
     return napi_clear_last_error(env);

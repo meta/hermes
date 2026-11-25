@@ -29,7 +29,8 @@ namespace vm {
 /// That copy ignores allocation failure, so a builder that may grow very large
 /// and probably needs UTF16 should start with UTF16.
 class StringBuilder {
-  /// Handle to the StringPrimitive we are constructing.
+  /// View of the caller-supplied slot that roots the StringPrimitive we are
+  /// constructing.
   MutableHandle<StringPrimitive> strPrim_;
 
   /// Current appending index.
@@ -42,8 +43,15 @@ class StringBuilder {
  public:
   /// Create a builder for a string of exactly \p length code units, stored as
   /// ASCII if \p isASCII is true and as UTF16 otherwise.
-  static CallResult<StringBuilder>
-  createStringBuilder(Runtime &runtime, SafeUInt32 length, bool isASCII) {
+  /// \param storage the caller's rooted slot (e.g. a PinnedValue in its
+  ///   Locals) that holds the string under construction. It must outlive the
+  ///   builder, and the string it holds is replaced if the builder has to
+  ///   switch from ASCII to UTF16.
+  static CallResult<StringBuilder> createStringBuilder(
+      Runtime &runtime,
+      MutableHandle<StringPrimitive> storage,
+      SafeUInt32 length,
+      bool isASCII) {
     if (length.isOverflowed()) {
       return runtime.raiseRangeError("String length exceeds limit");
     }
@@ -51,7 +59,7 @@ class StringBuilder {
     if (LLVM_UNLIKELY(crtRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    return StringBuilder(runtime, crtRes->getString());
+    return StringBuilder(runtime, storage, crtRes->getString());
   }
 
   /// Number of characters accumulated in the StringBuilder so far.
@@ -158,7 +166,8 @@ class StringBuilder {
     return appendStringPrim(other, other->getStringLength());
   }
 
-  /// After appending finished, return the StringPrimitive.
+  /// After appending finished, return the StringPrimitive. The handle refers to
+  /// the storage slot passed to createStringBuilder.
   Handle<StringPrimitive> getStringPrimitive() const {
     assert(
         index_ == strPrim_->getStringLength() &&
@@ -167,8 +176,13 @@ class StringBuilder {
   }
 
  private:
-  StringBuilder(Runtime &runtime, StringPrimitive *strPrim)
-      : strPrim_(runtime, strPrim), index_(0), runtime_(&runtime) {}
+  StringBuilder(
+      Runtime &runtime,
+      MutableHandle<StringPrimitive> storage,
+      StringPrimitive *strPrim)
+      : strPrim_(storage), index_(0), runtime_(&runtime) {
+    strPrim_ = strPrim;
+  }
 };
 
 } // namespace vm

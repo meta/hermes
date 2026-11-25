@@ -20,12 +20,13 @@ namespace {
 using StringBuilderTest = RuntimeTestFixture;
 
 TEST_F(StringBuilderTest, NormalASCIIBuildTest) {
-  auto builder =
-      StringBuilder::createStringBuilder(runtime, hermes::SafeUInt32{10}, true);
+  MutableHandle<StringPrimitive> storage{runtime};
+  auto builder = StringBuilder::createStringBuilder(
+      runtime, storage, hermes::SafeUInt32{10}, true);
   ASSERT_NE(builder, ExecutionStatus::EXCEPTION);
   builder->appendASCIIRef(createASCIIRef("abc"));
   builder->appendCharacter('d');
-  builder->appendStringPrim(StringPrimitive::createNoThrow(runtime, "efghij"));
+  builder->appendStringPrim(createNoThrowForTest(runtime, "efghij"));
   auto result = builder->getStringPrimitive();
   ASSERT_TRUE(result->isASCII());
   ASSERT_EQ(result->getStringLength(), 10u);
@@ -34,15 +35,16 @@ TEST_F(StringBuilderTest, NormalASCIIBuildTest) {
 }
 
 TEST_F(StringBuilderTest, NormalUTF16BuildTest) {
+  MutableHandle<StringPrimitive> storage{runtime};
   auto builder = StringBuilder::createStringBuilder(
-      runtime, hermes::SafeUInt32{10}, false);
+      runtime, storage, hermes::SafeUInt32{10}, false);
   ASSERT_NE(builder, ExecutionStatus::EXCEPTION);
   builder->appendASCIIRef(createASCIIRef("abc"));
   builder->appendUTF16Ref(createUTF16Ref(u"def"));
   builder->appendCharacter(u'g');
   builder->appendStringPrim(
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"hi")));
-  builder->appendStringPrim(StringPrimitive::createNoThrow(runtime, "j"));
+      createNoThrowForTest(runtime, createUTF16Ref(u"hi")));
+  builder->appendStringPrim(createNoThrowForTest(runtime, "j"));
   auto result = builder->getStringPrimitive();
   ASSERT_FALSE(result->isASCII());
   ASSERT_EQ(result->getStringLength(), 10u);
@@ -51,10 +53,11 @@ TEST_F(StringBuilderTest, NormalUTF16BuildTest) {
 }
 
 TEST_F(StringBuilderTest, AbnormalBuildTest) {
+  MutableHandle<StringPrimitive> storage{runtime};
   // In this test, we will start with a ASCII string builder, and turn it
   // into an UTF16 builder by appending UTF16 strings.
-  auto builder =
-      StringBuilder::createStringBuilder(runtime, hermes::SafeUInt32{6}, true);
+  auto builder = StringBuilder::createStringBuilder(
+      runtime, storage, hermes::SafeUInt32{6}, true);
   ASSERT_NE(builder, ExecutionStatus::EXCEPTION);
   builder->appendASCIIRef(createASCIIRef("abc"));
   builder->appendUTF16Ref(createUTF16Ref(u"def"));
@@ -64,8 +67,8 @@ TEST_F(StringBuilderTest, AbnormalBuildTest) {
   auto view1 = StringPrimitive::createStringView(runtime, result1);
   ASSERT_TRUE(view1.equals(createUTF16Ref(u"abcdef")));
 
-  builder =
-      StringBuilder::createStringBuilder(runtime, hermes::SafeUInt32{4}, true);
+  builder = StringBuilder::createStringBuilder(
+      runtime, storage, hermes::SafeUInt32{4}, true);
   ASSERT_NE(builder, ExecutionStatus::EXCEPTION);
   builder->appendASCIIRef(createASCIIRef("abc"));
   builder->appendCharacter(static_cast<char16_t>(256));
@@ -75,12 +78,12 @@ TEST_F(StringBuilderTest, AbnormalBuildTest) {
   auto view2 = StringPrimitive::createStringView(runtime, result2);
   ASSERT_TRUE(view2.equals(createUTF16Ref(u"abc\x100")));
 
-  builder =
-      StringBuilder::createStringBuilder(runtime, hermes::SafeUInt32{8}, true);
+  builder = StringBuilder::createStringBuilder(
+      runtime, storage, hermes::SafeUInt32{8}, true);
   ASSERT_NE(builder, ExecutionStatus::EXCEPTION);
   builder->appendASCIIRef(createASCIIRef("abc"));
   builder->appendStringPrim(
-      StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"defg\x100")));
+      createNoThrowForTest(runtime, createUTF16Ref(u"defg\x100")));
   auto result3 = builder->getStringPrimitive();
   ASSERT_FALSE(result3->isASCII());
   ASSERT_EQ(result3->getStringLength(), 8u);

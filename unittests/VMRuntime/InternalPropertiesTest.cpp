@@ -62,11 +62,11 @@ TEST_F(InternalPropertiesTest, NamedInternalPropertyTest) {
   auto propNames =
       JSObject::getOwnPropertyNames(obj, runtime, false /* onlyEnumerable */);
   ASSERT_RETURNED(propNames);
-  ASSERT_EQ(JSArray::getLength(**propNames, runtime), 0);
+  ASSERT_EQ(JSArray::getLength((*propNames).get(), runtime), 0);
 
   auto propSymbols = JSObject::getOwnPropertySymbols(obj, runtime);
   ASSERT_RETURNED(propSymbols);
-  ASSERT_EQ(JSArray::getLength(**propSymbols, runtime), 0);
+  ASSERT_EQ(JSArray::getLength((*propSymbols).get(), runtime), 0);
 }
 
 TEST_F(InternalPropertiesTest, AddInternalPropertySealedObject) {

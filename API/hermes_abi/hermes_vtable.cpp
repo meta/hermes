@@ -647,30 +647,31 @@ HermesABIArrayOrError get_object_property_names(
   uint32_t endIndex;
   auto objHandle = toHandle(obj);
 
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::ArrayStorageSmall> props;
+    vm::PinnedValue<vm::JSArray> ret;
+    vm::PinnedValue<> nameHnd;
+  } lv;
+  vm::LocalsRAII lraii(runtime, &lv);
+
   auto propsRes =
       vm::getForInPropertyNames(runtime, objHandle, beginIndex, endIndex);
   if (propsRes == vm::ExecutionStatus::EXCEPTION)
     return abi::createArrayOrError(HermesABIErrorCodeJSError);
 
-  vm::Handle<vm::ArrayStorageSmall> props = *propsRes;
+  lv.props = std::move(*propsRes);
   size_t length = endIndex - beginIndex;
 
   auto retRes = vm::JSArray::create(runtime, length, length);
   if (retRes == vm::ExecutionStatus::EXCEPTION)
     return abi::createArrayOrError(HermesABIErrorCodeJSError);
 
-  struct : public vm::Locals {
-    vm::PinnedValue<vm::JSArray> ret;
-    vm::PinnedValue<> nameHnd;
-  } lv;
-  vm::LocalsRAII lraii(runtime, &lv);
-
   lv.ret.castAndSetHermesValue<vm::JSArray>(retRes->getHermesValue());
   vm::JSArray::setStorageEndIndex(lv.ret, runtime, length);
 
   // Convert each property name to a string and store it in the result array.
   for (size_t i = 0; i < length; ++i) {
-    vm::SmallHermesValue name = props->at(beginIndex + i);
+    vm::SmallHermesValue name = lv.props->at(beginIndex + i);
     if (name.isString()) {
       vm::JSArray::unsafeSetExistingElementAt(*lv.ret, runtime, i, name);
     } else if (name.isSymbol()) {
@@ -901,11 +902,15 @@ HermesABIPropNameIDOrError create_propnameid_from_string(
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
   vm::GCScope gcScope(runtime);
-  auto cr =
-      vm::stringToSymbolID(runtime, vm::createPseudoHandle(*toHandle(str)));
-  if (cr == vm::ExecutionStatus::EXCEPTION)
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::SymbolID> sym;
+  } lv;
+  vm::LocalsRAII lraii(runtime, &lv);
+  if (vm::stringToSymbolID(
+          runtime, vm::createPseudoHandle(*toHandle(str)), lv.sym) ==
+      vm::ExecutionStatus::EXCEPTION)
     return abi::createPropNameIDOrError(HermesABIErrorCodeJSError);
-  return hart->createPropNameIDOrError(cr->getHermesValue());
+  return hart->createPropNameIDOrError(lv.sym.getHermesValue());
 }
 
 HermesABIPropNameIDOrError create_propnameid_from_symbol(
@@ -1373,8 +1378,12 @@ void get_utf8_from_propnameid(
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
   vm::GCScope gcScope(runtime);
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::StringPrimitive> nameStr;
+  } lv;
+  vm::LocalsRAII lraii(runtime, &lv);
   auto view =
-      runtime.getIdentifierTable().getStringView(runtime, *toHandle(name));
+      runtime.getIdentifierTable().getStringView(*toHandle(name), lv.nameStr);
   // TODO: Consider aligning this with the behaviour for symbols below, such
   // that PropNameIDs backed by Symbols also get wrapped in "Symbol()".
   if (LLVM_LIKELY(view.isASCII())) {
@@ -1395,8 +1404,12 @@ void get_utf8_from_symbol(
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
   vm::GCScope gcScope(runtime);
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::StringPrimitive> nameStr;
+  } lv;
+  vm::LocalsRAII lraii(runtime, &lv);
   auto view =
-      runtime.getIdentifierTable().getStringView(runtime, *toHandle(name));
+      runtime.getIdentifierTable().getStringView(*toHandle(name), lv.nameStr);
 
   // Wrap the resulting string in "Symbol()" to match the behaviour of
   // symbolDescriptiveString. We don't directly use symbolDescriptiveString here

@@ -41,8 +41,7 @@ TEST(DiscoverBBTest, SmokeTest) {
       runFlags);
 
   GCScope gcScope{runtime};
-  auto benchSym = runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef("bench"));
+  auto benchSym = getSymbolHandleForTest(runtime, createASCIIRef("bench"));
   ASSERT_EQ(ExecutionStatus::RETURNED, benchSym);
 
   auto propRes = JSObject::getNamed_RJS(

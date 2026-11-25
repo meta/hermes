@@ -206,6 +206,7 @@ CallResult<bool> ArrayImpl::_setOwnIndexedImpl(
   struct : Locals {
     PinnedValue<StorageType> storage;
     PinnedValue<> nameVal;
+    PinnedValue<SymbolID> sym;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
@@ -270,16 +271,17 @@ CallResult<bool> ArrayImpl::_setOwnIndexedImpl(
     // In this case, we should just treat the index access as
     // a property access.
     lv.nameVal = HermesValue::encodeTrustedNumberValue(index);
-    auto vr = valueToSymbolID(runtime, lv.nameVal);
+    auto vr = valueToSymbolID(runtime, lv.nameVal, lv.sym);
     assert(
         vr != ExecutionStatus::EXCEPTION &&
         "valueToIdentifier() failed for uint32_t value");
+    (void)vr;
 
     if (LLVM_UNLIKELY(
             JSObject::defineNewOwnProperty(
                 selfHandle,
                 runtime,
-                **vr,
+                *lv.sym,
                 PropertyFlags::defaultNewNamedPropertyFlags(),
                 value) == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -540,13 +542,16 @@ HiddenClass *JSArray::createClass(
   pf.internalSetter = 1;
 
   auto added = HiddenClass::addProperty(
-      lv.clazz, runtime, Predefined::getSymbolID(Predefined::length), pf);
+      lv.clazz,
+      runtime,
+      Predefined::getSymbolID(Predefined::length),
+      pf,
+      MutableHandle<HiddenClass>(lv.clazz));
   assert(
       added != ExecutionStatus::EXCEPTION &&
       "Adding the first properties shouldn't cause overflow");
-  assert(
-      added->second == lengthPropIndex() && "JSArray.length has invalid index");
-  lv.clazz = added->first;
+  assert(*added == lengthPropIndex() && "JSArray.length has invalid index");
+  (void)added;
 
   assert(
       lv.clazz->getNumProperties() == jsArrayPropertyCount() &&
@@ -803,8 +808,8 @@ CallResult<bool> JSArray::setLength(
           GCScopeMarkerRAII marker{scope};
           // If this property is not an integer index, or it doesn't need to be
           // deleted (it is less than 'adjustedLength'), ignore it.
-          auto propNameAsIndex = toArrayIndex(
-              runtime.getIdentifierTable().getStringView(runtime, id));
+          auto propNameAsIndex =
+              runtime.getIdentifierTable().symbolToArrayIndex(id);
           if (!propNameAsIndex || *propNameAsIndex < adjustedLength)
             return;
 
@@ -890,8 +895,7 @@ CallResult<HermesValue> JSArrayIterator::nextElement(
     Runtime &runtime) {
   if (!self->iteratedObject_) {
     // 5. If a is undefined, return CreateIterResultObject(undefined, true).
-    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true)
-        .getHermesValue();
+    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true);
   }
 
   struct : Locals {
@@ -942,8 +946,7 @@ CallResult<HermesValue> JSArrayIterator::nextElement(
     // undefined.
     self->iteratedObject_.setNull(runtime.getHeap());
     // b. Return CreateIterResultObject(undefined, true).
-    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true)
-        .getHermesValue();
+    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true);
   }
 
   // 11. Set the value of the [[ArrayIteratorNextIndex]] internal slot of O to
@@ -954,7 +957,7 @@ CallResult<HermesValue> JSArrayIterator::nextElement(
 
   if (self->iterationKind_ == IterationKind::Key) {
     // 12. If itemKind is "key", return CreateIterResultObject(index, false).
-    return createIterResultObject(runtime, lv.index, false).getHermesValue();
+    return createIterResultObject(runtime, lv.index, false);
   }
 
   // 13. Let elementKey be ToString(index).
@@ -970,7 +973,7 @@ CallResult<HermesValue> JSArrayIterator::nextElement(
       llvm_unreachable("Early return already occurred in Key case");
     case IterationKind::Value:
       // 16. If itemKind is "value", let result be elementValue.
-      return createIterResultObject(runtime, lv.value, false).getHermesValue();
+      return createIterResultObject(runtime, lv.value, false);
     case IterationKind::Entry: {
       // 17. b. Let result be CreateArrayFromList(«index, elementValue»).
       auto resultRes = JSArray::create(runtime, 2, 2);
@@ -987,7 +990,7 @@ CallResult<HermesValue> JSArrayIterator::nextElement(
               ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
       // 18. Return CreateIterResultObject(result, false).
-      return createIterResultObject(runtime, lv.arr, false).getHermesValue();
+      return createIterResultObject(runtime, lv.arr, false);
     }
     case IterationKind::NumKinds:
       llvm_unreachable("Invalid iteration kind");

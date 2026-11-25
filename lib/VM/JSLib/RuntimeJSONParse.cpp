@@ -557,6 +557,7 @@ template <EncodingKind Kind>
 CallResult<HermesValue> RuntimeJSONParser<Kind>::revive(Handle<> value) {
   struct : public Locals {
     PinnedValue<JSObject> root;
+    PinnedValue<StringPrimitive> key;
   } lv;
   LocalsRAII lraii(runtime_, &lv);
 
@@ -572,8 +573,8 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::revive(Handle<> value) {
   assert(
       status != ExecutionStatus::EXCEPTION && *status &&
       "defineOwnProperty on new object cannot fail");
-  return operationWalk(
-      lv.root, runtime_.getPredefinedStringHandle(Predefined::emptyString));
+  lv.key = runtime_.getPredefinedString(Predefined::emptyString);
+  return operationWalk(lv.root, lv.key);
 }
 
 template <EncodingKind Kind>
@@ -597,6 +598,7 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::operationWalk(
   struct : public Locals {
     PinnedValue<> tmpHandle;
     PinnedValue<> valHandle;
+    PinnedValue<JSArray> keys;
   } lv;
   LocalsRAII lraii(runtime_, &lv);
 
@@ -633,10 +635,10 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::operationWalk(
     if (cr == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    auto keys = *cr;
+    lv.keys = std::move(*cr);
     GCScopeMarkerRAII marker(runtime_);
-    for (uint32_t index = 0, e = keys->getEndIndex(); index < e; ++index) {
-      lv.tmpHandle = keys->at(runtime_, index).unboxToHV(runtime_);
+    for (uint32_t index = 0, e = lv.keys->getEndIndex(); index < e; ++index) {
+      lv.tmpHandle = lv.keys->at(runtime_, index).unboxToHV(runtime_);
       if (LLVM_UNLIKELY(
               filter(scopedObject, lv.tmpHandle) ==
               ExecutionStatus::EXCEPTION)) {

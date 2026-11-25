@@ -35,6 +35,7 @@ HiddenClass *addBufferPropertiesToHiddenClass(
   struct : public Locals {
     PinnedValue<HiddenClass> clazz;
     PinnedValue<> tmpKey;
+    PinnedValue<SymbolID> tmpSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -46,8 +47,12 @@ HiddenClass *addBufferPropertiesToHiddenClass(
     void visitStringID(StringID id) {
       SymbolID sym = getSym(id);
       auto addResult = HiddenClass::addProperty(
-          clazz, runtime, sym, PropertyFlags::defaultNewNamedPropertyFlags());
-      clazz = addResult->first;
+          clazz,
+          runtime,
+          sym,
+          PropertyFlags::defaultNewNamedPropertyFlags(),
+          MutableHandle<HiddenClass>(clazz));
+      runtime.ignoreAllocationFailure(addResult);
       marker.flush();
     }
     void visitPrivateName() {
@@ -56,22 +61,25 @@ HiddenClass *addBufferPropertiesToHiddenClass(
     void visitNumber(double d) {
       tmpHandleKey = HermesValue::encodeTrustedNumberValue(d);
       // valueToSymbolID cannot fail because the key is known to be uint32.
-      Handle<SymbolID> symHandle = *valueToSymbolID(runtime, tmpHandleKey);
+      runtime.ignoreAllocationFailure(
+          valueToSymbolID(runtime, tmpHandleKey, tmpSym));
       auto addResult = HiddenClass::addProperty(
           clazz,
           runtime,
-          *symHandle,
-          PropertyFlags::defaultNewNamedPropertyFlags());
-      clazz = addResult->first;
+          *tmpSym,
+          PropertyFlags::defaultNewNamedPropertyFlags(),
+          MutableHandle<HiddenClass>(clazz));
+      runtime.ignoreAllocationFailure(addResult);
       marker.flush();
     }
 
     PinnedValue<HiddenClass> &clazz;
     PinnedValue<> &tmpHandleKey;
+    PinnedValue<SymbolID> &tmpSym;
     GCScopeMarkerRAII &marker;
     Runtime &runtime;
     F getSym;
-  } v{lv.clazz, lv.tmpKey, marker, runtime, std::move(getSym)};
+  } v{lv.clazz, lv.tmpKey, lv.tmpSym, marker, runtime, std::move(getSym)};
 
   // Visit each literal in the buffer and add it as a property.
   SerializedLiteralParser::parseKeyBuffer(buffer, numProps, v);
@@ -96,6 +104,7 @@ void addTypedBufferPropertiesToHiddenClass(
     F getSym) {
   struct : public Locals {
     PinnedValue<> tmpKey;
+    PinnedValue<SymbolID> tmpSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -115,20 +124,23 @@ void addTypedBufferPropertiesToHiddenClass(
     void visitNumber(double d) {
       tmpHandleKey = HermesValue::encodeTrustedNumberValue(d);
       // valueToSymbolID cannot fail because the key is known to be uint32.
-      Handle<SymbolID> symHandle = *valueToSymbolID(runtime, tmpHandleKey);
+      runtime.ignoreAllocationFailure(
+          valueToSymbolID(runtime, tmpHandleKey, tmpSym));
       HiddenClass::addNewTypedPublicProperty(
-          clazz, runtime, *symHandle, propertiesEnumerable);
+          clazz, runtime, *tmpSym, propertiesEnumerable);
       marker.flush();
     }
 
     Handle<HiddenClass> clazz;
     PinnedValue<> &tmpHandleKey;
+    PinnedValue<SymbolID> &tmpSym;
     GCScopeMarkerRAII &marker;
     Runtime &runtime;
     bool propertiesEnumerable;
     F getSym;
   } v{clazz,
       lv.tmpKey,
+      lv.tmpSym,
       marker,
       runtime,
       propertiesEnumerable,

@@ -33,6 +33,11 @@ static napi_status createErrorWithCode(
   using namespace hermes::vm;
 
   Runtime &runtime = env->runtime;
+  struct : public Locals {
+    PinnedValue<JSError> error;
+    PinnedValue<SymbolID> codeSym;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   GCScope gcScope(runtime);
 
   // Get the message string from the napi_value.
@@ -43,14 +48,14 @@ static napi_status createErrorWithCode(
   auto errorObj = JSError::create(runtime, prototype);
 
   // Record the stack trace while we have the relevant frames.
-  auto errorHandle = runtime.makeHandle<JSError>(std::move(errorObj));
-  auto recordRes = JSError::recordStackTrace(errorHandle, runtime);
+  lv.error = std::move(errorObj);
+  auto recordRes = JSError::recordStackTrace(lv.error, runtime);
   if (LLVM_UNLIKELY(recordRes == ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_generic_failure);
   }
 
   // Set the message property.
-  auto setMsgRes = JSError::setMessage(errorHandle, runtime, msgHandle);
+  auto setMsgRes = JSError::setMessage(lv.error, runtime, msgHandle);
   if (LLVM_UNLIKELY(setMsgRes == ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_generic_failure);
   }
@@ -60,24 +65,25 @@ static napi_status createErrorWithCode(
     auto *codePhv = reinterpret_cast<PinnedHermesValue *>(code);
 
     // Look up the "code" symbol.
-    auto codeSymRes = runtime.getIdentifierTable().getSymbolHandle(
-        runtime, ASCIIRef{"code", 4});
+    auto codeSymRes =
+        runtime.getIdentifierTable().getSymbolID(runtime, ASCIIRef{"code", 4});
     if (LLVM_UNLIKELY(codeSymRes == ExecutionStatus::EXCEPTION)) {
       return captureRuntimeException(env, napi_generic_failure);
     }
+    lv.codeSym = *codeSymRes;
 
     // Define "code" as a writable, enumerable, configurable property.
     auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
     auto codeValHandle = Handle<>::vmcast(codePhv);
     auto defineRes = JSObject::defineOwnProperty(
-        errorHandle, runtime, **codeSymRes, dpf, codeValHandle);
+        lv.error, runtime, *lv.codeSym, dpf, codeValHandle);
     if (LLVM_UNLIKELY(defineRes == ExecutionStatus::EXCEPTION)) {
       return captureRuntimeException(env, napi_generic_failure);
     }
   }
 
   // Return the error in the current handle scope without throwing.
-  *result = env->addToCurrentScope(errorHandle.getHermesValue());
+  *result = env->addToCurrentScope(lv.error.getHermesValue());
   return napi_clear_last_error(env);
 }
 
@@ -110,11 +116,13 @@ static napi_status throwErrorWithMessage(
   struct : public Locals {
     PinnedValue<StringPrimitive> msgStr;
     PinnedValue<StringPrimitive> codeStr;
+    PinnedValue<JSError> error;
+    PinnedValue<SymbolID> codeSym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
   // GCScope is needed for internal Handle allocations by
-  // JSError::create, recordStackTrace, setMessage, getSymbolHandle,
+  // JSError::create, recordStackTrace, setMessage, getSymbolID,
   // and defineOwnProperty.
   GCScope gcScope(runtime);
 
@@ -132,14 +140,14 @@ static napi_status throwErrorWithMessage(
   auto errorObj = JSError::create(runtime, prototype);
 
   // Record the stack trace while we have the relevant frames.
-  auto errorHandle = runtime.makeHandle<JSError>(std::move(errorObj));
-  auto recordRes = JSError::recordStackTrace(errorHandle, runtime);
+  lv.error = std::move(errorObj);
+  auto recordRes = JSError::recordStackTrace(lv.error, runtime);
   if (LLVM_UNLIKELY(recordRes == ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_generic_failure);
   }
 
   // Set the message property.
-  auto setMsgRes = JSError::setMessage(errorHandle, runtime, lv.msgStr);
+  auto setMsgRes = JSError::setMessage(lv.error, runtime, lv.msgStr);
   if (LLVM_UNLIKELY(setMsgRes == ExecutionStatus::EXCEPTION)) {
     return captureRuntimeException(env, napi_generic_failure);
   }
@@ -147,7 +155,7 @@ static napi_status throwErrorWithMessage(
   // Optionally set the "code" property.
   if (code != nullptr) {
     // Create the code string and root it immediately (before
-    // getSymbolHandle, which is a GC safepoint).
+    // getSymbolID, which is a GC safepoint).
     auto codeStrRes = StringPrimitive::createEfficient(
         runtime,
         UTF8Ref(reinterpret_cast<const uint8_t *>(code), std::strlen(code)));
@@ -157,23 +165,24 @@ static napi_status throwErrorWithMessage(
     lv.codeStr.castAndSetHermesValue<StringPrimitive>(*codeStrRes);
 
     // Look up the "code" symbol.
-    auto codeSymRes = runtime.getIdentifierTable().getSymbolHandle(
-        runtime, ASCIIRef{"code", 4});
+    auto codeSymRes =
+        runtime.getIdentifierTable().getSymbolID(runtime, ASCIIRef{"code", 4});
     if (LLVM_UNLIKELY(codeSymRes == ExecutionStatus::EXCEPTION)) {
       return captureRuntimeException(env, napi_generic_failure);
     }
+    lv.codeSym = *codeSymRes;
 
     // Define "code" as writable, enumerable, configurable.
     auto dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
     auto defineRes = JSObject::defineOwnProperty(
-        errorHandle, runtime, **codeSymRes, dpf, lv.codeStr);
+        lv.error, runtime, *lv.codeSym, dpf, lv.codeStr);
     if (LLVM_UNLIKELY(defineRes == ExecutionStatus::EXCEPTION)) {
       return captureRuntimeException(env, napi_generic_failure);
     }
   }
 
   // Store the error as the NAPI pending exception.
-  env->pendingException = errorHandle.getHermesValue();
+  env->pendingException = lv.error.getHermesValue();
   env->hasPendingException = true;
   return napi_clear_last_error(env);
 }
@@ -420,8 +429,12 @@ napi_status NAPI_CDECL napi_fatal_exception(napi_env env, napi_value err) {
   if (hv.isObject() && vmisa<JSError>(hv)) {
     // Use JSError::toString to get the "name: message" representation.
     GCScope gcScope(env->runtime);
-    auto objHandle = env->runtime.makeHandle<JSObject>(hv);
-    auto strRes = JSError::toString(objHandle, env->runtime);
+    struct : public Locals {
+      PinnedValue<JSObject> obj;
+    } lv;
+    LocalsRAII lraii(env->runtime, &lv);
+    lv.obj.castAndSetHermesValue<JSObject>(hv);
+    auto strRes = JSError::toString(lv.obj, env->runtime);
     if (strRes != ExecutionStatus::EXCEPTION) {
       auto *str = (*strRes).get();
       if (str->isASCII()) {

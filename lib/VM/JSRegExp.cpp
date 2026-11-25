@@ -77,26 +77,34 @@ PseudoHandle<JSRegExp> JSRegExp::create(
   return JSObjectInit::initToPseudoHandle(runtime, cell);
 }
 
-Handle<HiddenClass> JSRegExp::createMatchClass(
+PseudoHandle<HiddenClass> JSRegExp::createMatchClass(
     Runtime &runtime,
     Handle<HiddenClass> arrayClass) {
-  // Adds the property \p name to matchClass which, upon return, will point to
-  // the newly created hidden class.
-  auto addProperty = [&](Handle<HiddenClass> clazz, Predefined::Str name) {
+  struct : public Locals {
+    PinnedValue<HiddenClass> clazz;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  // Adds the property \p name to the class in lv.clazz, which, upon return,
+  // will point to the newly created hidden class.
+  auto addProperty = [&runtime, &lv](
+                         Handle<HiddenClass> clazz, Predefined::Str name) {
     auto added = HiddenClass::addProperty(
         clazz,
         runtime,
         Predefined::getSymbolID(name),
-        PropertyFlags::defaultNewNamedPropertyFlags());
+        PropertyFlags::defaultNewNamedPropertyFlags(),
+        MutableHandle<HiddenClass>(lv.clazz));
     assert(
         added != ExecutionStatus::EXCEPTION &&
         "Adding the first properties shouldn't cause overflow");
-    return added->first;
+    (void)added;
   };
 
-  Handle<HiddenClass> addIndex = addProperty(arrayClass, Predefined::index);
-  Handle<HiddenClass> addInput = addProperty(addIndex, Predefined::input);
-  return addProperty(addInput, Predefined::groups);
+  addProperty(arrayClass, Predefined::index);
+  addProperty(lv.clazz, Predefined::input);
+  addProperty(lv.clazz, Predefined::groups);
+  return createPseudoHandle(*lv.clazz);
 }
 
 void JSRegExp::initialize(
@@ -221,6 +229,7 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
   struct : public Locals {
     PinnedValue<JSObject> obj;
     PinnedValue<> value;
+    PinnedValue<SymbolID> sym;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -263,14 +272,15 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
     }
 
     auto symbolRes =
-        runtime.getIdentifierTable().getSymbolHandle(runtime, identifier);
+        runtime.getIdentifierTable().getSymbolID(runtime, identifier);
     if (LLVM_UNLIKELY(symbolRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
+    lv.sym = *symbolRes;
     auto res = JSObject::defineNewOwnProperty(
         lv.obj,
         runtime,
-        symbolRes->get(),
+        *lv.sym,
         PropertyFlags::defaultNewNamedPropertyFlags(),
         lv.value);
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
@@ -281,12 +291,8 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
   return ExecutionStatus::RETURNED;
 }
 
-Handle<JSObject> JSRegExp::getGroupNameMappings(Runtime &runtime) {
-  // TODO: This function returns Handle and needs refactoring to avoid
-  // makeHandle
-  if (auto *ptr = vmcast_or_null<JSObject>(groupNameMappings_.get(runtime)))
-    return runtime.makeHandle(ptr);
-  return Runtime::makeNullHandle<JSObject>();
+JSObject *JSRegExp::getGroupNameMappings(Runtime &runtime) {
+  return vmcast_or_null<JSObject>(groupNameMappings_.get(runtime));
 }
 
 void JSRegExp::setGroupNameMappings(Runtime &runtime, JSObject *groupObj) {

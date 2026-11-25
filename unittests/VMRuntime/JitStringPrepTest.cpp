@@ -23,11 +23,10 @@ namespace {
 
 using JitStringPrepTest = RuntimeTestFixture;
 
-/// \return the symbol for \p s. Its handle stays in the current GCScope,
-/// which keeps the symbol alive.
-SymbolID sym(Runtime &runtime, const char *s) {
-  return **runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef(s));
+/// \return the symbol for \p s, written to \p out, which keeps it alive.
+SymbolID sym(Runtime &runtime, const char *s, MutableHandle<SymbolID> out) {
+  out = *runtime.getIdentifierTable().getSymbolID(runtime, createASCIIRef(s));
+  return *out;
 }
 
 /// \return String.prototype's current hidden class. A raw pointer, valid
@@ -50,7 +49,6 @@ SlotIndex ownSlot(Runtime &runtime, SymbolID name) {
 
 /// Run \p code as a script; it must not throw.
 void run(Runtime &runtime, const char *code) {
-  GCScopeMarkerRAII marker{runtime};
   hermes::hbc::CompileFlags flags;
   ASSERT_EQ(
       ExecutionStatus::RETURNED, runtime.run(code, "", flags).getStatus());
@@ -129,13 +127,17 @@ TEST_F(JitStringPrepTest, MethodCharCodeAt) {
 // A name String.prototype's class does not own: Absent, with the class's
 // ID and property count. Fails if the count is not recorded.
 TEST_F(JitStringPrepTest, Absent) {
+  struct : public Locals {
+    PinnedValue<SymbolID> name;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   JitByIdSiteRecord site;
   FakeIds ids;
   SlotIndex slot = 0;
   EXPECT_EQ(
       JitByIdStringTier::Absent,
       prepareByIdString(
-          runtime, site, sym(runtime, "noSuchStringProp"), ids, slot));
+          runtime, site, sym(runtime, "noSuchStringProp", lv.name), ids, slot));
   EXPECT_NE(0u, site.stringProtoCount);
   EXPECT_EQ(protoClass(runtime)->getNumProperties(), site.stringProtoCount);
   EXPECT_EQ(100u, (unsigned)site.stringProtoId);
@@ -147,12 +149,17 @@ TEST_F(JitStringPrepTest, AccessorIsIneligible) {
   run(runtime,
       "Object.defineProperty(String.prototype, 'acc', "
       "{get: function () { return 1; }, configurable: true});");
+  struct : public Locals {
+    PinnedValue<SymbolID> name;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   JitByIdSiteRecord site;
   FakeIds ids;
   SlotIndex slot = 0;
   EXPECT_EQ(
       JitByIdStringTier::Ineligible,
-      prepareByIdString(runtime, site, sym(runtime, "acc"), ids, slot));
+      prepareByIdString(
+          runtime, site, sym(runtime, "acc", lv.name), ids, slot));
   EXPECT_EQ(100u, (unsigned)site.stringProtoId);
 }
 

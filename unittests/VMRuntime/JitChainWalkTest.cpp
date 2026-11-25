@@ -24,21 +24,20 @@ namespace {
 /// A large heap: the typed holder below has 65537 slots.
 using JitChainWalkTest = LargeHeapRuntimeTestFixture;
 
-/// \return the symbol for \p s. Its handle stays in the current GCScope,
-/// which keeps the symbol alive.
-SymbolID sym(Runtime &runtime, const char *s) {
-  return **runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createASCIIRef(s));
+/// \return the symbol for \p s, written to \p out, which keeps it alive.
+SymbolID sym(Runtime &runtime, const char *s, MutableHandle<SymbolID> out) {
+  out = *runtime.getIdentifierTable().getSymbolID(runtime, createASCIIRef(s));
+  return *out;
 }
 
 /// Store \p v into \p obj's property \p name, adding it if absent.
 void put(Runtime &runtime, Handle<JSObject> obj, SymbolID name, double v) {
-  GCScopeMarkerRAII marker{runtime};
-  ASSERT_TRUE(*JSObject::putNamed_RJS(
-      obj,
-      runtime,
-      name,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(v))));
+  struct : public Locals {
+    PinnedValue<> value;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  lv.value = HermesValue::encodeTrustedNumberValue(v);
+  ASSERT_TRUE(*JSObject::putNamed_RJS(obj, runtime, name, lv.value));
 }
 
 /// Make \p obj a dictionary by adding and deleting a property \p t.
@@ -54,16 +53,17 @@ void makeDictionary(Runtime &runtime, Handle<JSObject> obj, SymbolID t) {
 // 0xffff and `b` at 0x10000. Fails if the limit is missing (b is Found)
 // or off by one (a is Rejected).
 TEST_F(JitChainWalkTest, TypedHolderSlotLimit) {
-  GCScope scope{runtime, "TypedHolderSlotLimit", 128};
   struct : public Locals {
     PinnedValue<HiddenClass> clazz;
     PinnedValue<JSObject> holder;
     PinnedValue<JSObject> mid;
     PinnedValue<JSObject> recv;
+    PinnedValue<SymbolID> a;
+    PinnedValue<SymbolID> b;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  SymbolID a = sym(runtime, "a");
-  SymbolID b = sym(runtime, "b");
+  SymbolID a = sym(runtime, "a", lv.a);
+  SymbolID b = sym(runtime, "b", lv.b);
 
   lv.clazz = HiddenClass::createForTypedObject(
       runtime, Runtime::makeNullHandle<JSObject>(), 2);
@@ -106,18 +106,20 @@ TEST_F(JitChainWalkTest, TypedHolderSlotLimit) {
 // missing (Rejected), and with adee03e65's HiddenClass.cpp hunk reverted
 // (slot 1, the last slot).
 TEST_F(JitChainWalkTest, FlagsTransitionHolderWithoutMap) {
-  GCScope scope{runtime, "FlagsTransitionHolderWithoutMap", 128};
   struct : public Locals {
     PinnedValue<JSObject> holder;
     PinnedValue<JSObject> sibling;
     PinnedValue<JSObject> mid;
     PinnedValue<JSObject> recv;
     PinnedValue<HiddenClass> c;
+    PinnedValue<SymbolID> p;
+    PinnedValue<SymbolID> q;
+    PinnedValue<SymbolID> r;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  SymbolID p = sym(runtime, "p");
-  SymbolID q = sym(runtime, "q");
-  SymbolID r = sym(runtime, "r");
+  SymbolID p = sym(runtime, "p", lv.p);
+  SymbolID q = sym(runtime, "q", lv.q);
+  SymbolID r = sym(runtime, "r", lv.r);
 
   DefinePropertyFlags nonEnum{};
   nonEnum.setEnumerable = 1;
@@ -154,17 +156,19 @@ TEST_F(JitChainWalkTest, FlagsTransitionHolderWithoutMap) {
 // and q's absence is tested; o[i] has parent o[i - 1], so p is i
 // prototypes up from o[i]. Each EXPECT names the rule it pins.
 TEST_F(JitChainWalkTest, Verdicts) {
-  GCScope scope{runtime, "Verdicts", 128};
   struct : public Locals {
     PinnedValue<JSObject> o[10];
     PinnedValue<JSObject> dictRecv;
     PinnedValue<JSObject> dictMid;
     PinnedValue<JSObject> viaDict;
+    PinnedValue<SymbolID> p;
+    PinnedValue<SymbolID> q;
+    PinnedValue<SymbolID> t;
   } lv;
   LocalsRAII lraii{runtime, &lv};
-  SymbolID p = sym(runtime, "p");
-  SymbolID q = sym(runtime, "q");
-  SymbolID t = sym(runtime, "t");
+  SymbolID p = sym(runtime, "p", lv.p);
+  SymbolID q = sym(runtime, "q", lv.q);
+  SymbolID t = sym(runtime, "t", lv.t);
 
   lv.o[0] = JSObject::create(runtime, Runtime::makeNullHandle<JSObject>());
   put(runtime, lv.o[0], p, 1);

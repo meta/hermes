@@ -348,8 +348,9 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
       RuntimeModuleFlags flags = {});
 
   /// Runs the internal JavaScript. This is called once during initialization.
-  /// \return the completion value of internal bytecode IIFE.
-  Handle<JSObject> runInternalJavaScript();
+  /// \return the completion value of internal bytecode IIFE, which is not
+  /// rooted.
+  PseudoHandle<JSObject> runInternalJavaScript();
 
   /// A convenience function to print an exception to a stream.
   void printException(llvh::raw_ostream &os, Handle<> valueHandle);
@@ -439,10 +440,6 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   /// \return the \c StringPrimitive of a predefined string.
   StringPrimitive *getPredefinedString(Predefined::Str predefined);
   StringPrimitive *getPredefinedString(Predefined::Sym predefined);
-
-  /// \return a \c Handle<StringPrimitive> to a predefined string.
-  Handle<StringPrimitive> getPredefinedStringHandle(Predefined::Str predefined);
-  Handle<StringPrimitive> getPredefinedStringHandle(Predefined::Sym predefined);
 
   /// \return the \c StringPrimitive given a symbol ID \p id.
   inline StringPrimitive *getStringPrimFromSymbolID(SymbolID id);
@@ -540,7 +537,9 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
 
   /// Return a StringPrimitive representation of a single character. The first
   /// 256 characters are pre-allocated. The rest are allocated every time.
-  Handle<StringPrimitive> getCharacterString(char16_t ch);
+  /// The result is not rooted: for the first 256 it points to a permanent root,
+  /// otherwise it is a fresh string, so pin it before the next allocation.
+  PseudoHandle<StringPrimitive> getCharacterString(char16_t ch);
 
   CodeBlock *getEmptyCodeBlock() const {
     assert(emptyCodeBlock_ && "Invalid empty code block");
@@ -1279,8 +1278,8 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
   void freezeBuiltins();
 
   /// The slow path for \c getCharacterString(). This function allocates a new
-  /// string for the passed character \p ch.
-  Handle<StringPrimitive> allocateCharacterString(char16_t ch);
+  /// string for the passed character \p ch. The result is not rooted.
+  PseudoHandle<StringPrimitive> allocateCharacterString(char16_t ch);
 
   /// Add a \c RuntimeModule \p rm to the runtime module list.
   void addRuntimeModule(RuntimeModule *rm) {
@@ -2367,16 +2366,6 @@ inline StringPrimitive *Runtime::getPredefinedString(
 inline StringPrimitive *Runtime::getPredefinedString(
     Predefined::Sym predefined) {
   return getStringPrimFromSymbolID(Predefined::getSymbolID(predefined));
-}
-
-inline Handle<StringPrimitive> Runtime::getPredefinedStringHandle(
-    Predefined::Str predefined) {
-  return makeHandle(getPredefinedString(predefined));
-}
-
-inline Handle<StringPrimitive> Runtime::getPredefinedStringHandle(
-    Predefined::Sym predefined) {
-  return makeHandle(getPredefinedString(predefined));
 }
 
 inline StringPrimitive *Runtime::getStringPrimFromSymbolID(SymbolID id) {

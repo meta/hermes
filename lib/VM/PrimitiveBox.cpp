@@ -37,13 +37,16 @@ void JSStringBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.addField(&self->primitiveValue_);
 }
 
-CallResult<Handle<JSString>> JSString::create(
+CallResult<PseudoHandle<JSString>> JSString::create(
     Runtime &runtime,
     Handle<StringPrimitive> value) {
   auto obj = runtime.makeAFixed<JSString>(
       runtime, value, runtime.stringPrototype, runtime.classJSString);
-
-  auto selfHandle = JSObjectInit::initToHandle(runtime, obj);
+  struct : public Locals {
+    PinnedValue<JSString> self;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.self = JSObjectInit::initToPseudoHandle(runtime, obj);
 
   PropertyFlags pf;
   pf.writable = 0;
@@ -55,7 +58,7 @@ CallResult<Handle<JSString>> JSString::create(
 
   if (LLVM_UNLIKELY(
           JSObject::defineNewOwnProperty(
-              selfHandle,
+              lv.self,
               runtime,
               Predefined::getSymbolID(Predefined::length),
               pf,
@@ -63,10 +66,10 @@ CallResult<Handle<JSString>> JSString::create(
     return ExecutionStatus::EXCEPTION;
   }
 
-  return selfHandle;
+  return createPseudoHandle(*lv.self);
 }
 
-CallResult<Handle<JSString>> JSString::create(
+CallResult<PseudoHandle<JSString>> JSString::create(
     Runtime &runtime,
     Handle<StringPrimitive> value,
     Handle<JSObject> parentHandle) {
@@ -75,13 +78,17 @@ CallResult<Handle<JSString>> JSString::create(
   return create(runtime, value, parentHandle, clazzHandle);
 }
 
-CallResult<Handle<JSString>> JSString::create(
+CallResult<PseudoHandle<JSString>> JSString::create(
     Runtime &runtime,
     Handle<StringPrimitive> value,
     Handle<JSObject> prototype,
     Handle<HiddenClass> clazz) {
   auto obj = runtime.makeAFixed<JSString>(runtime, value, prototype, clazz);
-  auto selfHandle = JSObjectInit::initToHandle(runtime, obj);
+  struct : public Locals {
+    PinnedValue<JSString> self;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.self = JSObjectInit::initToPseudoHandle(runtime, obj);
 
   PropertyFlags pf;
   pf.writable = 0;
@@ -93,7 +100,7 @@ CallResult<Handle<JSString>> JSString::create(
 
   if (LLVM_UNLIKELY(
           JSObject::defineNewOwnProperty(
-              selfHandle,
+              lv.self,
               runtime,
               Predefined::getSymbolID(Predefined::length),
               pf,
@@ -101,7 +108,7 @@ CallResult<Handle<JSString>> JSString::create(
     return ExecutionStatus::EXCEPTION;
   }
 
-  return selfHandle;
+  return createPseudoHandle(*lv.self);
 }
 
 void JSString::setPrimitiveString(
@@ -179,18 +186,23 @@ CallResult<bool> JSString::_setOwnIndexedImpl(
 
   // Property indexes beyond the end of the string must be added as named
   // properties.
+  struct : public Locals {
+    PinnedValue<SymbolID> sym;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   PinnedHermesValue indexValue = HermesValue::encodeTrustedNumberValue(index);
-  auto vr = valueToSymbolID(runtime, Handle{&indexValue});
+  auto vr = valueToSymbolID(runtime, Handle{&indexValue}, lv.sym);
   assert(
       vr != ExecutionStatus::EXCEPTION &&
       "valueToIdentifier() failed for uint32_t value");
+  (void)vr;
 
   // Can't call defineOwnComputedPrimitive because it would infinitely recurse
   // calling JSString::_setOwnIndexedImpl.
   return JSObject::defineOwnPropertyInternal(
       selfHandle,
       runtime,
-      **vr,
+      *lv.sym,
       DefinePropertyFlags::getDefaultNewPropertyFlags(),
       valueHandle);
 }
@@ -247,8 +259,7 @@ CallResult<HermesValue> JSStringIterator::nextElement(
   // 4. Let s be the value of the [[IteratedString]] internal slot of O.
   if (!self->iteratedString_) {
     // 5. If s is undefined, return CreateIterResultObject(undefined, true).
-    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true)
-        .getHermesValue();
+    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true);
   }
 
   struct : public Locals {
@@ -270,8 +281,7 @@ CallResult<HermesValue> JSStringIterator::nextElement(
     // undefined.
     self->iteratedString_.setNull(runtime.getHeap());
     // 8b. Return CreateIterResultObject(undefined, true).
-    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true)
-        .getHermesValue();
+    return createIterResultObject(runtime, Runtime::getUndefinedValue(), true);
   }
 
   // 9. Let first be the code unit value at index position in s.
@@ -304,8 +314,7 @@ CallResult<HermesValue> JSStringIterator::nextElement(
   self->nextIndex_ = position + lv.resultString->getStringLength();
 
   // 14. Return CreateIterResultObject(resultString, false).
-  return createIterResultObject(runtime, lv.resultString, false)
-      .getHermesValue();
+  return createIterResultObject(runtime, lv.resultString, false);
 }
 
 //===----------------------------------------------------------------------===//
@@ -330,7 +339,7 @@ void JSBigIntBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.addField(&self->primitiveValue_);
 }
 
-Handle<JSBigInt> JSBigInt::create(
+PseudoHandle<JSBigInt> JSBigInt::create(
     Runtime &runtime,
     Handle<BigIntPrimitive> value,
     Handle<JSObject> parentHandle) {
@@ -339,7 +348,7 @@ Handle<JSBigInt> JSBigInt::create(
   auto obj =
       runtime.makeAFixed<JSBigInt>(runtime, value, parentHandle, clazzHandle);
 
-  return JSObjectInit::initToHandle(runtime, obj);
+  return JSObjectInit::initToPseudoHandle(runtime, obj);
 }
 
 //===----------------------------------------------------------------------===//

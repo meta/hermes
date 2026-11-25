@@ -8,8 +8,10 @@
 #define DEBUG_TYPE "identtable"
 #include "hermes/VM/IdentifierTable.h"
 
+#include "hermes/Support/Conversions.h"
 #include "hermes/Support/UTF8.h"
 #include "hermes/VM/CallResult.h"
+#include "hermes/VM/Operations.h"
 #include "hermes/VM/StringBuilder.h"
 #include "hermes/VM/StringPrimitive.h"
 #include "hermes/VM/StringView.h"
@@ -36,28 +38,6 @@ IdentifierTable::LookupEntry::LookupEntry(
 
 IdentifierTable::IdentifierTable() {
   hashTable_.setIdentifierTable(this);
-}
-
-CallResult<Handle<SymbolID>> IdentifierTable::getSymbolHandle(
-    Runtime &runtime,
-    UTF16Ref str,
-    uint32_t hash) {
-  auto cr = getOrCreateIdentifier(
-      runtime, str, Runtime::makeNullHandle<StringPrimitive>(), hash);
-  if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
-    return ExecutionStatus::EXCEPTION;
-  return runtime.makeHandle(*cr);
-}
-
-CallResult<Handle<SymbolID>> IdentifierTable::getSymbolHandle(
-    Runtime &runtime,
-    ASCIIRef str,
-    uint32_t hash) {
-  auto cr = getOrCreateIdentifier(
-      runtime, str, Runtime::makeNullHandle<StringPrimitive>(), hash);
-  if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
-    return ExecutionStatus::EXCEPTION;
-  return runtime.makeHandle(*cr);
 }
 
 CallResult<SymbolID>
@@ -98,25 +78,31 @@ SymbolID IdentifierTable::registerLazyIdentifier(
   return registerLazyIdentifierImpl(runtime, str, hash);
 }
 
-CallResult<Handle<SymbolID>> IdentifierTable::getSymbolHandleFromPrimitive(
+ExecutionStatus IdentifierTable::getSymbolFromPrimitive(
     Runtime &runtime,
-    PseudoHandle<StringPrimitive> str) {
+    PseudoHandle<StringPrimitive> str,
+    MutableHandle<SymbolID> out) {
   assert(str && "null string primitive");
   if (str->isUniqued()) {
     // If the string was already uniqued, we can return directly.
-    SymbolID id = str->getUniqueID(runtime);
-    return runtime.makeHandle(id);
+    out = str->getUniqueID(runtime);
+    return ExecutionStatus::RETURNED;
   }
-  auto handle = runtime.makeHandle(std::move(str));
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.str = std::move(str);
   // Force the string primitive to flatten if it's a rope.
-  handle = StringPrimitive::ensureFlat(runtime, handle);
-  uint32_t hash = handle->getOrComputeHash();
-  auto cr = handle->isASCII()
-      ? getOrCreateIdentifier(runtime, handle->castToASCIIRef(), handle, hash)
-      : getOrCreateIdentifier(runtime, handle->castToUTF16Ref(), handle, hash);
+  lv.str = StringPrimitive::ensureFlat(runtime, lv.str);
+  uint32_t hash = lv.str->getOrComputeHash();
+  auto cr = lv.str->isASCII()
+      ? getOrCreateIdentifier(runtime, lv.str->castToASCIIRef(), lv.str, hash)
+      : getOrCreateIdentifier(runtime, lv.str->castToUTF16Ref(), lv.str, hash);
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
-  return runtime.makeHandle(*cr);
+  out = *cr;
+  return ExecutionStatus::RETURNED;
 }
 
 StringPrimitive *IdentifierTable::getStringPrim(Runtime &runtime, SymbolID id) {
@@ -130,16 +116,17 @@ StringPrimitive *IdentifierTable::getStringPrim(Runtime &runtime, SymbolID id) {
   return materializeLazyIdentifier(runtime, id);
 }
 
-StringView IdentifierTable::getStringView(Runtime &runtime, SymbolID id) const {
+StringView IdentifierTable::getStringView(
+    SymbolID id,
+    MutableHandle<StringPrimitive> storage) const {
   auto &entry = getLookupTableEntry(id);
   if (entry.isStringPrim()) {
     // The const_cast is a mechanical requirement as it's not worth it to
     // add const version constructors for Handle.
-    Handle<StringPrimitive> handle = runtime.makeHandle(
-        const_cast<StringPrimitive *>(entry.getStringPrim()));
+    storage.set(const_cast<StringPrimitive *>(entry.getStringPrim()));
     // We know that this string already exists in the identifier table,
     // and hence it's safe to call the const version of getStringView.
-    return StringPrimitive::createStringViewMustBeFlat(handle);
+    return StringPrimitive::createStringViewMustBeFlat(storage);
   }
   if (entry.isLazyASCII()) {
     return StringView(entry.getLazyASCIIRef());
@@ -147,8 +134,34 @@ StringView IdentifierTable::getStringView(Runtime &runtime, SymbolID id) const {
   return StringView(entry.getLazyUTF16Ref());
 }
 
-StringView IdentifierTable::getStringViewForDev(Runtime &runtime, SymbolID id)
-    const {
+OptValue<uint32_t> IdentifierTable::symbolToArrayIndex(SymbolID id) const {
+  auto &entry = getLookupTableEntry(id);
+  if (entry.isStringPrim()) {
+    // Identifier strings are always flat.
+    return toArrayIndex(const_cast<StringPrimitive *>(entry.getStringPrim()));
+  }
+  if (entry.isLazyASCII()) {
+    auto ref = entry.getLazyASCIIRef();
+    return hermes::toArrayIndex(ref.data(), ref.data() + ref.size());
+  }
+  auto ref = entry.getLazyUTF16Ref();
+  return hermes::toArrayIndex(ref.data(), ref.data() + ref.size());
+}
+
+bool IdentifierTable::symbolEqualsToStringPrim(
+    SymbolID id,
+    const StringPrimitive *strPrim) const {
+  auto &entry = getLookupTableEntry(id);
+  if (entry.isStringPrim())
+    return strPrim->equals(entry.getStringPrim());
+  if (entry.isLazyASCII())
+    return strPrim->equals(StringView(entry.getLazyASCIIRef()));
+  return strPrim->equals(StringView(entry.getLazyUTF16Ref()));
+}
+
+StringView IdentifierTable::getStringViewForDev(
+    SymbolID id,
+    MutableHandle<StringPrimitive> storage) const {
   if (id == SymbolID::empty()) {
     assert(false && "getStringViewForDev on empty SymbolID");
     return "<<empty>>";
@@ -161,7 +174,7 @@ StringView IdentifierTable::getStringViewForDev(Runtime &runtime, SymbolID id)
     assert(false && "getStringViewForDev on invalid SymbolID");
     return "<<invalid>>";
   }
-  return getStringView(runtime, id);
+  return getStringView(id, storage);
 }
 
 std::string IdentifierTable::convertSymbolToUTF8(SymbolID id) {

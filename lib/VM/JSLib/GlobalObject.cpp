@@ -182,6 +182,7 @@ CallResult<HermesValue> parseFloat(void *, Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<StringPrimitive> strHandle;
+    PinnedValue<StringPrimitive> specialStr;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.strHandle = std::move(*res);
@@ -204,28 +205,30 @@ CallResult<HermesValue> parseFloat(void *, Runtime &runtime) {
   // substring.
   if (LLVM_UNLIKELY(isPrefix(
           idTable.getStringView(
-              runtime, Predefined::getSymbolID(Predefined::Infinity)),
+              Predefined::getSymbolID(Predefined::Infinity), lv.specialStr),
           str16))) {
     return HermesValue::encodeTrustedNumberValue(
         std::numeric_limits<double>::infinity());
   }
   if (LLVM_UNLIKELY(isPrefix(
           idTable.getStringView(
-              runtime, Predefined::getSymbolID(Predefined::PositiveInfinity)),
+              Predefined::getSymbolID(Predefined::PositiveInfinity),
+              lv.specialStr),
           str16))) {
     return HermesValue::encodeTrustedNumberValue(
         std::numeric_limits<double>::infinity());
   }
   if (LLVM_UNLIKELY(isPrefix(
           idTable.getStringView(
-              runtime, Predefined::getSymbolID(Predefined::NegativeInfinity)),
+              Predefined::getSymbolID(Predefined::NegativeInfinity),
+              lv.specialStr),
           str16))) {
     return HermesValue::encodeTrustedNumberValue(
         -std::numeric_limits<double>::infinity());
   }
   if (LLVM_UNLIKELY(isPrefix(
           idTable.getStringView(
-              runtime, Predefined::getSymbolID(Predefined::NaN)),
+              Predefined::getSymbolID(Predefined::NaN), lv.specialStr),
           str16))) {
     return HermesValue::encodeNaNValue();
   }
@@ -286,6 +289,9 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
     PinnedValue<HiddenClass> tempClazzCreateRoot;
     PinnedValue<HiddenClass> tempClazzForPrototype;
     PinnedValue<> value;
+    PinnedValue<StringPrimitive> str;
+    PinnedValue<NativeFunction> func;
+    PinnedValue<NativeFunction> throwTypeErrorFunction;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -330,12 +336,12 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
       [&](SymbolID name, NativeFunctionPtr functionPtr, unsigned paramCount) {
         gcScope.clearAllHandles();
 
-        auto func = NativeFunction::create(
+        lv.func = NativeFunction::create(
             runtime, nullptr, functionPtr, name, paramCount);
         runtime.ignoreAllocationFailure(
             JSObject::defineOwnProperty(
-                runtime.getGlobal(), runtime, name, normalDPF, func));
-        return func;
+                runtime.getGlobal(), runtime, name, normalDPF, lv.func));
+        return createPseudoHandle(*lv.func);
       };
 
   /// Create a root HiddenClass for the given CellKind.
@@ -350,12 +356,14 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
     // Add the base number of slots.
     for (size_t i = 0; i < baseNumSlots; ++i) {
       GCScopeMarkerRAII marker{runtime};
-      auto addResult =
-          HiddenClass::reserveSlot(lv.tempClazzCreateRoot, runtime);
+      auto addResult = HiddenClass::reserveSlot(
+          lv.tempClazzCreateRoot,
+          runtime,
+          MutableHandle<HiddenClass>(lv.tempClazzCreateRoot));
       assert(
           addResult != ExecutionStatus::EXCEPTION &&
           "Could not possibly grow larger than the limit");
-      lv.tempClazzCreateRoot = *addResult->first;
+      (void)addResult;
     }
     return *lv.tempClazzCreateRoot;
   };
@@ -457,21 +465,21 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
   {
     Handle<HiddenClass> prev =
         Handle<HiddenClass>::vmcast(&runtime.classNativeFunction);
-    auto addResult = runtime.ignoreAllocationFailure(
-        HiddenClass::reserveSlot(prev, runtime));
-    runtime.classNativeFunction1Reserved = addResult.first.get();
+    runtime.ignoreAllocationFailure(
+        HiddenClass::reserveSlot(
+            prev,
+            runtime,
+            MutableHandle<HiddenClass>(runtime.classNativeFunction1Reserved)));
   }
 
   // "Forward declaration" of String.prototype. Its properties will be
   // populated later.
   lv.tempClazzForPrototype = createRootHiddenClassWithParent(
       CellKind::JSStringKind, runtime.objectPrototype, indexedStorageFlags);
+  lv.str = runtime.getPredefinedString(Predefined::emptyString);
   runtime.stringPrototype = runtime.ignoreAllocationFailure(
       JSString::create(
-          runtime,
-          runtime.getPredefinedStringHandle(Predefined::emptyString),
-          runtime.objectPrototype,
-          lv.tempClazzForPrototype));
+          runtime, lv.str, runtime.objectPrototype, lv.tempClazzForPrototype));
 
   // "Forward declaration" of BigInt.prototype. Its properties will be
   // populated later.
@@ -658,13 +666,15 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
   {
     Handle<HiddenClass> prev =
         Handle<HiddenClass>::vmcast(&runtime.classDecoratedObject);
-    auto addResult = runtime.ignoreAllocationFailure(
-        HiddenClass::reserveSlot(prev, runtime));
-    runtime.classDecoratedObject1Reserved = addResult.first.get();
+    runtime.ignoreAllocationFailure(
+        HiddenClass::reserveSlot(
+            prev,
+            runtime,
+            MutableHandle<HiddenClass>(runtime.classDecoratedObject1Reserved)));
   }
 
   // [[ThrowTypeError]].
-  auto throwTypeErrorFunction = NativeFunction::create(
+  lv.throwTypeErrorFunction = NativeFunction::create(
       runtime,
       (void *)TypeErrorKind::RestrictedProperty,
       throwTypeError,
@@ -672,13 +682,13 @@ void initGlobalObject(Runtime &runtime, const JSLibFlags &jsLibFlags) {
       0);
   runtime.ignoreAllocationFailure(
       JSObject::defineOwnProperty(
-          throwTypeErrorFunction,
+          lv.throwTypeErrorFunction,
           runtime,
           Predefined::getSymbolID(Predefined::length),
           clearConfigurableDPF,
           Runtime::getUndefinedValue()));
   runtime.throwTypeErrorAccessor = PropertyAccessor::create(
-      runtime, throwTypeErrorFunction, throwTypeErrorFunction);
+      runtime, lv.throwTypeErrorFunction, lv.throwTypeErrorFunction);
 
   // Define the 'parseInt' function.
   runtime.parseIntFunction = defineGlobalFunc(

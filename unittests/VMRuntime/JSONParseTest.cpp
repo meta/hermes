@@ -20,8 +20,7 @@ namespace {
 class RuntimeJSONUtilsTest : public RuntimeTestFixture {
  public:
   SymbolID symbolFor(std::string s) {
-    return **runtime.getIdentifierTable().getSymbolHandle(
-        runtime, createASCIIRef(s.data()));
+    return **getSymbolHandleForTest(runtime, createASCIIRef(s.data()));
   }
 };
 

@@ -258,7 +258,7 @@ class RequireContext final : public JSObject {
   }
 
   /// Create a RequireContext with domain \p domain and dirname \p dirname.
-  static Handle<RequireContext> create(
+  static PseudoHandle<RequireContext> create(
       Runtime &runtime,
       Handle<Domain> domain,
       Handle<StringPrimitive> dirname);

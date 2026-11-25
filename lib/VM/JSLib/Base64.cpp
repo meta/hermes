@@ -27,6 +27,7 @@ CallResult<HermesValue> btoa(void *, Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<StringPrimitive> string;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.string = std::move(*res);
@@ -38,8 +39,8 @@ CallResult<HermesValue> btoa(void *, Runtime &runtime) {
     return runtime.raiseError("String length to convert to base64 is too long");
   }
   SafeUInt32 outputLength{static_cast<uint32_t>(expectedLength)};
-  CallResult<StringBuilder> builder =
-      StringBuilder::createStringBuilder(runtime, outputLength, true);
+  CallResult<StringBuilder> builder = StringBuilder::createStringBuilder(
+      runtime, lv.result, outputLength, true);
   if (LLVM_UNLIKELY(builder == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -67,6 +68,7 @@ CallResult<HermesValue> atob(void *, Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<StringPrimitive> string;
+    PinnedValue<StringPrimitive> result;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   lv.string = std::move(*res);
@@ -80,7 +82,7 @@ CallResult<HermesValue> atob(void *, Runtime &runtime) {
   // The decoded bytes may be anything up to 0xFF, and the output can be large,
   // so start with UTF16 rather than risk the builder's unchecked upgrade.
   CallResult<StringBuilder> builder = StringBuilder::createStringBuilder(
-      runtime, SafeUInt32(*expectedLength), false);
+      runtime, lv.result, SafeUInt32(*expectedLength), false);
   if (LLVM_UNLIKELY(builder == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }

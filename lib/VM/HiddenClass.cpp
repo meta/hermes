@@ -261,7 +261,7 @@ HiddenClass *HiddenClass::create(
   return obj;
 }
 
-Handle<HiddenClass> HiddenClass::copyToNewDictionary(
+PseudoHandle<HiddenClass> HiddenClass::copyToNewDictionary(
     Handle<HiddenClass> selfHandle,
     Runtime &runtime,
     bool noCache) {
@@ -270,6 +270,7 @@ Handle<HiddenClass> HiddenClass::copyToNewDictionary(
 
   struct : public Locals {
     PinnedValue<JSObject> objectParent;
+    PinnedValue<HiddenClass> newClass;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
@@ -282,29 +283,29 @@ Handle<HiddenClass> HiddenClass::copyToNewDictionary(
 
   /// Allocate a new class without a parent.
   lv.objectParent = selfHandle->objectParent_.get(runtime);
-  auto newClassHandle = runtime.makeHandle<HiddenClass>(HiddenClass::create(
+  lv.newClass = HiddenClass::create(
       runtime,
       newFlags,
       Runtime::makeNullHandle<HiddenClass>(),
       lv.objectParent,
       SymbolID{},
       PropertyFlags{},
-      selfHandle->numProperties_));
+      selfHandle->numProperties_);
 
   // Optionally allocate the property map and move it to the new class.
   if (LLVM_UNLIKELY(!selfHandle->propertyMap_))
     initializeMissingPropertyMap(selfHandle, runtime);
 
-  newClassHandle->propertyMap_.set(
+  lv.newClass->propertyMap_.set(
       runtime, selfHandle->propertyMap_, runtime.getHeap());
   selfHandle->propertyMap_.setNull(runtime.getHeap());
 
   LLVM_DEBUG(
       dbgs() << "Converted Class:" << selfHandle->getDebugAllocationId()
-             << " to dictionary Class:"
-             << newClassHandle->getDebugAllocationId() << "\n");
+             << " to dictionary Class:" << lv.newClass->getDebugAllocationId()
+             << "\n");
 
-  return newClassHandle;
+  return createPseudoHandle(*lv.newClass);
 }
 
 void HiddenClass::forEachPropertyNoAlloc(
@@ -433,40 +434,40 @@ bool HiddenClass::debugIsPropertyDefined(
   return false;
 }
 
-Handle<HiddenClass> HiddenClass::deleteProperty(
+PseudoHandle<HiddenClass> HiddenClass::deleteProperty(
     Handle<HiddenClass> selfHandle,
     Runtime &runtime,
     PropertyPos pos) {
   // We convert to dictionary if we're not yet a dictionary
   // (transition to a cacheable dictionary), or if we are, but not yet
   // in no-cache mode (transition to no-cache mode).
-  auto newHandle = LLVM_UNLIKELY(!selfHandle->isDictionaryNoCache())
+  auto newClass = LLVM_UNLIKELY(!selfHandle->isDictionaryNoCache())
       ? copyToNewDictionary(selfHandle, runtime, selfHandle->isDictionary())
-      : selfHandle;
+      : createPseudoHandle(*selfHandle);
 
-  --newHandle->numProperties_;
+  --newClass->numProperties_;
 
-  DictPropertyMap::erase(newHandle->propertyMap_.get(runtime), runtime, pos);
+  // DictPropertyMap::erase does not allocate, so newClass stays valid.
+  DictPropertyMap::erase(newClass->propertyMap_.get(runtime), runtime, pos);
 
   LLVM_DEBUG(
       dbgs() << "Deleting from Class:" << selfHandle->getDebugAllocationId()
-             << " produces Class:" << newHandle->getDebugAllocationId()
-             << "\n");
+             << " produces Class:" << newClass->getDebugAllocationId() << "\n");
 
-  return newHandle;
+  return newClass;
 }
 
-CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> HiddenClass::addProperty(
+CallResult<SlotIndex> HiddenClass::addProperty(
     Handle<HiddenClass> selfHandle,
     Runtime &runtime,
     SymbolID name,
-    PropertyFlags propertyFlags) {
+    PropertyFlags propertyFlags,
+    MutableHandle<HiddenClass> out) {
   assert(propertyFlags.isValid() && "propertyFlags must be valid");
 
   if (LLVM_UNLIKELY(selfHandle->isDictionary())) {
     auto isIndexLike =
-        toArrayIndex(runtime.getIdentifierTable().getStringView(runtime, name))
-            .hasValue();
+        runtime.getIdentifierTable().symbolToArrayIndex(name).hasValue();
     selfHandle->flags_ =
         computeFlags(selfHandle->flags_, propertyFlags, isIndexLike);
 
@@ -490,7 +491,8 @@ CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> HiddenClass::addProperty(
     }
 
     ++selfHandle->numProperties_;
-    return std::make_pair(selfHandle, newSlot);
+    out.set(*selfHandle);
+    return newSlot;
   }
 
   // Do we already have a transition for that property+flags pair?
@@ -503,18 +505,34 @@ CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> HiddenClass::addProperty(
                << " transitions to existing Class:"
                << existingChild->getDebugAllocationId() << "\n");
 
-    return std::make_pair(
-        runtime.makeHandle(existingChild), selfHandle->numProperties_);
+    SlotIndex slot = selfHandle->numProperties_;
+    out.set(existingChild);
+    return slot;
   }
+
+  return addPropertySlow(selfHandle, runtime, name, propertyFlags, out);
+}
+
+CallResult<SlotIndex> HiddenClass::addPropertySlow(
+    Handle<HiddenClass> selfHandle,
+    Runtime &runtime,
+    SymbolID name,
+    PropertyFlags propertyFlags,
+    MutableHandle<HiddenClass> out) {
+  struct : public Locals {
+    PinnedValue<JSObject> objectParent;
+    PinnedValue<HiddenClass> child;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
 
   // Do we need to convert to dictionary?
   if (LLVM_UNLIKELY(selfHandle->numProperties_ == kDictionaryThreshold)) {
     // Do it.
-    auto childHandle = copyToNewDictionary(selfHandle, runtime);
+    lv.child = copyToNewDictionary(selfHandle, runtime);
+    Handle<HiddenClass> childHandle(lv.child);
 
     auto isIndexLike =
-        toArrayIndex(runtime.getIdentifierTable().getStringView(runtime, name))
-            .hasValue();
+        runtime.getIdentifierTable().symbolToArrayIndex(name).hasValue();
     childHandle->flags_ =
         computeFlags(childHandle->flags_, propertyFlags, isIndexLike);
 
@@ -529,29 +547,26 @@ CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> HiddenClass::addProperty(
             ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    return std::make_pair(childHandle, childHandle->numProperties_++);
+    SlotIndex slot = childHandle->numProperties_++;
+    out.set(*childHandle);
+    return slot;
   }
 
   auto isIndexLike =
-      toArrayIndex(runtime.getIdentifierTable().getStringView(runtime, name))
-          .hasValue();
+      runtime.getIdentifierTable().symbolToArrayIndex(name).hasValue();
   auto newFlags = computeFlags(selfHandle->flags_, propertyFlags, isIndexLike);
-
-  struct : public Locals {
-    PinnedValue<JSObject> objectParent;
-  } lv;
-  LocalsRAII lraii{runtime, &lv};
 
   // Allocate the child.
   lv.objectParent = selfHandle->objectParent_.get(runtime);
-  auto childHandle = runtime.makeHandle<HiddenClass>(HiddenClass::create(
+  lv.child = HiddenClass::create(
       runtime,
       newFlags,
       selfHandle,
       lv.objectParent,
       name,
       propertyFlags,
-      selfHandle->numProperties_ + 1));
+      selfHandle->numProperties_ + 1);
+  Handle<HiddenClass> childHandle(lv.child);
 
   // Add it to the transition table.
   auto inserted = selfHandle->transitionMap_.insertNew(
@@ -596,10 +611,12 @@ CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> HiddenClass::addProperty(
                << childHandle->getDebugAllocationId() << "\n");
   }
 
-  return std::make_pair(childHandle, selfHandle->numProperties_);
+  SlotIndex slot = selfHandle->numProperties_;
+  out.set(*childHandle);
+  return slot;
 }
 
-Handle<HiddenClass> HiddenClass::updateProperty(
+PseudoHandle<HiddenClass> HiddenClass::updateProperty(
     Handle<HiddenClass> selfHandle,
     Runtime &runtime,
     PropertyPos pos,
@@ -616,10 +633,9 @@ Handle<HiddenClass> HiddenClass::updateProperty(
         selfHandle->propertyMap_.getNonNull(runtime), pos)
         ->second.flags = newFlags;
     // If it's still cacheable, make it non-cacheable.
-    if (!selfHandle->isDictionaryNoCache()) {
-      selfHandle = copyToNewDictionary(selfHandle, runtime, /*noCache*/ true);
-    }
-    return selfHandle;
+    if (!selfHandle->isDictionaryNoCache())
+      return copyToNewDictionary(selfHandle, runtime, /*noCache*/ true);
+    return createPseudoHandle(*selfHandle);
   }
 
   assert(
@@ -629,7 +645,7 @@ Handle<HiddenClass> HiddenClass::updateProperty(
       selfHandle->propertyMap_.getNonNull(runtime), pos);
   // If the property flags didn't change, do nothing.
   if (descPair->second.flags == newFlags)
-    return selfHandle;
+    return createPseudoHandle(*selfHandle);
 
   auto name = descPair->first;
 
@@ -664,11 +680,12 @@ Handle<HiddenClass> HiddenClass::updateProperty(
     // In any case, clear our own map.
     selfHandle->propertyMap_.setNull(runtime.getHeap());
 
-    return runtime.makeHandle(existingChild);
+    return createPseudoHandle(existingChild);
   }
 
   struct : public Locals {
     PinnedValue<JSObject> objectParent;
+    PinnedValue<HiddenClass> child;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
@@ -678,18 +695,18 @@ Handle<HiddenClass> HiddenClass::updateProperty(
 
   // Allocate the child.
   lv.objectParent = selfHandle->objectParent_.get(runtime);
-  auto childHandle = runtime.makeHandle<HiddenClass>(HiddenClass::create(
+  lv.child = HiddenClass::create(
       runtime,
       computeFlags(selfHandle->flags_, newFlags, false),
       selfHandle,
       lv.objectParent,
       name,
       transitionFlags,
-      selfHandle->numProperties_));
+      selfHandle->numProperties_);
 
   // Add it to the transition table.
   auto inserted = selfHandle->transitionMap_.insertNew(
-      runtime, Transition(name, transitionFlags), childHandle);
+      runtime, Transition(name, transitionFlags), lv.child);
   (void)inserted;
   assert(
       inserted &&
@@ -699,14 +716,14 @@ Handle<HiddenClass> HiddenClass::updateProperty(
       dbgs() << "Updating property " << runtime.formatSymbolID(name)
              << " in Class:" << selfHandle->getDebugAllocationId()
              << " transitions Map to new Class:"
-             << childHandle->getDebugAllocationId() << "\n");
+             << lv.child->getDebugAllocationId() << "\n");
 
   // Move the updated map to the child class.
-  childHandle->propertyMap_.set(
+  lv.child->propertyMap_.set(
       runtime, selfHandle->propertyMap_, runtime.getHeap());
   selfHandle->propertyMap_.setNull(runtime.getHeap());
 
-  return childHandle;
+  return createPseudoHandle(*lv.child);
 }
 
 SlotIndex HiddenClass::addNewTypedPublicProperty(
@@ -731,8 +748,7 @@ SlotIndex HiddenClass::addNewTypedPublicProperty(
     propFlags.enumerable = false;
 
   auto isIndexLike =
-      toArrayIndex(runtime.getIdentifierTable().getStringView(runtime, name))
-          .hasValue();
+      runtime.getIdentifierTable().symbolToArrayIndex(name).hasValue();
   selfHandle->flags_ = computeFlags(selfHandle->flags_, propFlags, isIndexLike);
 
   SlotIndex newSlot = selfHandle->numProperties_++;
@@ -772,9 +788,8 @@ HiddenClass *HiddenClass::updateClassFlags(
         "propertyMap must exist in dictionary mode");
     selfHandle->flags_ = newFlags;
     // If it's still cacheable, make it non-cacheable.
-    if (!selfHandle->isDictionaryNoCache()) {
-      selfHandle = copyToNewDictionary(selfHandle, runtime, /*noCache*/ true);
-    }
+    if (!selfHandle->isDictionaryNoCache())
+      return copyToNewDictionary(selfHandle, runtime, /*noCache*/ true).get();
     return *selfHandle;
   }
 
@@ -859,11 +874,9 @@ HiddenClass *HiddenClass::updateObjectParentSlowPath(
       (1 << ClassFlags::kParentChangeCounterSize) - 1;
   if (LLVM_UNLIKELY(selfHandle->flags_.parentChangeCounter >= maxCounter)) {
     // Convert to dictionary mode and update the objectParent directly.
-    Handle<HiddenClass> dictionaryHandle =
-        copyToNewDictionary(selfHandle, runtime);
-    dictionaryHandle->objectParent_.set(
-        runtime, *lv.newParent, runtime.getHeap());
-    return *dictionaryHandle;
+    HiddenClass *dictionary = copyToNewDictionary(selfHandle, runtime).get();
+    dictionary->objectParent_.set(runtime, *lv.newParent, runtime.getHeap());
+    return dictionary;
   }
 
   // Check for existing transition in parentTransitionMap_.
@@ -935,7 +948,7 @@ HiddenClass *HiddenClass::seal(
         auto found =
             DictPropertyMap::find(lv.cur->propertyMap_.getNonNull(runtime), id);
         assert(found && "property not found during enumeration");
-        lv.cur = *updateProperty(lv.cur, runtime, *found, newFlags);
+        lv.cur = updateProperty(lv.cur, runtime, *found, newFlags);
       });
 
   ClassFlags sealedFlags = lv.cur->flags_;
@@ -972,21 +985,22 @@ HiddenClass *HiddenClass::freeze(
       dbgs() << "Class:" << selfHandle->getDebugAllocationId()
              << " making all read-only\n");
 
-  // Keep a handle to our initial map. The order of properties in it will
-  // remain the same as long as we are only doing property updates.
-  auto mapHandle = runtime.makeHandle(selfHandle->propertyMap_);
-
   struct : public Locals {
     PinnedValue<HiddenClass> cur;
+    PinnedValue<DictPropertyMap> map;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+
+  // Keep a handle to our initial map. The order of properties in it will
+  // remain the same as long as we are only doing property updates.
+  lv.map = selfHandle->propertyMap_.getNonNull(runtime);
 
   lv.cur = *selfHandle;
 
   // TODO: this can be made much more efficient at the expense of moving some
   // logic from updateOwnProperty() here.
   DictPropertyMap::forEachProperty(
-      mapHandle,
+      lv.map,
       runtime,
       [&runtime, &lv](SymbolID id, NamedPropertyDescriptor desc) {
         PropertyFlags newFlags = desc.flags;
@@ -1006,7 +1020,7 @@ HiddenClass *HiddenClass::freeze(
         auto found =
             DictPropertyMap::find(lv.cur->propertyMap_.get(runtime), id);
         assert(found && "property not found during enumeration");
-        lv.cur = *updateProperty(lv.cur, runtime, *found, newFlags);
+        lv.cur = updateProperty(lv.cur, runtime, *found, newFlags);
       });
 
   ClassFlags frozenFlags = lv.cur->flags_;
@@ -1028,22 +1042,26 @@ HiddenClass *HiddenClass::freeze(
   return *lv.cur;
 }
 
-Handle<HiddenClass> HiddenClass::updatePropertyFlagsWithoutTransitions(
+PseudoHandle<HiddenClass> HiddenClass::updatePropertyFlagsWithoutTransitions(
     Handle<HiddenClass> selfHandle,
     Runtime &runtime,
     PropertyFlags flagsToClear,
     PropertyFlags flagsToSet,
     OptValue<llvh::ArrayRef<SymbolID>> props) {
+  struct : public Locals {
+    PinnedValue<HiddenClass> cls;
+    PinnedValue<DictPropertyMap> map;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   // Result must be in dictionary mode, since it's a non-empty orphan.
-  MutableHandle<HiddenClass> classHandle{runtime};
   if (selfHandle->isDictionary()) {
-    classHandle = *selfHandle;
+    lv.cls = *selfHandle;
   } else {
-    classHandle = *copyToNewDictionary(selfHandle, runtime);
+    lv.cls = copyToNewDictionary(selfHandle, runtime);
   }
 
-  auto mapHandle =
-      runtime.makeHandle<DictPropertyMap>(classHandle->propertyMap_);
+  lv.map = lv.cls->propertyMap_.getNonNull(runtime);
 
   auto changeFlags = [&flagsToClear,
                       &flagsToSet](NamedPropertyDescriptor &desc) {
@@ -1055,25 +1073,26 @@ Handle<HiddenClass> HiddenClass::updatePropertyFlagsWithoutTransitions(
   if (props) {
     // Iterate over the properties that exist on the property map.
     for (auto id : *props) {
-      auto pos = DictPropertyMap::find(*mapHandle, id);
+      auto pos = DictPropertyMap::find(*lv.map, id);
       if (!pos) {
         continue;
       }
-      auto descPair = DictPropertyMap::getDescriptorPair(*mapHandle, *pos);
+      auto descPair = DictPropertyMap::getDescriptorPair(*lv.map, *pos);
       changeFlags(descPair->second);
     }
   } else {
     DictPropertyMap::forEachMutablePropertyDescriptor(
-        mapHandle, runtime, changeFlags);
+        lv.map, runtime, changeFlags);
   }
-  classHandle->flags_ = computeFlags(classHandle->flags_, flagsToSet, false);
+  lv.cls->flags_ = computeFlags(lv.cls->flags_, flagsToSet, false);
 
-  return std::move(classHandle);
+  return createPseudoHandle(*lv.cls);
 }
 
-CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> HiddenClass::reserveSlot(
+CallResult<SlotIndex> HiddenClass::reserveSlot(
     Handle<HiddenClass> selfHandle,
-    Runtime &runtime) {
+    Runtime &runtime,
+    MutableHandle<HiddenClass> out) {
   assert(
       !selfHandle->isDictionary() &&
       "Reserved slots can only be added in class mode");
@@ -1086,7 +1105,8 @@ CallResult<std::pair<Handle<HiddenClass>, SlotIndex>> HiddenClass::reserveSlot(
       selfHandle,
       runtime,
       InternalProperty::getSymbolID(index),
-      PropertyFlags{});
+      PropertyFlags{},
+      out);
 }
 
 bool HiddenClass::areAllNonConfigurable(
