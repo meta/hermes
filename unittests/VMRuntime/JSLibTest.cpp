@@ -69,7 +69,7 @@ TEST_F(JSLibTest, CreateObjectTest) {
 
   auto callRes = Callable::executeCall0(
       lv.objectCons, runtime, Runtime::getUndefinedValue(), true);
-  ASSERT_RETURNED(crtRes.getStatus());
+  ASSERT_RETURNED(callRes.getStatus());
   lv.newObj.castAndSetHermesValue<JSObject>(callRes->getHermesValue());
 
   // Make sure the prototype is correct.

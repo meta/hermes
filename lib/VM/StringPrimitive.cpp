@@ -391,8 +391,7 @@ CallResult<HermesValue> StringPrimitive::slice(
 StringView StringPrimitive::createStringView(
     Runtime &runtime,
     Handle<StringPrimitive> self) {
-  ensureFlat(runtime, self);
-  return createStringViewMustBeFlat(self);
+  return createStringViewMustBeFlat(ensureFlat(runtime, self));
 }
 
 void StringPrimitive::appendUTF16String(

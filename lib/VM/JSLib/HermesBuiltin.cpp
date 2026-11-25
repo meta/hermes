@@ -346,13 +346,15 @@ CallResult<HermesValue> hermesBuiltinCopyDataProperties(
     return target.getHermesValue();
 
   // 4. Let from be ! ToObject(source).
-  Handle<JSObject> source = untypedSource->isObject()
-      ? Handle<JSObject>::vmcast(untypedSource)
-      : [&]() {
-          lv.source.castAndSetHermesValue<JSObject>(
-              *toObject(runtime, untypedSource));
-          return Handle<JSObject>{lv.source};
-        }();
+  Handle<JSObject> source{lv.source};
+  if (untypedSource->isObject()) {
+    source = Handle<JSObject>::vmcast(untypedSource);
+  } else {
+    auto sourceRes = toObject(runtime, untypedSource);
+    if (LLVM_UNLIKELY(sourceRes == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    lv.source.castAndSetHermesValue<JSObject>(*sourceRes);
+  }
 
   // 2. Assert: excludedItems is a List of property keys.
   // In Hermes, excludedItems is represented as a JSObject, created by
