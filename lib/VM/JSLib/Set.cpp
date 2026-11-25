@@ -232,6 +232,7 @@ CallResult<HermesValue> setConstructor(void *, Runtime &runtime) {
     PinnedValue<Callable> adder;
     PinnedValue<> iterMethodHandle;
     PinnedValue<Callable> iterMethod;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   if (LLVM_LIKELY(
@@ -343,7 +344,10 @@ CallResult<HermesValue> setConstructor(void *, Runtime &runtime) {
   }
   // Slow path
   CallResult<CheckedIteratorRecord> iterRes = getCheckedIterator(
-      runtime, args.getArgHandle(0), Handle<Callable>{lv.iterMethod});
+      runtime,
+      args.getArgHandle(0),
+      lv.iterStorage,
+      Handle<Callable>{lv.iterMethod});
   if (LLVM_UNLIKELY(iterRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -561,6 +565,7 @@ CallResult<HermesValue> setPrototypeDifference(void *, Runtime &runtime) {
     PinnedValue<Callable> otherKeysMethod;
     PinnedValue<JSSet> resultSet;
     PinnedValue<> tmp;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -661,7 +666,10 @@ CallResult<HermesValue> setPrototypeDifference(void *, Runtime &runtime) {
     // otherRec.[[Keys]])
     // b. Let next be NOT-STARTED
     auto keysIterRes = getCheckedIterator(
-        runtime, other, llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
+        runtime,
+        other,
+        lv.iterStorage,
+        llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
     if (LLVM_UNLIKELY(keysIterRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -711,6 +719,7 @@ CallResult<HermesValue> setPrototypeIntersection(void *, Runtime &runtime) {
     PinnedValue<Callable> otherKeysMethod;
     PinnedValue<JSSet> resultSet;
     PinnedValue<> tmp;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   // 3. Let otherRec be ?GetSetRecord(other)
@@ -821,7 +830,10 @@ CallResult<HermesValue> setPrototypeIntersection(void *, Runtime &runtime) {
     // a. Let keysIter be ?GetIteratorFromMethod(otherRec.[[SetObject]],
     // otherRec.[[Keys]])
     auto keysIterRes = getCheckedIterator(
-        runtime, other, llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
+        runtime,
+        other,
+        lv.iterStorage,
+        llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
     if (LLVM_UNLIKELY(keysIterRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -874,6 +886,7 @@ CallResult<HermesValue> setPrototypeIsDisjointFrom(void *, Runtime &runtime) {
     PinnedValue<Callable> otherHasMethod;
     PinnedValue<Callable> otherKeysMethod;
     PinnedValue<> tmp;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -949,7 +962,10 @@ CallResult<HermesValue> setPrototypeIsDisjointFrom(void *, Runtime &runtime) {
     // a. Let keysIter be ?GetIteratorFromMethod(otherRec.[[SetObject]],
     // otherRec.[[Keys]])
     auto keysIterRes = getCheckedIterator(
-        runtime, other, llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
+        runtime,
+        other,
+        lv.iterStorage,
+        llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
     if (LLVM_UNLIKELY(keysIterRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -1059,6 +1075,7 @@ CallResult<HermesValue> setPrototypeIsSupersetOf(void *, Runtime &runtime) {
     PinnedValue<Callable> otherHasMethod;
     PinnedValue<Callable> otherKeysMethod;
     PinnedValue<> tmp;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1097,7 +1114,10 @@ CallResult<HermesValue> setPrototypeIsSupersetOf(void *, Runtime &runtime) {
   // 5. Let keysIter be ?GetIteratorFromMethod(otherRec.[[SetObject]],
   // otherRec.[[Keys]])
   auto keysIterRes = getCheckedIterator(
-      runtime, other, llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
+      runtime,
+      other,
+      lv.iterStorage,
+      llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
   if (LLVM_UNLIKELY(keysIterRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1149,6 +1169,7 @@ CallResult<HermesValue> setPrototypeSymmetricDifference(
     PinnedValue<Callable> otherKeysMethod;
     PinnedValue<JSSet> resultSet;
     PinnedValue<> tmp;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1205,7 +1226,10 @@ CallResult<HermesValue> setPrototypeSymmetricDifference(
   // 4. Let keysIters be ?GetIteratorFromMethod(otherRec.[[SetObject]],
   // otherRec.[[Keys]])
   auto keysIterRes = getCheckedIterator(
-      runtime, other, llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
+      runtime,
+      other,
+      lv.iterStorage,
+      llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
   if (LLVM_UNLIKELY(keysIterRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1281,6 +1305,7 @@ CallResult<HermesValue> setPrototypeUnion(void *, Runtime &runtime) {
     PinnedValue<Callable> otherKeysMethod;
     PinnedValue<JSSet> resultSet;
     PinnedValue<> tmp;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1331,7 +1356,10 @@ CallResult<HermesValue> setPrototypeUnion(void *, Runtime &runtime) {
   // 4. Let keysIter be ?GetIteratorFromMethod(otherRec.[[SetObject]],
   // otherRec.[[Keys]])
   auto keysIterRes = getCheckedIterator(
-      runtime, other, llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
+      runtime,
+      other,
+      lv.iterStorage,
+      llvh::Optional<Handle<Callable>>(lv.otherKeysMethod));
   if (LLVM_UNLIKELY(keysIterRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }

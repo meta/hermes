@@ -442,20 +442,21 @@ CallResult<HermesValue> addEntriesFromIterable(
   assert(
       !iterable->isUndefined() && !iterable->isNull() &&
       "iterable cannot be undefined or null");
+  struct : public Locals {
+    PinnedValue<JSObject> nextItem;
+    PinnedValue<> key;
+    PinnedValue<> value;
+    CheckedIteratorRecordStorage iterStorage;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // 3. Let iteratorRecord be ? GetIterator(iterable).
   CallResult<CheckedIteratorRecord> iterRes =
-      getCheckedIterator(runtime, iterable, method);
+      getCheckedIterator(runtime, iterable, lv.iterStorage, method);
   if (LLVM_UNLIKELY(iterRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
   auto iteratorRecord = *iterRes;
 
-  struct : public Locals {
-    PinnedValue<JSObject> nextItem;
-    PinnedValue<> key;
-    PinnedValue<> value;
-  } lv;
-  LocalsRAII lraii(runtime, &lv);
   auto marker = gcScope.createMarker();
 
   // 4. Repeat,

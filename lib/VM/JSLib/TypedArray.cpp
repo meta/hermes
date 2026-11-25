@@ -112,6 +112,7 @@ CallResult<HermesValue> iterableToArrayLike(Runtime &runtime, Handle<> items) {
     PinnedValue<> usingIterator;
     PinnedValue<> nextValue;
     PinnedValue<JSArray> A;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
   GCScope gcScope{runtime};
@@ -164,7 +165,10 @@ CallResult<HermesValue> iterableToArrayLike(Runtime &runtime, Handle<> items) {
 
   // 3. Let iteratorRecord be ? GetIterator(items, sync, usingIterator).
   auto iterRes = getCheckedIterator(
-      runtime, items, Handle<Callable>::vmcast(&lv.usingIterator));
+      runtime,
+      items,
+      lv.iterStorage,
+      Handle<Callable>::vmcast(&lv.usingIterator));
   if (LLVM_UNLIKELY(iterRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -953,7 +957,7 @@ CallResult<HermesValue> typedArrayFrom(void *, Runtime &runtime) {
     return runtime.raiseTypeError(
         "Cannot invoke when the this is not a constructor");
   }
-  auto C = Handle<Callable>::vmcast(runtime, args.getThisArg());
+  auto C = Handle<Callable>::vmcast(args.getThisHandle());
   // 3. If mapfn was supplied and mapfn is not undefined, then
   auto mapfn = Handle<Callable>::dyn_vmcast(args.getArgHandle(1));
   if (!mapfn) {

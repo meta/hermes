@@ -257,13 +257,16 @@ CallResult<PseudoHandle<JSObject>> JSProxy::getPrototypeOf(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
+    PinnedValue<JSObject> handlerProto;
     PinnedValue<Callable> trap;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes =
       detail::findTrap(selfHandle, runtime, Predefined::getPrototypeOf);
   if (LLVM_UNLIKELY(trapRes == ExecutionStatus::EXCEPTION)) {
@@ -273,11 +276,11 @@ CallResult<PseudoHandle<JSObject>> JSProxy::getPrototypeOf(
   // 6. If trap is undefined, then
   if (!*lv.trap) {
     //   a. Return ? target.[[GetPrototypeOf]](P).
-    return JSObject::getPrototypeOf(target, runtime);
+    return JSObject::getPrototypeOf(Handle<JSObject>(lv.target), runtime);
   }
   // 7. Let handlerProto be ? Call(trap, handler, « target »).
   CallResult<PseudoHandle<>> handlerProtoRes = Callable::executeCall1(
-      lv.trap, runtime, handler, target.getHermesValue());
+      lv.trap, runtime, lv.handler, lv.target.getHermesValue());
   if (handlerProtoRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -287,27 +290,27 @@ CallResult<PseudoHandle<JSObject>> JSProxy::getPrototypeOf(
     return runtime.raiseTypeError(
         "getPrototypeOf trap result is neither Object nor Null");
   }
-  Handle<JSObject> handlerProto =
-      runtime.makeHandle(dyn_vmcast<JSObject>(handlerProtoRes->get()));
+  lv.handlerProto = dyn_vmcast<JSObject>(handlerProtoRes->get());
 
   // 9. Let extensibleTarget be ? IsExtensible(target).
-  CallResult<bool> extensibleRes = JSObject::isExtensible(target, runtime);
+  CallResult<bool> extensibleRes =
+      JSObject::isExtensible(Handle<JSObject>(lv.target), runtime);
   if (extensibleRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   // 10. If extensibleTarget is true, return handlerProto.
   if (*extensibleRes) {
-    return createPseudoHandle(*handlerProto);
+    return createPseudoHandle(*lv.handlerProto);
   }
   // 11. Let targetProto be ? target.[[GetPrototypeOf]]().
   CallResult<PseudoHandle<JSObject>> targetProtoRes =
-      JSObject::getPrototypeOf(target, runtime);
+      JSObject::getPrototypeOf(Handle<JSObject>(lv.target), runtime);
   if (targetProtoRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   // 12. If SameValue(handlerProto, targetProto) is false, throw a TypeError
   // exception.
-  if (handlerProto.get() != targetProtoRes->get()) {
+  if (lv.handlerProto.get() != targetProtoRes->get()) {
     return runtime.raiseTypeError(
         "getPrototypeOf trap result is not the same as non-extensible target getPrototypeOf");
   }
@@ -325,13 +328,15 @@ CallResult<bool> JSProxy::setPrototypeOf(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes =
       detail::findTrap(selfHandle, runtime, Predefined::setPrototypeOf);
   if (trapRes == ExecutionStatus::EXCEPTION) {
@@ -341,15 +346,15 @@ CallResult<bool> JSProxy::setPrototypeOf(
   // 7. If trap is undefined, then
   if (!*lv.trap) {
     //   a. Return ? target.[[SetPrototypeOf]](V).
-    return JSObject::setParent(*target, runtime, *parent);
+    return JSObject::setParent(*lv.target, runtime, *parent);
   }
   // 8. Let booleanTrapResult be ToBoolean(? Call(trap, handler, « target, V
   // »)).
   CallResult<PseudoHandle<>> booleanTrapRes = Callable::executeCall2(
       lv.trap,
       runtime,
-      handler,
-      target.getHermesValue(),
+      lv.handler,
+      lv.target.getHermesValue(),
       *parent ? parent.getHermesValue() : HermesValue::encodeNullValue());
   if (booleanTrapRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -359,7 +364,8 @@ CallResult<bool> JSProxy::setPrototypeOf(
     return false;
   }
   // 10. Let extensibleTarget be ? IsExtensible(target).
-  CallResult<bool> extensibleRes = JSObject::isExtensible(target, runtime);
+  CallResult<bool> extensibleRes =
+      JSObject::isExtensible(Handle<JSObject>(lv.target), runtime);
   if (extensibleRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -369,7 +375,7 @@ CallResult<bool> JSProxy::setPrototypeOf(
   }
   // 12. Let targetProto be ? target.[[GetPrototypeOf]]().
   CallResult<PseudoHandle<JSObject>> targetProtoRes =
-      JSObject::getPrototypeOf(target, runtime);
+      JSObject::getPrototypeOf(Handle<JSObject>(lv.target), runtime);
   if (targetProtoRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -391,13 +397,15 @@ CallResult<bool> JSProxy::isExtensible(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes =
       detail::findTrap(selfHandle, runtime, Predefined::isExtensible);
   if (trapRes == ExecutionStatus::EXCEPTION) {
@@ -407,18 +415,19 @@ CallResult<bool> JSProxy::isExtensible(
   // 6. If trap is undefined, then
   if (!*lv.trap) {
     //   a. Return ? target.[[IsExtensible]]().
-    return JSObject::isExtensible(target, runtime);
+    return JSObject::isExtensible(Handle<JSObject>(lv.target), runtime);
   }
   // 7. Let booleanTrapResult be ToBoolean(? Call(trap, handler, « target »)).
   CallResult<PseudoHandle<>> res = Callable::executeCall1(
-      lv.trap, runtime, handler, target.getHermesValue());
+      lv.trap, runtime, lv.handler, lv.target.getHermesValue());
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   bool booleanTrapResult = toBoolean(res->get());
   res->invalidate();
   // 8. Let targetResult be ? target.[[IsExtensible]]().
-  CallResult<bool> targetRes = JSObject::isExtensible(target, runtime);
+  CallResult<bool> targetRes =
+      JSObject::isExtensible(Handle<JSObject>(lv.target), runtime);
   if (targetRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -442,13 +451,15 @@ CallResult<bool> JSProxy::preventExtensions(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes =
       detail::findTrap(selfHandle, runtime, Predefined::preventExtensions);
   if (trapRes == ExecutionStatus::EXCEPTION) {
@@ -462,18 +473,19 @@ CallResult<bool> JSProxy::preventExtensions(
     // the underlying exception to bubble up.  If !getThrowOnError, then
     // we don't get a chance to raise a particular exception anyway.  So in
     // either case, just return the CallResult.
-    return JSObject::preventExtensions(target, runtime, opFlags);
+    return JSObject::preventExtensions(lv.target, runtime, opFlags);
   }
   // 7. Let booleanTrapResult be ToBoolean(? Call(trap, handler, « target »)).
   CallResult<PseudoHandle<>> res = Callable::executeCall1(
-      lv.trap, runtime, handler, target.getHermesValue());
+      lv.trap, runtime, lv.handler, lv.target.getHermesValue());
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   bool booleanTrapResult = toBoolean(res->get());
   if (booleanTrapResult) {
     // a. Let targetIsExtensible be ? target.[[IsExtensible]]().
-    CallResult<bool> targetRes = JSObject::isExtensible(target, runtime);
+    CallResult<bool> targetRes =
+        JSObject::isExtensible(Handle<JSObject>(lv.target), runtime);
     if (targetRes == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -502,13 +514,19 @@ CallResult<bool> JSProxy::getOwnProperty(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
+    PinnedValue<> trapResultObj;
+    PinnedValue<> targetValueOrAccessor;
+    PinnedValue<> resultValueOrAccessor;
+    PinnedValue<JSObject> trapResult;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes = detail::findTrap(
       selfHandle, runtime, Predefined::getOwnPropertyDescriptor);
   if (trapRes == ExecutionStatus::EXCEPTION) {
@@ -520,9 +538,9 @@ CallResult<bool> JSProxy::getOwnProperty(
     //   a. Return ? target.[[GetOwnProperty]](P).
     return valueOrAccessor
         ? JSObject::getOwnComputedDescriptor(
-              target, runtime, nameValHandle, desc, *valueOrAccessor)
+              lv.target, runtime, nameValHandle, desc, *valueOrAccessor)
         : JSObject::getOwnComputedDescriptor(
-              target, runtime, nameValHandle, desc);
+              lv.target, runtime, nameValHandle, desc);
   }
   // 8. Let trapResultObj be ? Call(trap, handler, « target, P »).
   // 9. If Type(trapResultObj) is neither Object nor Undefined, throw a
@@ -530,23 +548,22 @@ CallResult<bool> JSProxy::getOwnProperty(
   CallResult<PseudoHandle<>> trapResultRes = Callable::executeCall2(
       lv.trap,
       runtime,
-      handler,
-      target.getHermesValue(),
+      lv.handler,
+      lv.target.getHermesValue(),
       nameValHandle.getHermesValue());
   if (trapResultRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<> trapResultObj = runtime.makeHandle(std::move(*trapResultRes));
+  lv.trapResultObj = std::move(*trapResultRes);
   // 10. Let targetDesc be ? target.[[GetOwnProperty]](P).
   ComputedPropertyDescriptor targetDesc;
-  MutableHandle<> targetValueOrAccessor{runtime};
   CallResult<bool> targetDescRes = JSObject::getOwnComputedDescriptor(
-      target, runtime, nameValHandle, targetDesc, targetValueOrAccessor);
+      lv.target, runtime, nameValHandle, targetDesc, lv.targetValueOrAccessor);
   if (targetDescRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   // 11. If trapResultObj is undefined, then
-  if (trapResultObj->isUndefined()) {
+  if (lv.trapResultObj->isUndefined()) {
     //   a. If targetDesc is undefined, return undefined.
     if (!*targetDescRes) {
       return false;
@@ -558,7 +575,8 @@ CallResult<bool> JSProxy::getOwnProperty(
           "getOwnPropertyDescriptor trap result is not configurable");
     }
     //   c. Let extensibleTarget be ? IsExtensible(target).
-    CallResult<bool> extensibleRes = JSObject::isExtensible(target, runtime);
+    CallResult<bool> extensibleRes =
+        JSObject::isExtensible(Handle<JSObject>(lv.target), runtime);
     if (extensibleRes == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -566,30 +584,30 @@ CallResult<bool> JSProxy::getOwnProperty(
     //   e. If extensibleTarget is false, throw a TypeError exception.
     if (!*extensibleRes) {
       return runtime.raiseTypeErrorForValue(
-          target, " is not extensible (getOwnPropertyDescriptor target)");
+          lv.target, " is not extensible (getOwnPropertyDescriptor target)");
     }
     //   f. Return undefined.
     return false;
-  } else if (!trapResultObj->isObject()) {
+  } else if (!lv.trapResultObj->isObject()) {
     // 9. If Type(trapResultObj) is neither Object nor Undefined, throw a
     // TypeError exception.
     return runtime.raiseTypeErrorForValue(
-        trapResultObj,
+        lv.trapResultObj,
         " is not undefined or Object (Proxy getOwnPropertyDescriptor)");
   }
   // 12. Let extensibleTarget be ? IsExtensible(target).
-  CallResult<bool> extensibleRes = JSObject::isExtensible(target, runtime);
+  CallResult<bool> extensibleRes =
+      JSObject::isExtensible(Handle<JSObject>(lv.target), runtime);
   if (extensibleRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   // 13. Let resultDesc be ? ToPropertyDescriptor(trapResultObj).
   // 14. Call CompletePropertyDescriptor(resultDesc).
   DefinePropertyFlags resultDesc;
-  MutableHandle<> resultValueOrAccessor{runtime};
-  Handle<JSObject> trapResult = runtime.makeHandle<JSObject>(*trapResultObj);
+  lv.trapResult.castAndSetHermesValue<JSObject>(lv.trapResultObj.get());
   if (LLVM_UNLIKELY(
           toPropertyDescriptor(
-              trapResult, runtime, resultDesc, resultValueOrAccessor) ==
+              lv.trapResult, runtime, resultDesc, lv.resultValueOrAccessor) ==
           ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -614,9 +632,9 @@ CallResult<bool> JSProxy::getOwnProperty(
             isCompatiblePropertyDescriptor(
                 runtime,
                 resultDesc,
-                resultValueOrAccessor,
+                lv.resultValueOrAccessor,
                 targetDesc,
-                targetValueOrAccessor) == ExecutionStatus::EXCEPTION)) {
+                lv.targetValueOrAccessor) == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
   }
@@ -658,7 +676,7 @@ CallResult<bool> JSProxy::getOwnProperty(
     desc.flags.accessor = true;
   }
   if (valueOrAccessor) {
-    *valueOrAccessor = std::move(resultValueOrAccessor);
+    valueOrAccessor->set(lv.resultValueOrAccessor.get());
   }
   return true;
 }
@@ -676,13 +694,16 @@ CallResult<bool> JSProxy::defineOwnProperty(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
+    PinnedValue<> targetDescValueOrAccessor;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes =
       detail::findTrap(selfHandle, runtime, Predefined::defineProperty);
   if (trapRes == ExecutionStatus::EXCEPTION) {
@@ -693,7 +714,7 @@ CallResult<bool> JSProxy::defineOwnProperty(
   if (!*lv.trap) {
     //   a. Return ? target.[[GetOwnProperty]](P).
     return JSObject::defineOwnComputedPrimitive(
-        target, runtime, nameValHandle, dpFlags, valueOrAccessor, opFlags);
+        lv.target, runtime, nameValHandle, dpFlags, valueOrAccessor, opFlags);
   }
   // 8. Let descObj be FromPropertyDescriptor(Desc).
   CallResult<HermesValue> descObjRes =
@@ -706,8 +727,8 @@ CallResult<bool> JSProxy::defineOwnProperty(
   CallResult<PseudoHandle<>> trapResultRes = Callable::executeCall3(
       lv.trap,
       runtime,
-      handler,
-      target.getHermesValue(),
+      lv.handler,
+      lv.target.getHermesValue(),
       nameValHandle.getHermesValue(),
       *descObjRes);
   if (trapResultRes == ExecutionStatus::EXCEPTION) {
@@ -724,14 +745,18 @@ CallResult<bool> JSProxy::defineOwnProperty(
   }
   // 11. Let targetDesc be ? target.[[GetOwnProperty]](P).
   ComputedPropertyDescriptor targetDesc;
-  MutableHandle<> targetDescValueOrAccessor{runtime};
   CallResult<bool> targetDescRes = JSObject::getOwnComputedDescriptor(
-      target, runtime, nameValHandle, targetDesc, targetDescValueOrAccessor);
+      lv.target,
+      runtime,
+      nameValHandle,
+      targetDesc,
+      lv.targetDescValueOrAccessor);
   if (targetDescRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   // 12. Let extensibleTarget be ? IsExtensible(target).
-  CallResult<bool> extensibleRes = JSObject::isExtensible(target, runtime);
+  CallResult<bool> extensibleRes =
+      JSObject::isExtensible(Handle<JSObject>(lv.target), runtime);
   if (extensibleRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -762,7 +787,7 @@ CallResult<bool> JSProxy::defineOwnProperty(
                 dpFlags,
                 valueOrAccessor,
                 targetDesc,
-                targetDescValueOrAccessor) == ExecutionStatus::EXCEPTION)) {
+                lv.targetDescValueOrAccessor) == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
     //   b. If settingConfigFalse is true and targetDesc.[[Configurable]] is
@@ -854,13 +879,16 @@ CallResult<bool> JSProxy::hasNamed(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
+    PinnedValue<> name;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes = detail::findTrap(selfHandle, runtime, Predefined::has);
   if (trapRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -869,16 +897,11 @@ CallResult<bool> JSProxy::hasNamed(
   // 7. If trap is undefined, then
   if (!*lv.trap) {
     //   a. Return ? target.[[HasProperty]](P, Receiver).
-    return JSObject::hasNamed(target, runtime, name);
+    return JSObject::hasNamed(lv.target, runtime, name);
   }
-  return hasWithTrap(
-      runtime,
-      runtime.makeHandle(
-          HermesValue::encodeStringValue(
-              runtime.getStringPrimFromSymbolID(name))),
-      lv.trap,
-      handler,
-      target);
+  lv.name =
+      HermesValue::encodeStringValue(runtime.getStringPrimFromSymbolID(name));
+  return hasWithTrap(runtime, lv.name, lv.trap, lv.handler, lv.target);
 }
 
 CallResult<bool> JSProxy::hasComputed(
@@ -891,13 +914,15 @@ CallResult<bool> JSProxy::hasComputed(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes = detail::findTrap(selfHandle, runtime, Predefined::has);
   if (trapRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -906,9 +931,9 @@ CallResult<bool> JSProxy::hasComputed(
   if (!*lv.trap) {
     // 7. If trap is undefined, then
     //   a. Return ? target.[[HasProperty]](P, Receiver).
-    return JSObject::hasComputed(target, runtime, nameValHandle);
+    return JSObject::hasComputed(lv.target, runtime, nameValHandle);
   }
-  return hasWithTrap(runtime, nameValHandle, lv.trap, handler, target);
+  return hasWithTrap(runtime, nameValHandle, lv.trap, lv.handler, lv.target);
 }
 
 namespace {
@@ -922,6 +947,11 @@ CallResult<PseudoHandle<>> getWithTrap(
     Handle<JSObject> target,
     Handle<> receiver) {
   // 1. Assert: IsPropertyKey(P) is true.
+  struct : public Locals {
+    PinnedValue<> trapResult;
+    PinnedValue<> targetValueOrAccessor;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   assert(isPropertyKey(nameValHandle) && "key is not a String or Symbol");
   // 8. Let trapResult be ? Call(trap, handler, « target, P, Receiver »).
   CallResult<PseudoHandle<>> trapResultRes = Callable::executeCall3(
@@ -934,12 +964,11 @@ CallResult<PseudoHandle<>> getWithTrap(
   if (trapResultRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<> trapResult = runtime.makeHandle(std::move(*trapResultRes));
+  lv.trapResult = std::move(*trapResultRes);
   // 9. Let targetDesc be ? target.[[GetOwnProperty]](P).
   ComputedPropertyDescriptor targetDesc;
-  MutableHandle<> targetValueOrAccessor{runtime};
   CallResult<bool> targetDescRes = JSObject::getOwnComputedDescriptor(
-      target, runtime, nameValHandle, targetDesc, targetValueOrAccessor);
+      target, runtime, nameValHandle, targetDesc, lv.targetValueOrAccessor);
   if (targetDescRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -951,7 +980,9 @@ CallResult<PseudoHandle<>> getWithTrap(
     if (!targetDesc.flags.accessor && !targetDesc.flags.writable) {
       //     i. If SameValue(trapResult, targetDesc.[[Value]]) is false, throw a
       //     TypeError exception.
-      if (!isSameValue(*trapResult, targetValueOrAccessor.getHermesValue())) {
+      if (!isSameValue(
+              lv.trapResult.getHermesValue(),
+              lv.targetValueOrAccessor.getHermesValue())) {
         return runtime.raiseTypeError(
             "target property is non-configurable and non-writable, and get trap result differs from target property value");
       }
@@ -960,15 +991,16 @@ CallResult<PseudoHandle<>> getWithTrap(
     //   is undefined, then
     //     i. If trapResult is not undefined, throw a TypeError exception.
     if (targetDesc.flags.accessor &&
-        !vmcast<PropertyAccessor>(*targetValueOrAccessor)->getter &&
-        !trapResult->isUndefined()) {
+        !vmcast<PropertyAccessor>(lv.targetValueOrAccessor.getHermesValue())
+             ->getter &&
+        !lv.trapResult->isUndefined()) {
       return runtime.raiseTypeError(
           "target property is non-configurable accessor with no getter, but get trap returned not undefined");
     }
   }
 
   // 11. Return trapResult.
-  return {trapResult};
+  return PseudoHandle<>::create(lv.trapResult.getHermesValue());
 }
 
 } // namespace
@@ -986,13 +1018,16 @@ CallResult<PseudoHandle<>> JSProxy::getNamed(
   // Make sure to retrieve the target and handler before calling findTrap, as
   // that may result in these fields being erased if the proxy is revoked in the
   // handler.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
+    PinnedValue<> name;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes = detail::findTrap(selfHandle, runtime, Predefined::get);
   if (trapRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -1001,18 +1036,14 @@ CallResult<PseudoHandle<>> JSProxy::getNamed(
   // 7. If trap is undefined, then
   if (!*lv.trap) {
     //   a. Return ? target.[[Get]](P, Receiver).
-    return JSObject::getNamedWithReceiver_RJS(target, runtime, name, receiver);
+    return JSObject::getNamedWithReceiver_RJS(
+        lv.target, runtime, name, receiver);
   }
+  lv.name = name.isUniqued()
+      ? HermesValue::encodeStringValue(runtime.getStringPrimFromSymbolID(name))
+      : HermesValue::encodeSymbolValue(name);
   return getWithTrap(
-      runtime,
-      name.isUniqued() ? runtime.makeHandle(
-                             HermesValue::encodeStringValue(
-                                 runtime.getStringPrimFromSymbolID(name)))
-                       : runtime.makeHandle(name),
-      lv.trap,
-      handler,
-      target,
-      receiver);
+      runtime, lv.name, lv.trap, lv.handler, lv.target, receiver);
 }
 
 CallResult<PseudoHandle<>> JSProxy::getComputed(
@@ -1026,13 +1057,15 @@ CallResult<PseudoHandle<>> JSProxy::getComputed(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes = detail::findTrap(selfHandle, runtime, Predefined::get);
   if (trapRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -1042,10 +1075,10 @@ CallResult<PseudoHandle<>> JSProxy::getComputed(
   if (!*lv.trap) {
     //   a. Return ? target.[[Get]](P, Receiver).
     return JSObject::getComputedWithReceiver_RJS(
-        target, runtime, nameValHandle, receiver);
+        lv.target, runtime, nameValHandle, receiver);
   }
   return getWithTrap(
-      runtime, nameValHandle, lv.trap, handler, target, receiver);
+      runtime, nameValHandle, lv.trap, lv.handler, lv.target, receiver);
 }
 
 namespace {
@@ -1060,6 +1093,10 @@ CallResult<bool> setWithTrap(
     Handle<JSObject> target,
     Handle<> receiver) {
   // 1. Assert: IsPropertyKey(P) is true.
+  struct : public Locals {
+    PinnedValue<> targetValueOrAccessor;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   assert(isPropertyKey(nameValHandle) && "key is not a String or Symbol");
   // 8. Let booleanTrapResult be ToBoolean(? Call(trap, handler, « target, P, V,
   // Receiver »)).
@@ -1080,9 +1117,8 @@ CallResult<bool> setWithTrap(
   }
   // 10. Let targetDesc be ? target.[[GetOwnProperty]](P).
   ComputedPropertyDescriptor targetDesc;
-  MutableHandle<> targetValueOrAccessor{runtime};
   CallResult<bool> targetDescRes = JSObject::getOwnComputedDescriptor(
-      target, runtime, nameValHandle, targetDesc, targetValueOrAccessor);
+      target, runtime, nameValHandle, targetDesc, lv.targetValueOrAccessor);
   if (targetDescRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1096,7 +1132,7 @@ CallResult<bool> setWithTrap(
       //     TypeError exception.
       if (!isSameValue(
               valueHandle.getHermesValue(),
-              targetValueOrAccessor.getHermesValue())) {
+              lv.targetValueOrAccessor.getHermesValue())) {
         return runtime.raiseTypeError(
             "target property is non-configurable and non-writable, and set trap value differs from target property value");
       }
@@ -1104,7 +1140,8 @@ CallResult<bool> setWithTrap(
     //   b. If IsAccessorDescriptor(targetDesc) is true, then
     //     i. If targetDesc.[[Set]] is undefined, throw a TypeError exception.
     if (targetDesc.flags.accessor &&
-        !vmcast<PropertyAccessor>(*targetValueOrAccessor)->setter) {
+        !vmcast<PropertyAccessor>(lv.targetValueOrAccessor.getHermesValue())
+             ->setter) {
       return runtime.raiseTypeError(
           "set trap called, but target property is non-configurable accessor with no setter");
     }
@@ -1129,13 +1166,16 @@ CallResult<bool> JSProxy::setNamed(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
+    PinnedValue<> name;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes = detail::findTrap(selfHandle, runtime, Predefined::set);
   if (trapRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -1145,19 +1185,13 @@ CallResult<bool> JSProxy::setNamed(
   if (!*lv.trap) {
     //   a. Return ? target.[[Set]](P, V, Receiver).
     return JSObject::putNamedWithReceiver_RJS(
-        target, runtime, name, valueHandle, receiver);
+        lv.target, runtime, name, valueHandle, receiver);
   }
+  lv.name = name.isUniqued()
+      ? HermesValue::encodeStringValue(runtime.getStringPrimFromSymbolID(name))
+      : HermesValue::encodeSymbolValue(name);
   return setWithTrap(
-      runtime,
-      name.isUniqued() ? runtime.makeHandle(
-                             HermesValue::encodeStringValue(
-                                 runtime.getStringPrimFromSymbolID(name)))
-                       : runtime.makeHandle(name),
-      valueHandle,
-      lv.trap,
-      handler,
-      target,
-      receiver);
+      runtime, lv.name, valueHandle, lv.trap, lv.handler, lv.target, receiver);
 }
 
 CallResult<bool> JSProxy::setComputed(
@@ -1173,13 +1207,15 @@ CallResult<bool> JSProxy::setComputed(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes = detail::findTrap(selfHandle, runtime, Predefined::set);
   if (trapRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -1189,10 +1225,16 @@ CallResult<bool> JSProxy::setComputed(
   if (!*lv.trap) {
     //   a. Return ? target.[[Set]](P, V, Receiver).
     return JSObject::putComputedWithReceiver_RJS(
-        target, runtime, nameValHandle, valueHandle, receiver);
+        lv.target, runtime, nameValHandle, valueHandle, receiver);
   }
   return setWithTrap(
-      runtime, nameValHandle, valueHandle, lv.trap, handler, target, receiver);
+      runtime,
+      nameValHandle,
+      valueHandle,
+      lv.trap,
+      lv.handler,
+      lv.target,
+      receiver);
 }
 
 namespace {
@@ -1205,6 +1247,10 @@ CallResult<bool> deleteWithTrap(
     Handle<JSObject> handler,
     Handle<JSObject> target) {
   // 1. Assert: IsPropertyKey(P) is true.
+  struct : public Locals {
+    PinnedValue<> targetValueOrAccessor;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   assert(isPropertyKey(nameValHandle) && "key is not a String or Symbol");
   // 8. Let booleanTrapResult be ToBoolean(? Call(trap, handler, « target, P
   // »)).
@@ -1224,9 +1270,8 @@ CallResult<bool> deleteWithTrap(
   }
   // 10. Let targetDesc be ? target.[[GetOwnProperty]](P).
   ComputedPropertyDescriptor targetDesc;
-  MutableHandle<> targetValueOrAccessor{runtime};
   CallResult<bool> targetDescRes = JSObject::getOwnComputedDescriptor(
-      target, runtime, nameValHandle, targetDesc, targetValueOrAccessor);
+      target, runtime, nameValHandle, targetDesc, lv.targetValueOrAccessor);
   if (targetDescRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1265,13 +1310,16 @@ CallResult<bool> JSProxy::deleteNamed(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
+    PinnedValue<> name;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes =
       detail::findTrap(selfHandle, runtime, Predefined::deleteProperty);
   if (trapRes == ExecutionStatus::EXCEPTION) {
@@ -1281,16 +1329,11 @@ CallResult<bool> JSProxy::deleteNamed(
   // 7. If trap is undefined, then
   if (!*lv.trap) {
     //   a. Return ? target.[[Delete]](P, Receiver).
-    return JSObject::deleteNamed(target, runtime, name);
+    return JSObject::deleteNamed(lv.target, runtime, name);
   }
-  return deleteWithTrap(
-      runtime,
-      runtime.makeHandle(
-          HermesValue::encodeStringValue(
-              runtime.getStringPrimFromSymbolID(name))),
-      lv.trap,
-      handler,
-      target);
+  lv.name =
+      HermesValue::encodeStringValue(runtime.getStringPrimFromSymbolID(name));
+  return deleteWithTrap(runtime, lv.name, lv.trap, lv.handler, lv.target);
 }
 
 CallResult<bool> JSProxy::deleteComputed(
@@ -1303,13 +1346,15 @@ CallResult<bool> JSProxy::deleteComputed(
     return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
   // Make sure to retrieve the target and handler before any JS can execute.
-  auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
   struct : public Locals {
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
     PinnedValue<Callable> trap;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  auto &slots = detail::slots(*selfHandle);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes =
       detail::findTrap(selfHandle, runtime, Predefined::deleteProperty);
   if (trapRes == ExecutionStatus::EXCEPTION) {
@@ -1319,9 +1364,9 @@ CallResult<bool> JSProxy::deleteComputed(
   // 7. If trap is undefined, then
   if (!*lv.trap) {
     //   a. Return ? target.[[Delete]](P, Receiver).
-    return JSObject::deleteComputed(target, runtime, nameValHandle);
+    return JSObject::deleteComputed(lv.target, runtime, nameValHandle);
   }
-  return deleteWithTrap(runtime, nameValHandle, lv.trap, handler, target);
+  return deleteWithTrap(runtime, nameValHandle, lv.trap, lv.handler, lv.target);
 }
 
 namespace {
@@ -1331,6 +1376,11 @@ CallResult<PseudoHandle<JSArray>> filterKeys(
     Handle<JSArray> keys,
     Runtime &runtime,
     OwnKeysFlags okFlags) {
+  struct : public Locals {
+    PinnedValue<JSArray> result;
+    PinnedValue<> elem;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   assert(
       (okFlags.getIncludeNonSymbols() || okFlags.getIncludeSymbols()) &&
       "Can't exclude symbols and strings");
@@ -1366,8 +1416,7 @@ CallResult<PseudoHandle<JSArray>> filterKeys(
   if (LLVM_UNLIKELY(resultRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<JSArray> resultHandle = runtime.makeHandle(std::move(*resultRes));
-  MutableHandle<> elemHandle{runtime};
+  lv.result = std::move(*resultRes);
   uint32_t resultIndex = 0;
   GCScopeMarkerRAII marker{runtime};
   for (uint32_t i = 0; i < len; ++i) {
@@ -1377,11 +1426,11 @@ CallResult<PseudoHandle<JSArray>> filterKeys(
                         : !okFlags.getIncludeNonSymbols()) {
       continue;
     }
-    elemHandle = elem.unboxToHV(runtime);
+    lv.elem = elem.unboxToHV(runtime);
     if (!okFlags.getIncludeNonEnumerable()) {
       ComputedPropertyDescriptor desc;
-      CallResult<bool> propRes = JSProxy::getOwnProperty(
-          selfHandle, runtime, elemHandle, desc, nullptr);
+      CallResult<bool> propRes =
+          JSProxy::getOwnProperty(selfHandle, runtime, lv.elem, desc, nullptr);
       if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
@@ -1390,8 +1439,7 @@ CallResult<PseudoHandle<JSArray>> filterKeys(
       }
     }
     if (LLVM_UNLIKELY(
-            JSArray::setElementAt(
-                resultHandle, runtime, resultIndex++, elemHandle) ==
+            JSArray::setElementAt(lv.result, runtime, resultIndex++, lv.elem) ==
             ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
   }
@@ -1399,11 +1447,11 @@ CallResult<PseudoHandle<JSArray>> filterKeys(
       (!okFlags.getIncludeNonEnumerable() || resultIndex == count) &&
       "Expected count was not correct");
   CallResult<bool> setLenRes =
-      JSArray::setLengthProperty(resultHandle, runtime, resultIndex);
+      JSArray::setLengthProperty(lv.result, runtime, resultIndex);
   if (LLVM_UNLIKELY(setLenRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  return createPseudoHandle(*resultHandle);
+  return createPseudoHandle(*lv.result);
 }
 
 } // namespace
@@ -1416,6 +1464,11 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
     PinnedValue<JSMap> map;
     PinnedValue<JSArray> targetKeys;
     PinnedValue<Callable> trap;
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
+    PinnedValue<JSObject> trapResultArray;
+    PinnedValue<JSArray> trapResult;
+    PinnedValue<> value;
   } lv;
   LocalsRAII lraii{runtime, &lv};
   GCScope gcScope{runtime};
@@ -1425,8 +1478,8 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   }
   // Make sure to retrieve the target and handler before any JS can execute.
   auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   auto trapRes = detail::findTrap(selfHandle, runtime, Predefined::ownKeys);
   if (trapRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -1439,7 +1492,7 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
         // Include everything here, so that filterKeys has a chance to
         // make observable trap calls.
         JSObject::getOwnPropertyKeys(
-            target,
+            Handle<JSObject>(lv.target),
             runtime,
             OwnKeysFlags()
                 .plusIncludeSymbols()
@@ -1453,23 +1506,22 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   }
   // 7. Let trapResultArray be ? Call(trap, handler, « target »).
   CallResult<PseudoHandle<>> trapResultArrayRes = Callable::executeCall1(
-      lv.trap, runtime, handler, target.getHermesValue());
+      lv.trap, runtime, lv.handler, lv.target.getHermesValue());
   if (trapResultArrayRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   if (!vmisa<JSObject>(trapResultArrayRes->get())) {
+    lv.value = std::move(*trapResultArrayRes);
     return runtime.raiseTypeErrorForValue(
-        runtime.makeHandle(std::move(*trapResultArrayRes)),
-        " ownKeys trap result is not an Object");
+        lv.value, " ownKeys trap result is not an Object");
   }
-  auto trapResultArray =
-      runtime.makeHandle<JSObject>(trapResultArrayRes->get());
+  lv.trapResultArray.castAndSetHermesValue<JSObject>(trapResultArrayRes->get());
   // 8. Let trapResult be ? CreateListFromArrayLike(trapResultArray, « String,
   // Symbol »)
   // 9. If trapResult contains any duplicate entries, throw a TypeError
   // exception.
   CallResult<uint64_t> countRes =
-      getArrayLikeLength_RJS(trapResultArray, runtime);
+      getArrayLikeLength_RJS(lv.trapResultArray, runtime);
   if (LLVM_UNLIKELY(countRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1482,7 +1534,7 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   if (LLVM_UNLIKELY(trapResultRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<JSArray> trapResult = runtime.makeHandle(std::move(*trapResultRes));
+  lv.trapResult = std::move(*trapResultRes);
   lv.map = JSMap::create(runtime, runtime.mapPrototype);
   if (LLVM_UNLIKELY(
           JSMap::initializeStorage(lv.map, runtime) ==
@@ -1491,40 +1543,40 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   }
   if (LLVM_UNLIKELY(
           createListFromArrayLike_RJS(
-              trapResultArray,
+              lv.trapResultArray,
               runtime,
               count,
-              [&lv, &trapResult](
-                  Runtime &runtime, uint64_t index, PseudoHandle<> value) {
-                Handle<> valHandle = runtime.makeHandle(std::move(value));
-                if (!valHandle->isString() && !valHandle->isSymbol()) {
+              [&lv](Runtime &runtime, uint64_t index, PseudoHandle<> value) {
+                lv.value = std::move(value);
+                if (!lv.value->isString() && !lv.value->isSymbol()) {
                   return runtime.raiseTypeErrorForValue(
-                      valHandle,
+                      lv.value,
                       " ownKeys trap result element is not String or Symbol");
                 }
-                if (lv.map->has(runtime, *valHandle)) {
+                if (lv.map->has(runtime, lv.value.getHermesValue())) {
                   return runtime.raiseTypeErrorForValue(
-                      "ownKeys trap result has duplicate ", valHandle, "");
+                      "ownKeys trap result has duplicate ", lv.value, "");
                 }
                 if (LLVM_UNLIKELY(
-                        JSMap::insert(lv.map, runtime, valHandle, valHandle) ==
+                        JSMap::insert(lv.map, runtime, lv.value, lv.value) ==
                         ExecutionStatus::EXCEPTION))
                   return ExecutionStatus::EXCEPTION;
                 return JSArray::setElementAt(
-                    trapResult, runtime, index, valHandle);
+                    lv.trapResult, runtime, index, lv.value);
               }) == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
 
   // 10. Let extensibleTarget be ? IsExtensible(target).
-  CallResult<bool> extensibleRes = JSObject::isExtensible(target, runtime);
+  CallResult<bool> extensibleRes =
+      JSObject::isExtensible(Handle<JSObject>(lv.target), runtime);
   if (extensibleRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   // 11. Let targetKeys be ? target.[[OwnPropertyKeys]]().
   CallResult<PseudoHandle<JSArray>> targetKeysRes =
       JSObject::getOwnPropertyKeys(
-          target,
+          Handle<JSObject>(lv.target),
           runtime,
           OwnKeysFlags()
               .plusIncludeSymbols()
@@ -1547,11 +1599,9 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
     marker.flush();
     //   a. Let desc be ? target.[[GetOwnProperty]](key).
     ComputedPropertyDescriptor desc;
-    CallResult<bool> descRes = JSObject::getOwnComputedDescriptor(
-        target,
-        runtime,
-        runtime.makeHandle(lv.targetKeys->at(runtime, i).unboxToHV(runtime)),
-        desc);
+    lv.value = lv.targetKeys->at(runtime, i).unboxToHV(runtime);
+    CallResult<bool> descRes =
+        JSObject::getOwnComputedDescriptor(lv.target, runtime, lv.value, desc);
     if (descRes == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -1567,17 +1617,18 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   // then
   if (*extensibleRes && nonConfigurable.empty()) {
     //   a. Return trapResult.
-    return filterKeys(selfHandle, trapResult, runtime, okFlags);
+    return filterKeys(selfHandle, lv.trapResult, runtime, okFlags);
   }
   // 18. Let uncheckedResultKeys be a new List which is a copy of trapResult.
   // 19. For each key that is an element of targetNonconfigurableKeys, do
   //   a. If key is not an element of uncheckedResultKeys, throw a TypeError
   //   exception. b. Remove key from uncheckedResultKeys.
-  auto inTrapResult = [&runtime, &trapResult](HermesValue value) {
-    for (uint32_t j = 0, len = JSArray::getLength(*trapResult, runtime);
+  auto inTrapResult = [&runtime, &lv](HermesValue value) {
+    for (uint32_t j = 0, len = JSArray::getLength(*lv.trapResult, runtime);
          j < len;
          ++j) {
-      if (isSameValue(value, trapResult->at(runtime, j).unboxToHV(runtime))) {
+      if (isSameValue(
+              value, lv.trapResult->at(runtime, j).unboxToHV(runtime))) {
         return true;
       }
     }
@@ -1591,7 +1642,7 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   }
   // 20. If extensibleTarget is true, return trapResult.
   if (*extensibleRes) {
-    return filterKeys(selfHandle, trapResult, runtime, okFlags);
+    return filterKeys(selfHandle, lv.trapResult, runtime, okFlags);
   }
   // 21. For each key that is an element of targetConfigurableKeys, do
   //   a. If key is not an element of uncheckedResultKeys, throw a TypeError
@@ -1609,12 +1660,12 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   }
   // 22. If uncheckedResultKeys is not empty, throw a TypeError exception.
   if (JSArray::getLength(*lv.targetKeys, runtime) !=
-      JSArray::getLength(*trapResult, runtime)) {
+      JSArray::getLength(*lv.trapResult, runtime)) {
     return runtime.raiseTypeError(
         "ownKeys target is non-extensible but trap result keys differ from target keys");
   }
   // 23. Return trapResult.
-  return filterKeys(selfHandle, trapResult, runtime, okFlags);
+  return filterKeys(selfHandle, lv.trapResult, runtime, okFlags);
 }
 
 } // namespace vm

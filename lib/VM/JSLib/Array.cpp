@@ -5587,6 +5587,7 @@ CallResult<HermesValue> arrayFrom(void *, Runtime &runtime) {
     PinnedValue<> nextValue;
     PinnedValue<> lenProp;
     PinnedValue<JSObject> arrayLike;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii{runtime, &lv};
   GCScope gcScope{runtime};
@@ -5647,6 +5648,7 @@ CallResult<HermesValue> arrayFrom(void *, Runtime &runtime) {
     auto iterRes = getCheckedIterator(
         runtime,
         args.getArgHandle(0),
+        lv.iterStorage,
         Handle<Callable>::vmcast(&lv.usingIterator));
     if (LLVM_UNLIKELY(iterRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;

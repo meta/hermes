@@ -89,6 +89,7 @@ CallResult<HermesValue> weakSetConstructor(void *, Runtime &runtime) {
     PinnedValue<JSWeakSet> self;
     PinnedValue<Callable> adder;
     PinnedValue<JSObject> next;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   if (LLVM_LIKELY(
@@ -128,7 +129,8 @@ CallResult<HermesValue> weakSetConstructor(void *, Runtime &runtime) {
     return runtime.raiseTypeError("Property 'add' for WeakSet is not callable");
   }
 
-  auto iterRes = getCheckedIterator(runtime, args.getArgHandle(0));
+  auto iterRes =
+      getCheckedIterator(runtime, args.getArgHandle(0), lv.iterStorage);
   if (LLVM_UNLIKELY(iterRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }

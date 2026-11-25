@@ -2199,6 +2199,7 @@ CallResult<HermesValue> stringPrototypeReplace(void *, Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<> replaceSymbol;
+    PinnedValue<Callable> replacer;
     PinnedValue<StringPrimitive> string;
     PinnedValue<StringPrimitive> searchString;
     PinnedValue<> callRes;
@@ -2229,10 +2230,9 @@ CallResult<HermesValue> stringPrototypeReplace(void *, Runtime &runtime) {
     //   i. Return Call(replacer, searchValue, «‍O, replaceValue»).
     if (!methodRes->getHermesValue().isUndefined()) {
       // If methodRes is not Callable, step 3a would have thrown a TypeError.
-      Handle<Callable> replacer =
-          Handle<Callable>::vmcast(runtime, methodRes->getHermesValue());
+      lv.replacer.castAndSetHermesValue<Callable>(methodRes->getHermesValue());
       return Callable::executeCall2(
-                 replacer,
+                 lv.replacer,
                  runtime,
                  searchValue,
                  O.getHermesValue(),
@@ -2351,6 +2351,7 @@ CallResult<HermesValue> stringPrototypeSearch(void *, Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<> searchSymbol;
+    PinnedValue<Callable> searcher;
     PinnedValue<StringPrimitive> string;
     PinnedValue<JSRegExp> rx;
     PinnedValue<> propValue;
@@ -2378,10 +2379,9 @@ CallResult<HermesValue> stringPrototypeSearch(void *, Runtime &runtime) {
     //   i. Return Call(searcher, regexp, «‍O»).
     if (!methodRes->getHermesValue().isUndefined()) {
       // If methodRes is not Callable, step 3a would have thrown a TypeError.
-      Handle<Callable> searcher =
-          Handle<Callable>::vmcast(runtime, methodRes->getHermesValue());
+      lv.searcher.castAndSetHermesValue<Callable>(methodRes->getHermesValue());
       return Callable::executeCall1(
-                 searcher, runtime, regexp, O.getHermesValue())
+                 lv.searcher, runtime, regexp, O.getHermesValue())
           .toCallResultHermesValue();
     }
   }
@@ -2679,6 +2679,7 @@ CallResult<HermesValue> stringPrototypeSplit(void *, Runtime &runtime) {
 
   struct : public Locals {
     PinnedValue<> splitSymbol;
+    PinnedValue<Callable> splitter;
     PinnedValue<StringPrimitive> S;
     PinnedValue<JSArray> A;
     PinnedValue<StringPrimitive> R;
@@ -2705,10 +2706,9 @@ CallResult<HermesValue> stringPrototypeSplit(void *, Runtime &runtime) {
     // b. If splitter is not undefined, then
     // i. Return ? Call(splitter, separator, «‍O, limit»).
     if (!methodRes->getHermesValue().isUndefined()) {
-      Handle<Callable> splitter =
-          Handle<Callable>::vmcast(runtime, methodRes->getHermesValue());
+      lv.splitter.castAndSetHermesValue<Callable>(methodRes->getHermesValue());
       return Callable::executeCall2(
-                 splitter,
+                 lv.splitter,
                  runtime,
                  separator,
                  O.getHermesValue(),

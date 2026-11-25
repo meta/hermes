@@ -580,6 +580,7 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
     PinnedValue<JSObject> next;
     PinnedValue<> nextValue;
     PinnedValue<> idxHandle;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -651,7 +652,8 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
   }
 
   // 3. Let iteratorRecord be ? GetIterator(spreadObj).
-  auto iteratorRecordRes = getCheckedIterator(runtime, args.getArgHandle(1));
+  auto iteratorRecordRes =
+      getCheckedIterator(runtime, args.getArgHandle(1), lv.iterStorage);
   if (LLVM_UNLIKELY(iteratorRecordRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }

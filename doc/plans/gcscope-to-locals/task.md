@@ -182,9 +182,9 @@ controller only tracks the list below. For each unit:
 
 ## Progress
 
-Track here (one line per unit, with commit):
-
-- [ ] Phase 1: (list files from the table above)
-- [ ] Phase 2: (list APIs)
-- [ ] Phase 3: JSObject.cpp / JSProxy.cpp / Operations.cpp
-- [ ] Phase 4: audit report
+- [x] Phase 1: leaf allocations (batches 1-4).
+- [x] Phase 2: handle-returning APIs, see `phase2-inventory.md`.
+- [x] Phase 3: Operations.cpp, JSProxy.cpp, JSObject.cpp.
+- [x] Phase 4: audit, see `phase4-audit.md`. 12 allocating sites remain,
+  all in `tools/`; every remaining GCScope use in lib/ include/ API/ is
+  vestigial. Deleting GCScope is a separate follow-up task.

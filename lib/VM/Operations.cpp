@@ -161,6 +161,10 @@ CallResult<HermesValue> ordinaryToPrimitive(
   assert(
       preferredType != PreferredType::NONE &&
       "OrdinaryToPrimitive requires a type hint");
+  struct : public Locals {
+    PinnedValue<> method;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
   for (int i = 0; i < 2; ++i) {
     if (preferredType == PreferredType::STRING) {
@@ -168,8 +172,8 @@ CallResult<HermesValue> ordinaryToPrimitive(
           selfHandle, runtime, Predefined::getSymbolID(Predefined::toString));
       if (propRes == ExecutionStatus::EXCEPTION)
         return ExecutionStatus::EXCEPTION;
-      if (auto funcHandle = Handle<Callable>::dyn_vmcast(
-              runtime.makeHandle(std::move(*propRes)))) {
+      lv.method = std::move(*propRes);
+      if (auto funcHandle = Handle<Callable>::dyn_vmcast(Handle<>(lv.method))) {
         auto callRes =
             funcHandle->executeCall0(funcHandle, runtime, selfHandle);
         if (callRes == ExecutionStatus::EXCEPTION)
@@ -185,8 +189,8 @@ CallResult<HermesValue> ordinaryToPrimitive(
           selfHandle, runtime, Predefined::getSymbolID(Predefined::valueOf));
       if (propRes == ExecutionStatus::EXCEPTION)
         return ExecutionStatus::EXCEPTION;
-      if (auto funcHandle = Handle<Callable>::dyn_vmcast(
-              runtime.makeHandle(std::move(*propRes)))) {
+      lv.method = std::move(*propRes);
+      if (auto funcHandle = Handle<Callable>::dyn_vmcast(Handle<>(lv.method))) {
         auto callRes =
             funcHandle->executeCall0(funcHandle, runtime, selfHandle);
         if (callRes == ExecutionStatus::EXCEPTION)
@@ -212,21 +216,23 @@ toPrimitive_RJS(Runtime &runtime, Handle<> valueHandle, PreferredType hint) {
   if (!valueHandle->isObject())
     return *valueHandle;
 
+  struct : public Locals {
+    PinnedValue<SymbolID> key;
+    PinnedValue<Callable> callable;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   // 4. Let exoticToPrim be GetMethod(input, @@toPrimitive).
-  auto exoticToPrim = getMethod(
-      runtime,
-      valueHandle,
-      runtime.makeHandle(
-          Predefined::getSymbolID(Predefined::SymbolToPrimitive)));
+  lv.key = Predefined::getSymbolID(Predefined::SymbolToPrimitive);
+  auto exoticToPrim = getMethod(runtime, valueHandle, lv.key);
   if (LLVM_UNLIKELY(exoticToPrim == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
   // 6. If exoticToPrim is not undefined, then
   if (vmisa<Callable>(exoticToPrim->getHermesValue())) {
-    auto callable = runtime.makeHandle<Callable>(
-        dyn_vmcast<Callable>(exoticToPrim->getHermesValue()));
+    lv.callable = vmcast<Callable>(exoticToPrim->getHermesValue());
     CallResult<PseudoHandle<>> resultRes = Callable::executeCall1(
-        callable,
+        lv.callable,
         runtime,
         valueHandle,
         HermesValue::encodeStringValue(runtime.getPredefinedString(
@@ -366,7 +372,12 @@ CallResult<PseudoHandle<StringPrimitive>> toString_RJS(
       if (res == ExecutionStatus::EXCEPTION) {
         return ExecutionStatus::EXCEPTION;
       }
-      return toString_RJS(runtime, runtime.makeHandle(res.getValue()));
+      struct : public Locals {
+        PinnedValue<> prim;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
+      lv.prim = res.getValue();
+      return toString_RJS(runtime, lv.prim);
     }
     case HermesValue::ETag::Symbol:
       return runtime.raiseTypeError("Cannot convert Symbol to string");
@@ -548,7 +559,12 @@ CallResult<HermesValue> toNumber_RJS(Runtime &runtime, Handle<> valueHandle) {
       if (res == ExecutionStatus::EXCEPTION) {
         return ExecutionStatus::EXCEPTION;
       }
-      return toNumber_RJS(runtime, runtime.makeHandle(res.getValue()));
+      struct : public Locals {
+        PinnedValue<> prim;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
+      lv.prim = res.getValue();
+      return toNumber_RJS(runtime, lv.prim);
     }
     case HermesValue::ETag::Str1:
     case HermesValue::ETag::Str2:
@@ -578,6 +594,10 @@ CallResult<HermesValue> toNumber_RJS(Runtime &runtime, Handle<> valueHandle) {
 
 CallResult<HermesValue> toNumeric_RJS(Runtime &runtime, Handle<> valueHandle) {
   GCScopeMarkerRAII marker{runtime};
+  struct : public Locals {
+    PinnedValue<> prim;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto primValue = toPrimitive_RJS(runtime, valueHandle, PreferredType::NUMBER);
 
   if (LLVM_UNLIKELY(primValue == ExecutionStatus::EXCEPTION)) {
@@ -588,7 +608,8 @@ CallResult<HermesValue> toNumeric_RJS(Runtime &runtime, Handle<> valueHandle) {
     return *primValue;
   }
 
-  return toNumber_RJS(runtime, runtime.makeHandle(*primValue));
+  lv.prim = *primValue;
+  return toNumber_RJS(runtime, lv.prim);
 }
 
 CallResult<HermesValue> toLength(Runtime &runtime, Handle<> valueHandle) {
@@ -608,9 +629,15 @@ CallResult<HermesValue> toLength(Runtime &runtime, Handle<> valueHandle) {
 }
 
 CallResult<HermesValue> toIndex(Runtime &runtime, Handle<> valueHandle) {
-  auto value = (valueHandle->isUndefined())
-      ? runtime.makeHandle(HermesValue::encodeTrustedNumberValue(0))
-      : valueHandle;
+  struct : public Locals {
+    PinnedValue<> num;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  Handle<> value = valueHandle;
+  if (valueHandle->isUndefined()) {
+    lv.num = HermesValue::encodeTrustedNumberValue(0);
+    value = lv.num;
+  }
   auto res = toIntegerOrInfinity(runtime, value);
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -619,9 +646,8 @@ CallResult<HermesValue> toIndex(Runtime &runtime, Handle<> valueHandle) {
   if (integerIndex < 0) {
     return runtime.raiseRangeError("A negative value cannot be an index");
   }
-  auto integerIndexHandle =
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(integerIndex));
-  res = toLength(runtime, integerIndexHandle);
+  lv.num = HermesValue::encodeTrustedNumberValue(integerIndex);
+  res = toLength(runtime, lv.num);
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -928,17 +954,25 @@ static CallResult<bool> compareBigIntAndNumber(
 #define IMPLEMENT_COMPARISON_OP(name, oper)                           \
   CallResult<bool> name(                                              \
       Runtime &runtime, Handle<> leftHandle, Handle<> rightHandle) {  \
+    struct : public Locals {                                          \
+      PinnedValue<> left;                                             \
+      PinnedValue<> right;                                            \
+    } lv;                                                             \
+    LocalsRAII lraii(runtime, &lv);                                   \
+    PinnedValue<> &left = lv.left;                                    \
+    PinnedValue<> &right = lv.right;                                  \
+                                                                      \
     auto resLeft =                                                    \
         toPrimitive_RJS(runtime, leftHandle, PreferredType::NUMBER);  \
     if (resLeft == ExecutionStatus::EXCEPTION)                        \
       return ExecutionStatus::EXCEPTION;                              \
-    MutableHandle<> left(runtime, resLeft.getValue());                \
+    left = resLeft.getValue();                                        \
                                                                       \
     auto resRight =                                                   \
         toPrimitive_RJS(runtime, rightHandle, PreferredType::NUMBER); \
     if (resRight == ExecutionStatus::EXCEPTION)                       \
       return ExecutionStatus::EXCEPTION;                              \
-    MutableHandle<> right(runtime, resRight.getValue());              \
+    right = resRight.getValue();                                      \
                                                                       \
     /* If both are strings, we must do a string comparison.*/         \
     if (left->isString() && right->isString()) {                      \
@@ -948,7 +982,7 @@ static CallResult<bool> compareBigIntAndNumber(
     if (left->isBigInt() && right->isString()) {                      \
       return compareBigIntAndString(                                  \
           runtime,                                                    \
-          Handle<BigIntPrimitive>::vmcast(left),                      \
+          Handle<BigIntPrimitive>::vmcast(Handle<>(left)),            \
           right,                                                      \
           [](int result) { return result oper 0; });                  \
     }                                                                 \
@@ -956,7 +990,7 @@ static CallResult<bool> compareBigIntAndNumber(
     if (left->isString() && right->isBigInt()) {                      \
       return compareBigIntAndString(                                  \
           runtime,                                                    \
-          Handle<BigIntPrimitive>::vmcast(right),                     \
+          Handle<BigIntPrimitive>::vmcast(Handle<>(right)),           \
           left,                                                       \
           [](int result) { return -result oper 0; });                 \
     }                                                                 \
@@ -980,7 +1014,7 @@ static CallResult<bool> compareBigIntAndNumber(
     if (left->isBigInt() && right->isNumber()) {                      \
       return compareBigIntAndNumber(                                  \
           runtime,                                                    \
-          Handle<BigIntPrimitive>::vmcast(left),                      \
+          Handle<BigIntPrimitive>::vmcast(Handle<>(left)),            \
           right->getNumber(),                                         \
           [](int result) { return result oper 0; });                  \
     }                                                                 \
@@ -989,7 +1023,7 @@ static CallResult<bool> compareBigIntAndNumber(
         "expecting one number and one bigint");                       \
     return compareBigIntAndNumber(                                    \
         runtime,                                                      \
-        Handle<BigIntPrimitive>::vmcast(right),                       \
+        Handle<BigIntPrimitive>::vmcast(Handle<>(right)),             \
         left->getNumber(),                                            \
         [](int result) { return -result oper 0; });                   \
   }
@@ -1072,8 +1106,15 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
     }
   }
 
-  MutableHandle<> x{runtime, xHandle.get()};
-  MutableHandle<> y{runtime, yHandle.get()};
+  struct : public Locals {
+    PinnedValue<> x;
+    PinnedValue<> y;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  PinnedValue<> &x = lv.x;
+  PinnedValue<> &y = lv.y;
+  x = xHandle.get();
+  y = yHandle.get();
 
   while (true) {
     // Combine tags for use in the switch statement. Use NativeValueTag as a
@@ -1143,12 +1184,14 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
       // comparison x == ! ToNumber(y).
       CASE_S_M(NUMBER_TAG, Str) {
         return x->getNumber() ==
-            stringToNumber(runtime, Handle<StringPrimitive>::vmcast(y));
+            stringToNumber(
+                   runtime, Handle<StringPrimitive>::vmcast(Handle<>(y)));
       }
       // 5. If Type(x) is String and Type(y) is Number, return the result of the
       // comparison ! ToNumber(x) == y.
       CASE_M_S(Str, NUMBER_TAG) {
-        return stringToNumber(runtime, Handle<StringPrimitive>::vmcast(x)) ==
+        return stringToNumber(
+                   runtime, Handle<StringPrimitive>::vmcast(Handle<>(x))) ==
             y->getNumber();
       }
       // 6. If Type(x) is BigInt and Type(y) is String, then
@@ -1171,7 +1214,11 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
       // 7. If Type(x) is String and Type(y) is BigInt, return the result of the
       // comparison y == x.
       CASE_M_M(Str, BigInt) {
-        std::swap(x, y);
+        {
+          HermesValue tmp = x.getHermesValue();
+          x = y.getHermesValue();
+          y = tmp;
+        }
         break;
       }
       // 8. If Type(x) is Boolean, return the result of the comparison !
@@ -1183,7 +1230,8 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
       CASE_S_M(Bool, Str) {
         // Do string parsing and check double equality.
         return static_cast<double>(x->getBool()) ==
-            stringToNumber(runtime, Handle<StringPrimitive>::vmcast(y));
+            stringToNumber(
+                   runtime, Handle<StringPrimitive>::vmcast(Handle<>(y)));
       }
       CASE_S_M(Bool, BigInt) {
         return y->getBigInt()->compare(static_cast<int32_t>(x->getBool())) == 0;
@@ -1198,7 +1246,8 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
         return x->getNumber() == static_cast<double>(y->getBool());
       }
       CASE_M_S(Str, Bool) {
-        return stringToNumber(runtime, Handle<StringPrimitive>::vmcast(x)) ==
+        return stringToNumber(
+                   runtime, Handle<StringPrimitive>::vmcast(Handle<>(x))) ==
             static_cast<double>(y->getBool());
       }
       CASE_M_S(BigInt, Bool) {
@@ -1239,7 +1288,11 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
       // or -∞, return false. b. If the mathematical value of x is equal to
       // the mathematical value of y, return true; otherwise return false.
       CASE_M_S(BigInt, NUMBER_TAG) {
-        std::swap(x, y);
+        {
+          HermesValue tmp = x.getHermesValue();
+          x = y.getHermesValue();
+          y = tmp;
+        }
         [[fallthrough]];
       }
       CASE_S_M(NUMBER_TAG, BigInt) {
@@ -1302,40 +1355,47 @@ addOp_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
         Handle<StringPrimitive>::vmcast(xHandle),
         Handle<StringPrimitive>::vmcast(yHandle));
   }
+  struct : public Locals {
+    PinnedValue<> xPrim;
+    PinnedValue<> yPrim;
+    PinnedValue<StringPrimitive> xStr;
+    PinnedValue<StringPrimitive> yStr;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto resX = toPrimitive_RJS(runtime, xHandle, PreferredType::NONE);
   if (resX == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto xPrim = runtime.makeHandle(resX.getValue());
+  lv.xPrim = resX.getValue();
 
   auto resY = toPrimitive_RJS(runtime, yHandle, PreferredType::NONE);
   if (resY == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto yPrim = runtime.makeHandle(resY.getValue());
+  lv.yPrim = resY.getValue();
 
   // If one of the values is a string, concatenate as strings.
-  if (xPrim->isString() || yPrim->isString()) {
-    auto resX = toString_RJS(runtime, xPrim);
+  if (lv.xPrim->isString() || lv.yPrim->isString()) {
+    auto resX = toString_RJS(runtime, lv.xPrim);
     if (resX == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    auto xStr = runtime.makeHandle(std::move(*resX));
+    lv.xStr = std::move(*resX);
 
-    auto resY = toString_RJS(runtime, yPrim);
+    auto resY = toString_RJS(runtime, lv.yPrim);
     if (resY == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    auto yStr = runtime.makeHandle(std::move(*resY));
+    lv.yStr = std::move(*resY);
 
-    return StringPrimitive::concat(runtime, xStr, yStr);
+    return StringPrimitive::concat(runtime, lv.xStr, lv.yStr);
   }
 
   // xPrim and yPrim are primitives; hence, they are already bigints, or they
   // will never be bigints.
-  if (LLVM_LIKELY(!xPrim->isBigInt())) {
+  if (LLVM_LIKELY(!lv.xPrim->isBigInt())) {
     // xPrim is not a bigint; thus this is Number + Number.
-    auto res = toNumber_RJS(runtime, xPrim);
+    auto res = toNumber_RJS(runtime, lv.xPrim);
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -1343,7 +1403,7 @@ addOp_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
     // N.B.: toNumber(yPrim) will raise an TypeError if yPrim is bigint, which
     // is the correct exception to be raised when trying to perform
     // Number + BigInt. This avoids the need to check if yPrim is a bigint.
-    res = toNumber_RJS(runtime, yPrim);
+    res = toNumber_RJS(runtime, lv.yPrim);
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -1353,15 +1413,15 @@ addOp_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
 
   // yPrim is a primitive; therefore it is already a BigInt, or it will never be
   // one.
-  if (!yPrim->isBigInt()) {
+  if (!lv.yPrim->isBigInt()) {
     return runtime.raiseTypeErrorForValue(
         "Cannot convert ", yHandle, " to BigInt");
   }
 
   return BigIntPrimitive::add(
       runtime,
-      runtime.makeHandle(xPrim->getBigInt()),
-      runtime.makeHandle(yPrim->getBigInt()));
+      Handle<BigIntPrimitive>::vmcast(Handle<>(lv.xPrim)),
+      Handle<BigIntPrimitive>::vmcast(Handle<>(lv.yPrim)));
 }
 
 static const size_t MIN_RADIX = 2;
@@ -1520,12 +1580,16 @@ numberToStringWithRadix(Runtime &runtime, double number, unsigned radix) {
 CallResult<PseudoHandle<>>
 getMethod(Runtime &runtime, Handle<> O, Handle<> key) {
   GCScopeMarkerRAII gcScope{runtime};
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto objRes = toObject(runtime, O);
   if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto obj = runtime.makeHandle<JSObject>(*objRes);
-  auto funcRes = JSObject::getComputed_RJS(obj, runtime, key);
+  lv.obj.castAndSetHermesValue<JSObject>(*objRes);
+  auto funcRes = JSObject::getComputed_RJS(lv.obj, runtime, key);
   if (LLVM_UNLIKELY(funcRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1538,63 +1602,76 @@ getMethod(Runtime &runtime, Handle<> O, Handle<> key) {
   return funcRes;
 }
 
-CallResult<CheckedIteratorRecord> getCheckedIterator(
+/// Common part of getIterator and getCheckedIterator. Store the iterator in
+/// \p iterator and \return the value of its "next" property, which the caller
+/// must pin before the next safepoint.
+static CallResult<HermesValue> getIteratorImpl(
     Runtime &runtime,
     Handle<> obj,
-    llvh::Optional<Handle<Callable>> methodOpt) {
-  auto uncheckedIterRecordRes = getIterator(runtime, obj, methodOpt);
-  if (uncheckedIterRecordRes == ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  auto uncheckedIterRecord = uncheckedIterRecordRes.getValue();
-  if (LLVM_UNLIKELY(!vmisa<Callable>(uncheckedIterRecord.nextMethod.get()))) {
-    return runtime.raiseTypeError("'next' method on iterator must be callable");
-  }
-  return CheckedIteratorRecord{
-      std::move(uncheckedIterRecord.iterator),
-      Handle<Callable>::vmcast(std::move(uncheckedIterRecord.nextMethod))};
-}
-
-CallResult<UncheckedIteratorRecord> getIterator(
-    Runtime &runtime,
-    Handle<> obj,
-    llvh::Optional<Handle<Callable>> methodOpt) {
-  MutableHandle<Callable> method{runtime};
+    llvh::Optional<Handle<Callable>> methodOpt,
+    PinnedValue<JSObject> &iterator) {
+  struct : public Locals {
+    PinnedValue<SymbolID> key;
+    PinnedValue<Callable> method;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   if (LLVM_LIKELY(!methodOpt.hasValue())) {
-    auto methodRes = getMethod(
-        runtime,
-        obj,
-        runtime.makeHandle(
-            Predefined::getSymbolID(Predefined::SymbolIterator)));
+    lv.key = Predefined::getSymbolID(Predefined::SymbolIterator);
+    auto methodRes = getMethod(runtime, obj, lv.key);
     if (LLVM_UNLIKELY(methodRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
     if (!vmisa<Callable>(methodRes->getHermesValue())) {
       return runtime.raiseTypeError("iterator method is not callable");
     }
-    method = vmcast<Callable>(methodRes->getHermesValue());
+    lv.method = vmcast<Callable>(methodRes->getHermesValue());
   } else {
-    method = **methodOpt;
+    lv.method = **methodOpt;
   }
-  auto iteratorRes = Callable::executeCall0(method, runtime, obj);
+  auto iteratorRes = Callable::executeCall0(lv.method, runtime, obj);
   if (LLVM_UNLIKELY(iteratorRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
   if (LLVM_UNLIKELY(!(*iteratorRes)->isObject())) {
     return runtime.raiseTypeError("iterator is not an object");
   }
-  auto iterator = runtime.makeHandle<JSObject>(std::move(*iteratorRes));
+  iterator = PseudoHandle<JSObject>::vmcast(std::move(*iteratorRes));
 
   CallResult<PseudoHandle<>> nextMethodRes = JSObject::getNamed_RJS(
       iterator, runtime, Predefined::getSymbolID(Predefined::next));
   if (LLVM_UNLIKELY(nextMethodRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
+  return nextMethodRes->getHermesValue();
+}
 
-  return UncheckedIteratorRecord{
-      iterator,
-      Handle<HermesValue>::vmcast(
-          runtime.makeHandle(std::move(*nextMethodRes)))};
+CallResult<CheckedIteratorRecord> getCheckedIterator(
+    Runtime &runtime,
+    Handle<> obj,
+    CheckedIteratorRecordStorage &storage,
+    llvh::Optional<Handle<Callable>> methodOpt) {
+  auto nextRes = getIteratorImpl(runtime, obj, methodOpt, storage.iterator);
+  if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  if (LLVM_UNLIKELY(!vmisa<Callable>(*nextRes))) {
+    return runtime.raiseTypeError("'next' method on iterator must be callable");
+  }
+  storage.nextMethod = vmcast<Callable>(*nextRes);
+  return CheckedIteratorRecord{storage.iterator, storage.nextMethod};
+}
+
+CallResult<UncheckedIteratorRecord> getIterator(
+    Runtime &runtime,
+    Handle<> obj,
+    UncheckedIteratorRecordStorage &storage,
+    llvh::Optional<Handle<Callable>> methodOpt) {
+  auto nextRes = getIteratorImpl(runtime, obj, methodOpt, storage.iterator);
+  if (LLVM_UNLIKELY(nextRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  storage.nextMethod = *nextRes;
+  return UncheckedIteratorRecord{storage.iterator, storage.nextMethod};
 }
 
 CallResult<PseudoHandle<JSObject>> iteratorNext(
@@ -1687,15 +1764,18 @@ ExecutionStatus iteratorClose(
     Runtime &runtime,
     Handle<JSObject> iterator,
     Handle<> completion) {
+  struct : public Locals {
+    PinnedValue<SymbolID> key;
+    PinnedValue<Callable> returnFn;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   ExecutionStatus completionStatus = completion->isEmpty()
       ? ExecutionStatus::RETURNED
       : ExecutionStatus::EXCEPTION;
 
   // 4. Let innerResult be GetMethod(iterator, "return").
-  auto returnRes = getMethod(
-      runtime,
-      iterator,
-      runtime.makeHandle(Predefined::getSymbolID(Predefined::returnStr)));
+  lv.key = Predefined::getSymbolID(Predefined::returnStr);
+  auto returnRes = getMethod(runtime, iterator, lv.key);
 
   // The only information we need to preserve is whether innerResult is an
   // exception, or if it contained an object. By default, initialize it to an
@@ -1711,10 +1791,10 @@ ExecutionStatus iteratorClose(
       runtime.setThrownValue(*completion);
       return completionStatus;
     }
-    Handle<Callable> returnFn =
-        runtime.makeHandle(vmcast<Callable>(returnRes->getHermesValue()));
+    lv.returnFn = vmcast<Callable>(returnRes->getHermesValue());
     // c. Set innerResult to Call(return, iterator).
-    auto innerResultRes = Callable::executeCall0(returnFn, runtime, iterator);
+    auto innerResultRes =
+        Callable::executeCall0(lv.returnFn, runtime, iterator);
     if (LLVM_UNLIKELY(innerResultRes == ExecutionStatus::EXCEPTION)) {
       if (isUncatchableError(runtime.getThrownValue())) {
         // If the call to return threw an uncatchable exception, that overrides
@@ -1777,11 +1857,12 @@ CallResult<PseudoHandle<JSArray>> iterableToArray(
     PinnedValue<JSArray> array;
     PinnedValue<JSObject> next;
     PinnedValue<> nextValue;
+    CheckedIteratorRecordStorage iterRecord;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   // IterableToList: 2a. Let iteratorRecord be ? GetIterator(items, sync).
   CallResult<CheckedIteratorRecord> iteratorRecordRes =
-      getCheckedIterator(runtime, items);
+      getCheckedIterator(runtime, items, lv.iterRecord);
   if (LLVM_UNLIKELY(iteratorRecordRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1994,22 +2075,28 @@ ordinaryHasInstance(Runtime &runtime, Handle<> constructor, Handle<> object) {
     return false;
   }
 
+  struct : public Locals {
+    PinnedValue<Callable> ctor;
+    PinnedValue<JSObject> ctorPrototype;
+    PinnedValue<JSObject> head;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   // 4. Let P be Get(C, "prototype").
+  lv.ctor = ctor;
   auto propRes = JSObject::getNamed_RJS(
-      runtime.makeHandle(ctor),
-      runtime,
-      Predefined::getSymbolID(Predefined::prototype));
+      lv.ctor, runtime, Predefined::getSymbolID(Predefined::prototype));
   if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
 
   // 5. If Type(P) is not Object, throw a TypeError exception.
-  Handle<JSObject> ctorPrototype = runtime.makeHandle(
-      PseudoHandle<JSObject>::dyn_vmcast(std::move(*propRes)));
-  if (LLVM_UNLIKELY(!ctorPrototype)) {
+  auto *ctorProto = dyn_vmcast<JSObject>(propRes->getHermesValue());
+  if (LLVM_UNLIKELY(!ctorProto)) {
     return runtime.raiseTypeError(
         "function's '.prototype' is not an object in 'instanceof'");
   }
+  lv.ctorPrototype = ctorProto;
 
   // 6.1.7.3 Invariants of the Essential Internal Methods notes that
   // detection of infinite prototype chains is not enforceable as an
@@ -2020,13 +2107,13 @@ ordinaryHasInstance(Runtime &runtime, Handle<> constructor, Handle<> object) {
   // objects.  Thus, any length chain of ordinary objects is ok.
   constexpr unsigned int kMaxProxyCount = 1024;
   unsigned int proxyCount = 0;
-  MutableHandle<JSObject> head{runtime, vmcast<JSObject>(object.get())};
+  lv.head = vmcast<JSObject>(object.get());
   GCScopeMarkerRAII gcScope{runtime};
   // 6. Repeat
   while (true) {
     // 6a. Let O be O.[[GetPrototypeOf]]().
     CallResult<PseudoHandle<JSObject>> parentRes =
-        JSObject::getPrototypeOf(head, runtime);
+        JSObject::getPrototypeOf(Handle<JSObject>(lv.head), runtime);
     if (LLVM_UNLIKELY(parentRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -2035,17 +2122,17 @@ ordinaryHasInstance(Runtime &runtime, Handle<> constructor, Handle<> object) {
       return false;
     }
     // 6c. If SameValue(P, O) is true, return true.
-    if (parentRes->get() == ctorPrototype.get()) {
+    if (parentRes->get() == lv.ctorPrototype.get()) {
       return true;
     }
-    if (head->isProxyObject(runtime)) {
+    if (lv.head->isProxyObject(runtime)) {
       ++proxyCount;
       if (proxyCount > kMaxProxyCount) {
         return runtime.raiseRangeError(
             "Maximum prototype chain length exceeded");
       }
     }
-    head = parentRes->get();
+    lv.head = parentRes->get();
     gcScope.flush();
   }
 }
@@ -2078,16 +2165,23 @@ CallResult<bool> instanceOfOperator_RJS(
     return ordinaryHasInstance(runtime, constructor, object);
   }
 
-  auto instOfHandler = runtime.makeHandle(std::move(*instOfHandlerRes));
+  struct : public Locals {
+    PinnedValue<> instOfHandler;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.instOfHandler = std::move(*instOfHandlerRes);
 
   // 4. If instOfHandler is not undefined, then
-  if (!instOfHandler->isUndefined()) {
+  if (!lv.instOfHandler->isUndefined()) {
     // 5. Return ToBoolean(Call(instOfHandler, C, «O»)).
-    if (!vmisa<Callable>(*instOfHandler)) {
+    if (!vmisa<Callable>(*lv.instOfHandler)) {
       return runtime.raiseTypeError("instanceof handler must be callable");
     }
     auto callRes = Callable::executeCall1(
-        Handle<Callable>::vmcast(instOfHandler), runtime, constructor, *object);
+        Handle<Callable>::vmcast(Handle<>(lv.instOfHandler)),
+        runtime,
+        constructor,
+        *object);
     if (LLVM_UNLIKELY(callRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -2207,6 +2301,11 @@ ExecutionStatus toPropertyDescriptor(
     DefinePropertyFlags &flags,
     MutableHandle<> valueOrAccessor) {
   GCScopeMarkerRAII gcMarker{runtime};
+  struct : public Locals {
+    PinnedValue<Callable> getter;
+    PinnedValue<Callable> setter;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
   // Verify that the attributes argument is also an object.
   auto attributes = Handle<JSObject>::dyn_vmcast(obj);
@@ -2278,7 +2377,6 @@ ExecutionStatus toPropertyDescriptor(
   }
 
   // Get getter property of the attributes.
-  MutableHandle<Callable> getterPtr{runtime};
   if (JSObject::getNamedDescriptorPredefined(
           attributes, runtime, Predefined::get, desc)) {
     auto propRes = JSObject::getNamed_RJS(
@@ -2292,8 +2390,8 @@ ExecutionStatus toPropertyDescriptor(
     flags.setGetter = true;
     PseudoHandle<> getter = std::move(*propRes);
     if (LLVM_LIKELY(!getter->isUndefined())) {
-      getterPtr = dyn_vmcast<Callable>(getter.get());
-      if (LLVM_UNLIKELY(!getterPtr)) {
+      lv.getter = dyn_vmcast<Callable>(getter.get());
+      if (LLVM_UNLIKELY(!lv.getter.get())) {
         return runtime.raiseTypeError(
             "Invalid property descriptor. Getter must be a function.");
       }
@@ -2301,7 +2399,6 @@ ExecutionStatus toPropertyDescriptor(
   }
 
   // Get setter property of the attributes.
-  MutableHandle<Callable> setterPtr{runtime};
   if (JSObject::getNamedDescriptorPredefined(
           attributes, runtime, Predefined::set, desc)) {
     auto propRes = JSObject::getNamed_RJS(
@@ -2315,8 +2412,8 @@ ExecutionStatus toPropertyDescriptor(
     flags.setSetter = true;
     PseudoHandle<> setter = std::move(*propRes);
     if (LLVM_LIKELY(!setter->isUndefined())) {
-      setterPtr = PseudoHandle<Callable>::dyn_vmcast(std::move(setter));
-      if (LLVM_UNLIKELY(!setterPtr)) {
+      lv.setter = dyn_vmcast<Callable>(setter.get());
+      if (LLVM_UNLIKELY(!lv.setter.get())) {
         return runtime.raiseTypeError(
             "Invalid property descriptor. Setter must be a function.");
       }
@@ -2334,7 +2431,7 @@ ExecutionStatus toPropertyDescriptor(
           "Invalid property descriptor. Can't set both accessor and writable.");
     }
     valueOrAccessor.set(
-        PropertyAccessor::create(runtime, getterPtr, setterPtr)
+        PropertyAccessor::create(runtime, lv.getter, lv.setter)
             .getHermesValue());
   }
 
@@ -2345,7 +2442,12 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
     Runtime &runtime,
     DefinePropertyFlags dpFlags,
     Handle<> valueOrAccessor) {
-  Handle<JSObject> obj = runtime.makeHandle(JSObject::create(runtime));
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+    PinnedValue<> getterOrSetter;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.obj = JSObject::create(runtime);
 
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
 
@@ -2353,7 +2455,7 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
     // Data Descriptor
     if (dpFlags.setValue) {
       auto result = JSObject::defineOwnProperty(
-          obj,
+          lv.obj,
           runtime,
           Predefined::getSymbolID(Predefined::value),
           dpf,
@@ -2369,7 +2471,7 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
 
     if (dpFlags.setWritable) {
       auto result = JSObject::defineOwnProperty(
-          obj,
+          lv.obj,
           runtime,
           Predefined::getSymbolID(Predefined::writable),
           dpf,
@@ -2386,17 +2488,16 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
     // Accessor
     if (dpFlags.setGetter) {
       auto *accessor = vmcast<PropertyAccessor>(valueOrAccessor.get());
-      auto getter = runtime.makeHandle(
-          accessor->getter ? HermesValue::encodeObjectValue(
-                                 accessor->getter.getNonNull(runtime))
-                           : HermesValue::encodeUndefinedValue());
+      lv.getterOrSetter = accessor->getter
+          ? HermesValue::encodeObjectValue(accessor->getter.getNonNull(runtime))
+          : HermesValue::encodeUndefinedValue();
 
       auto result = JSObject::defineOwnProperty(
-          obj,
+          lv.obj,
           runtime,
           Predefined::getSymbolID(Predefined::get),
           dpf,
-          getter,
+          lv.getterOrSetter,
           PropOpFlags().plusThrowOnError());
       assert(
           result != ExecutionStatus::EXCEPTION &&
@@ -2408,17 +2509,16 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
 
     if (dpFlags.setSetter) {
       auto *accessor = vmcast<PropertyAccessor>(valueOrAccessor.get());
-      auto setter = runtime.makeHandle(
-          accessor->setter ? HermesValue::encodeObjectValue(
-                                 accessor->setter.getNonNull(runtime))
-                           : HermesValue::encodeUndefinedValue());
+      lv.getterOrSetter = accessor->setter
+          ? HermesValue::encodeObjectValue(accessor->setter.getNonNull(runtime))
+          : HermesValue::encodeUndefinedValue();
 
       auto result = JSObject::defineOwnProperty(
-          obj,
+          lv.obj,
           runtime,
           Predefined::getSymbolID(Predefined::set),
           dpf,
-          setter,
+          lv.getterOrSetter,
           PropOpFlags().plusThrowOnError());
       assert(
           result != ExecutionStatus::EXCEPTION &&
@@ -2431,7 +2531,7 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
 
   if (dpFlags.setEnumerable) {
     auto result = JSObject::defineOwnProperty(
-        obj,
+        lv.obj,
         runtime,
         Predefined::getSymbolID(Predefined::enumerable),
         dpf,
@@ -2447,7 +2547,7 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
 
   if (dpFlags.setConfigurable) {
     auto result = JSObject::defineOwnProperty(
-        obj,
+        lv.obj,
         runtime,
         Predefined::getSymbolID(Predefined::configurable),
         dpf,
@@ -2460,7 +2560,7 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
       return ExecutionStatus::EXCEPTION;
     }
   }
-  return obj.getHermesValue();
+  return lv.obj.getHermesValue();
 }
 
 bool isIntegralNumber(double number) {
@@ -2502,7 +2602,12 @@ CallResult<HermesValue> toBigInt_RJS(Runtime &runtime, Handle<> value) {
       return *prim;
     case HermesValue::ETag::Str1:
     case HermesValue::ETag::Str2: {
-      auto n = stringToBigInt(runtime, runtime.makeHandle(*prim));
+      struct : public Locals {
+        PinnedValue<> str;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
+      lv.str = *prim;
+      auto n = stringToBigInt(runtime, lv.str);
       if (LLVM_UNLIKELY(n == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
@@ -2714,6 +2819,7 @@ groupBy(Runtime &runtime, Handle<T> target, Handle<> items, Handle<> callback) {
     PinnedValue<JSArray> value;
     PinnedValue<> tmpValueMaybeArray;
     PinnedValue<> next;
+    CheckedIteratorRecordStorage iterRecord;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -2731,7 +2837,7 @@ groupBy(Runtime &runtime, Handle<T> target, Handle<> items, Handle<> callback) {
   // 3. Let groups be a new empty List.
   // 4. Let iteratorRecord be ? GetIterator(items, sync).
   CallResult<CheckedIteratorRecord> iteratorRecordResult =
-      getCheckedIterator(runtime, items);
+      getCheckedIterator(runtime, items, lv.iterRecord);
 
   if (LLVM_UNLIKELY(iteratorRecordResult == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -3135,6 +3241,10 @@ CallResult<HermesValue> doBigIntBinOp(
     BigIntBinaryOp Oper,
     Handle<BigIntPrimitive> lhs,
     Handle<> rhs) {
+  struct : public Locals {
+    PinnedValue<BigIntPrimitive> rhsBigInt;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // Cannot use ToBigInt here as it would incorrectly allow boolean/string rhs.
   CallResult<HermesValue> res = toNumeric_RJS(runtime, rhs);
   if (res == ExecutionStatus::EXCEPTION) {
@@ -3143,7 +3253,8 @@ CallResult<HermesValue> doBigIntBinOp(
   if (!res->isBigInt()) {
     return runtime.raiseTypeErrorForValue("Cannot convert ", rhs, " to BigInt");
   }
-  return Oper(runtime, lhs, runtime.makeHandle(res->getBigInt()));
+  lv.rhsBigInt = res->getBigInt();
+  return Oper(runtime, lhs, lv.rhsBigInt);
 }
 
 template <auto Oper, auto BigIntOper>
@@ -3158,6 +3269,11 @@ binOpImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<> prim;
+      PinnedValue<BigIntPrimitive> bigint;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     // Try converting the LHS to a primitive.
     auto lPrimRes = toPrimitive_RJS(runtime, lhs, PreferredType::NUMBER);
     if (LLVM_UNLIKELY(lPrimRes == ExecutionStatus::EXCEPTION))
@@ -3165,7 +3281,8 @@ binOpImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
     if (LLVM_LIKELY(!lPrimRes->isBigInt())) {
       // If the LHS is not a BigInt, then perform a number operation, and throw
       // if that fails.
-      auto lNumRes = toNumber_RJS(runtime, runtime.makeHandle(*lPrimRes));
+      lv.prim = *lPrimRes;
+      auto lNumRes = toNumber_RJS(runtime, lv.prim);
       if (LLVM_UNLIKELY(lNumRes == ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
       auto rNumRes = toNumber_RJS(runtime, rhs);
@@ -3176,8 +3293,8 @@ binOpImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
     }
     // LHS is a BigInt, try to convert RHS to a BigInt as well and perform a
     // BigInt operation.
-    return doBigIntBinOp(
-        runtime, BigIntOper, runtime.makeHandle(lPrimRes->getBigInt()), rhs);
+    lv.bigint = lPrimRes->getBigInt();
+    return doBigIntBinOp(runtime, BigIntOper, lv.bigint, rhs);
   }();
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
     _sh_throw_current(shr);
@@ -3193,6 +3310,11 @@ SHLegacyValue incDecOperImpl(SHRuntime *shr, const SHLegacyValue *n) {
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<> prim;
+      PinnedValue<BigIntPrimitive> bigint;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
 
     // Try converting the argument to a primitive.
     auto primRes = toPrimitive_RJS(runtime, nHandle, PreferredType::NUMBER);
@@ -3201,13 +3323,15 @@ SHLegacyValue incDecOperImpl(SHRuntime *shr, const SHLegacyValue *n) {
 
     // If the primitive is not a BigInt, perform a normal number inc/dec.
     if (LLVM_LIKELY(!primRes->isBigInt())) {
-      auto numRes = toNumber_RJS(runtime, runtime.makeHandle(*primRes));
+      lv.prim = *primRes;
+      auto numRes = toNumber_RJS(runtime, lv.prim);
       if (LLVM_UNLIKELY(numRes == ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
       return HermesValue::encodeTrustedNumberValue(Oper(numRes->getNumber()));
     }
 
-    return BigIntOper(runtime, runtime.makeHandle(primRes->getBigInt()));
+    lv.bigint = primRes->getBigInt();
+    return BigIntOper(runtime, lv.bigint);
   }();
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
     _sh_throw_current(shr);
@@ -3226,6 +3350,11 @@ bitOperImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<> prim;
+      PinnedValue<BigIntPrimitive> bigint;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     // Try converting the LHS to a primitive.
     auto lPrimRes = toPrimitive_RJS(runtime, lhs, PreferredType::NUMBER);
     if (LLVM_UNLIKELY(lPrimRes == ExecutionStatus::EXCEPTION))
@@ -3233,19 +3362,21 @@ bitOperImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
     if (LLVM_LIKELY(!lPrimRes->isBigInt())) {
       // If the LHS is not a BigInt, then perform a number operation, and throw
       // if that fails.
-      auto lIntRes = toInt32_RJS(runtime, runtime.makeHandle(*lPrimRes));
+      lv.prim = *lPrimRes;
+      auto lIntRes = toInt32_RJS(runtime, lv.prim);
       if (LLVM_UNLIKELY(lIntRes == ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
       auto rIntRes = toInt32_RJS(runtime, std::move(rhs));
       if (LLVM_UNLIKELY(rIntRes == ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
       return HermesValue::encodeTrustedNumberValue(Oper(
-          lIntRes->getNumberAs<int32_t>(), rIntRes->getNumberAs<int32_t>()));
+          lIntRes->template getNumberAs<int32_t>(),
+          rIntRes->template getNumberAs<int32_t>()));
     }
     // LHS is a BigInt, try to convert RHS to a BigInt as well and perform a
     // BigInt operation.
-    return doBigIntBinOp(
-        runtime, BigIntOper, runtime.makeHandle(lPrimRes->getBigInt()), rhs);
+    lv.bigint = lPrimRes->getBigInt();
+    return doBigIntBinOp(runtime, BigIntOper, lv.bigint, rhs);
   }();
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
     _sh_throw_current(shr);
@@ -3265,6 +3396,11 @@ shiftOperImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
   auto res = [&]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<> prim;
+      PinnedValue<BigIntPrimitive> bigint;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     // Try converting the LHS to a primitive.
     auto lPrimRes =
         toPrimitive_RJS(runtime, std::move(lhs), PreferredType::NUMBER);
@@ -3273,7 +3409,8 @@ shiftOperImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
     if (LLVM_LIKELY(!lPrimRes->isBigInt())) {
       // If the LHS is not a BigInt, then perform a number operation, and throw
       // if that fails.
-      auto lIntRes = ToIntegral(runtime, runtime.makeHandle(*lPrimRes));
+      lv.prim = *lPrimRes;
+      auto lIntRes = ToIntegral(runtime, lv.prim);
       if (LLVM_UNLIKELY(lIntRes == ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
       auto rIntRes = toUInt32_RJS(runtime, rhs);
@@ -3285,11 +3422,8 @@ shiftOperImpl(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b) {
     }
     // LHS is a BigInt, try to convert RHS to a BigInt as well and perform a
     // BigInt operation.
-    return doBigIntBinOp(
-        runtime,
-        BigIntOper,
-        runtime.makeHandle(lPrimRes->getBigInt()),
-        std::move(rhs));
+    lv.bigint = lPrimRes->getBigInt();
+    return doBigIntBinOp(runtime, BigIntOper, lv.bigint, std::move(rhs));
   }();
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
     _sh_throw_current(shr);
@@ -3439,6 +3573,10 @@ extern "C" SHLegacyValue _sh_ljs_bit_not_rjs(
         ~hermes::truncateToInt32(nHandle->getNumber()));
   Runtime &runtime = getRuntime(shr);
   auto res = [&]() -> CallResult<HermesValue> {
+    struct : public Locals {
+      PinnedValue<BigIntPrimitive> bigint;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     // Try converting nHandle to a numeric.
     auto numRes = toNumeric_RJS(runtime, nHandle);
     if (LLVM_UNLIKELY(numRes == ExecutionStatus::EXCEPTION))
@@ -3450,8 +3588,8 @@ extern "C" SHLegacyValue _sh_ljs_bit_not_rjs(
           ~hermes::truncateToInt32(numRes->getNumber()));
 
     // The result is a BigInt, perform a BigInt bitwise not.
-    auto bigint = runtime.makeHandle(numRes->getBigInt());
-    return BigIntPrimitive::unaryNOT(runtime, bigint);
+    lv.bigint = numRes->getBigInt();
+    return BigIntPrimitive::unaryNOT(runtime, lv.bigint);
   }();
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
     _sh_throw_current(shr);
@@ -3468,6 +3606,10 @@ extern "C" SHLegacyValue _sh_ljs_minus_rjs(
   auto res = [shr, n]() -> CallResult<HermesValue> {
     Runtime &runtime = getRuntime(shr);
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<BigIntPrimitive> bigint;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     Handle<> nHandle{toPHV(n)};
     // Try converting nHandle to a numeric.
     auto numRes = toNumeric_RJS(runtime, nHandle);
@@ -3479,8 +3621,8 @@ extern "C" SHLegacyValue _sh_ljs_minus_rjs(
       return HermesValue::encodeTrustedNumberValue(-numRes->getNumber());
 
     // The result is a BigInt, perform a BigInt unary minus.
-    auto bigint = runtime.makeHandle(numRes->getBigInt());
-    return BigIntPrimitive::unaryMinus(runtime, bigint);
+    lv.bigint = numRes->getBigInt();
+    return BigIntPrimitive::unaryMinus(runtime, lv.bigint);
   }();
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
     _sh_throw_current(shr);
@@ -3537,12 +3679,16 @@ extern "C" SHLegacyValue _sh_ljs_add_empty_string_rjs(
     // Slow path, convert to primitive then call toString.
     auto res = [&runtime, val]() -> CallResult<HermesValue> {
       GCScopeMarkerRAII marker{runtime};
+      struct : public Locals {
+        PinnedValue<> prim;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
       auto res =
           toPrimitive_RJS(runtime, Handle<>(toPHV(val)), PreferredType::NONE);
       if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
-      Handle<> tmpHandle = runtime.makeHandle(*res);
-      auto strRes = toString_RJS(runtime, tmpHandle);
+      lv.prim = *res;
+      auto strRes = toString_RJS(runtime, lv.prim);
       if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
 
@@ -3602,8 +3748,12 @@ extern "C" SHLegacyValue _sh_ljs_iterator_begin_rjs(
     }
 
     // Fall back to the general case.
+    struct : public Locals {
+      UncheckedIteratorRecordStorage iterRecord;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     CallResult<UncheckedIteratorRecord> iterRecord =
-        getIterator(runtime, srcHandle);
+        getIterator(runtime, srcHandle, lv.iterRecord);
     if (LLVM_UNLIKELY(iterRecord == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
     *src = iterRecord->nextMethod.getHermesValue();
@@ -3668,6 +3818,10 @@ extern "C" SHLegacyValue _sh_ljs_iterator_next_rjs(
     }
 
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<JSObject> resultObj;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
 
     CheckedIteratorRecord iterRecord{
         Handle<JSObject>::vmcast(iteratorOrIdxHandle),
@@ -3678,9 +3832,9 @@ extern "C" SHLegacyValue _sh_ljs_iterator_next_rjs(
     if (LLVM_UNLIKELY(resultObjRes == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
 
-    Handle<JSObject> resultObj = runtime.makeHandle(std::move(*resultObjRes));
+    lv.resultObj = std::move(*resultObjRes);
     CallResult<PseudoHandle<>> doneRes = JSObject::getNamed_RJS(
-        resultObj, runtime, Predefined::getSymbolID(Predefined::done));
+        lv.resultObj, runtime, Predefined::getSymbolID(Predefined::done));
     if (LLVM_UNLIKELY(doneRes == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
     if (toBoolean(doneRes->get())) {
@@ -3692,7 +3846,7 @@ extern "C" SHLegacyValue _sh_ljs_iterator_next_rjs(
 
     // Not done iterating, so get the `value` property and return it.
     CallResult<PseudoHandle<>> propRes = JSObject::getNamed_RJS(
-        resultObj, runtime, Predefined::getSymbolID(Predefined::value));
+        lv.resultObj, runtime, Predefined::getSymbolID(Predefined::value));
     if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
 

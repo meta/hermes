@@ -355,8 +355,12 @@ ExecutionStatus Interpreter::caseIteratorBegin(
     }
   }
   GCScopeMarkerRAII marker{runtime};
+  struct : public Locals {
+    UncheckedIteratorRecordStorage iterStorage;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   CallResult<UncheckedIteratorRecord> iterRecord =
-      getIterator(runtime, Handle<>(&O2REG(IteratorBegin)));
+      getIterator(runtime, Handle<>(&O2REG(IteratorBegin)), lv.iterStorage);
   if (LLVM_UNLIKELY(iterRecord == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }

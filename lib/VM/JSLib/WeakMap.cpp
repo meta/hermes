@@ -116,6 +116,7 @@ CallResult<HermesValue> weakMapConstructor(void *, Runtime &runtime) {
     PinnedValue<> keyHandle;
     PinnedValue<> valueHandle;
     PinnedValue<Callable> adder;
+    CheckedIteratorRecordStorage iterStorage;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   if (LLVM_LIKELY(
@@ -155,7 +156,8 @@ CallResult<HermesValue> weakMapConstructor(void *, Runtime &runtime) {
     return runtime.raiseTypeError("Property 'set' for WeakMap is not callable");
   }
 
-  auto iterRes = getCheckedIterator(runtime, args.getArgHandle(0));
+  auto iterRes =
+      getCheckedIterator(runtime, args.getArgHandle(0), lv.iterStorage);
   if (LLVM_UNLIKELY(iterRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }

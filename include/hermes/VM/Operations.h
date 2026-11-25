@@ -391,30 +391,47 @@ struct IteratorRecord {
       : iterator(iterator), nextMethod(nextMethod) {}
 };
 
+/// Rooted storage for the fields of an IteratorRecord<T>. Embed it in a
+/// Locals struct and pass it to getIterator/getCheckedIterator, which return
+/// a record that refers to it, so the record is valid for as long as the
+/// storage is.
+template <typename T>
+class IteratorRecordStorage {
+ public:
+  PinnedValue<JSObject> iterator;
+  PinnedValue<T> nextMethod;
+};
+
 // The nextMethod of this IteratorRecord could be of any type.
 using UncheckedIteratorRecord = IteratorRecord<HermesValue>;
 // This is an IteratorRecord that has its next method explicity checked and
 // defined as a Callable type.
 using CheckedIteratorRecord = IteratorRecord<Callable>;
+using UncheckedIteratorRecordStorage = IteratorRecordStorage<HermesValue>;
+using CheckedIteratorRecordStorage = IteratorRecordStorage<Callable>;
 
 /// ES6.0 7.4.1
 /// \param obj object to iterate over.
+/// \param storage rooted storage backing the returned record.
 /// \param method an optional method to call instead of retrieving @@iterator.
 /// \return the iterator object
 /// If the "next" method is not a Callable, throw a TypeError.
 CallResult<CheckedIteratorRecord> getCheckedIterator(
     Runtime &runtime,
     Handle<> obj,
+    CheckedIteratorRecordStorage &storage,
     llvh::Optional<Handle<Callable>> method = llvh::None);
 
 /// ES6.0 7.4.1
 /// \param obj object to iterate over.
+/// \param storage rooted storage backing the returned record.
 /// \param method an optional method to call instead of retrieving @@iterator.
 /// \return the iterator object
 /// This does not check if the "next" method is a Callable.
 CallResult<UncheckedIteratorRecord> getIterator(
     Runtime &runtime,
     Handle<> obj,
+    UncheckedIteratorRecordStorage &storage,
     llvh::Optional<Handle<Callable>> method = llvh::None);
 
 /// ES6.0 7.4.2

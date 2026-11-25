@@ -229,8 +229,12 @@ CallResult<PseudoHandle<JSObject>> JSObject::getPrototypeOf(
     return createPseudoHandle(selfHandle->getParent(runtime));
   }
 
-  return JSProxy::getPrototypeOf(
-      runtime.makeHandle(std::move(selfHandle)), runtime);
+  struct : public Locals {
+    PinnedValue<JSObject> self;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.self = std::move(selfHandle);
+  return JSProxy::getPrototypeOf(lv.self, runtime);
 }
 
 /// Raise a ReferenceError (if \p isReference) or a TypeError with the message
@@ -296,12 +300,18 @@ CallResult<bool> JSObject::setParent(
     JSObject *parent,
     PropOpFlags opFlags) {
   if (LLVM_UNLIKELY(self->isProxyObject(runtime))) {
+    struct : public Locals {
+      PinnedValue<JSObject> self;
+      PinnedValue<JSObject> parent;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+    lv.self = self;
+    lv.parent = parent;
     return proxyOpFlags(
         runtime,
         opFlags,
         "Object is not extensible.",
-        JSProxy::setPrototypeOf(
-            runtime.makeHandle(self), runtime, runtime.makeHandle(parent)));
+        JSProxy::setPrototypeOf(lv.self, runtime, lv.parent));
   }
   // ES9 9.1.2
   // 4.
@@ -449,9 +459,13 @@ CallResult<PseudoHandle<>> JSObject::getNamedPropertyValue_RJS(
   if (!accessor->getter)
     return createPseudoHandle(HermesValue::encodeUndefinedValue());
 
+  struct : public Locals {
+    PinnedValue<Callable> getter;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.getter = accessor->getter.getNonNull(runtime);
   // Execute the accessor on this object.
-  return accessor->getter.getNonNull(runtime)->executeCall0(
-      runtime.makeHandle(accessor->getter), runtime, selfHandle);
+  return Callable::executeCall0(lv.getter, runtime, selfHandle);
 }
 
 CallResult<PseudoHandle<>> JSObject::getComputedPropertyValueInternal_RJS(
@@ -472,9 +486,13 @@ CallResult<PseudoHandle<>> JSObject::getComputedPropertyValueInternal_RJS(
   if (!accessor->getter)
     return createPseudoHandle(HermesValue::encodeUndefinedValue());
 
+  struct : public Locals {
+    PinnedValue<Callable> getter;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.getter = accessor->getter.getNonNull(runtime);
   // Execute the accessor on this object.
-  return accessor->getter.getNonNull(runtime)->executeCall0(
-      runtime.makeHandle(accessor->getter), runtime, selfHandle);
+  return Callable::executeCall0(lv.getter, runtime, selfHandle);
 }
 
 CallResult<PseudoHandle<>> JSObject::getComputedPropertyValue_RJS(
@@ -1146,8 +1164,12 @@ JSObject *JSObject::getNamedDescriptorUnsafe(
   }
 
   if (selfHandle->getParentGCPtr(runtime)) {
-    MutableHandle<JSObject> mutableSelfHandle{
-        runtime, selfHandle->getParentNonNull(runtime)};
+    struct : public Locals {
+      PinnedValue<JSObject> head;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+    lv.head = selfHandle->getParentNonNull(runtime);
+    MutableHandle<JSObject> mutableSelfHandle{lv.head};
 
     do {
       GCScopeMarkerRAII marker{runtime};
@@ -1320,6 +1342,11 @@ CallResult<PseudoHandle<>> JSObject::getNamedWithReceiver_RJS(
         getNamedSlotValueUnsafe(propObj, runtime, desc).unboxToHV(runtime));
   }
 
+  struct : public Locals {
+    PinnedValue<Callable> getter;
+    PinnedValue<JSObject> proxy;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   if (desc.flags.accessor) {
     auto *accessor = vmcast<PropertyAccessor>(
         getNamedSlotValueUnsafe(propObj, runtime, desc).getPointer(runtime));
@@ -1327,8 +1354,8 @@ CallResult<PseudoHandle<>> JSObject::getNamedWithReceiver_RJS(
       return createPseudoHandle(HermesValue::encodeUndefinedValue());
 
     // Execute the accessor on this object.
-    return Callable::executeCall0(
-        runtime.makeHandle(accessor->getter), runtime, receiver);
+    lv.getter = accessor->getter.getNonNull(runtime);
+    return Callable::executeCall0(lv.getter, runtime, receiver);
   } else if (desc.flags.hostObject) {
     auto res = vmcast<HostObject>(propObj)->get(name);
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
@@ -1337,8 +1364,8 @@ CallResult<PseudoHandle<>> JSObject::getNamedWithReceiver_RJS(
     return createPseudoHandle(*res);
   } else {
     assert(desc.flags.proxyObject && "descriptor flags are impossible");
-    return JSProxy::getNamed(
-        runtime.makeHandle(propObj), runtime, name, receiver);
+    lv.proxy = propObj;
+    return JSProxy::getNamed(lv.proxy, runtime, name, receiver);
   }
 }
 
@@ -1352,11 +1379,12 @@ CallResult<PseudoHandle<>> JSObject::getNamedOrIndexed(
     // Identifier.
     if (auto nameAsIndex =
             runtime.getIdentifierTable().symbolToArrayIndex(name)) {
-      return getComputed_RJS(
-          selfHandle,
-          runtime,
-          runtime.makeHandle(
-              HermesValue::encodeTrustedNumberValue(*nameAsIndex)));
+      struct : public Locals {
+        PinnedValue<> index;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
+      lv.index = HermesValue::encodeTrustedNumberValue(*nameAsIndex);
+      return getComputed_RJS(selfHandle, runtime, lv.index);
     }
     // Here we have indexed properties but the symbol was not index-like.
     // Fall through to getNamed().
@@ -1404,6 +1432,8 @@ CallResult<PseudoHandle<>> JSObject::getComputedWithReceiver_RJS(
     PinnedValue<> key;
     PinnedValue<SymbolID> id;
     PinnedValue<SymbolID> descSym;
+    PinnedValue<JSObject> propObj;
+    PinnedValue<Callable> getter;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   auto converted = toPropertyKeyIfObject(runtime, nameValHandle);
@@ -1415,7 +1445,7 @@ CallResult<PseudoHandle<>> JSObject::getComputedWithReceiver_RJS(
 
   // Locate the descriptor. propObj contains the object which may be anywhere
   // along the prototype chain.
-  MutableHandle<JSObject> propObj{runtime};
+  MutableHandle<JSObject> propObj{lv.propObj};
   if (LLVM_UNLIKELY(
           getComputedPrimitiveDescriptor(
               selfHandle, runtime, lv.key, propObj, desc) ==
@@ -1440,8 +1470,8 @@ CallResult<PseudoHandle<>> JSObject::getComputedWithReceiver_RJS(
       return createPseudoHandle(HermesValue::encodeUndefinedValue());
 
     // Execute the accessor on this object.
-    return accessor->getter.getNonNull(runtime)->executeCall0(
-        runtime.makeHandle(accessor->getter), runtime, receiver);
+    lv.getter = accessor->getter.getNonNull(runtime);
+    return Callable::executeCall0(lv.getter, runtime, receiver);
   } else if (desc.flags.hostObject) {
     LAZY_TO_IDENTIFIER(runtime, lv.key, lv.id);
     auto propRes = vmcast<HostObject>(propObj.get())->get(*lv.id);
@@ -1468,7 +1498,12 @@ CallResult<bool> JSObject::hasNamed(
     return false;
   }
   if (LLVM_UNLIKELY(desc.flags.proxyObject)) {
-    return JSProxy::hasNamed(runtime.makeHandle(propObj), runtime, name);
+    struct : public Locals {
+      PinnedValue<JSObject> proxy;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+    lv.proxy = propObj;
+    return JSProxy::hasNamed(lv.proxy, runtime, name);
   }
   return true;
 }
@@ -1514,6 +1549,8 @@ CallResult<bool> JSObject::hasComputed(
   // once.
   struct : public Locals {
     PinnedValue<> key;
+    PinnedValue<SymbolID> descSym;
+    PinnedValue<JSObject> propObj;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   auto converted = toPropertyKeyIfObject(runtime, nameValHandle);
@@ -1521,8 +1558,8 @@ CallResult<bool> JSObject::hasComputed(
     return ExecutionStatus::EXCEPTION;
   }
   lv.key = std::move(*converted);
-  ComputedPropertyDescWithSymStorage desc{MutableHandle<SymbolID>{runtime}};
-  MutableHandle<JSObject> propObj{runtime};
+  ComputedPropertyDescWithSymStorage desc{lv.descSym};
+  MutableHandle<JSObject> propObj{lv.propObj};
   if (getComputedPrimitiveDescriptor(
           selfHandle, runtime, lv.key, propObj, desc) ==
       ExecutionStatus::EXCEPTION) {
@@ -1553,9 +1590,12 @@ CallResult<bool> JSObject::hasComputed(
 static ExecutionStatus raiseErrorForOverridingStaticBuiltin(
     Handle<JSObject> selfHandle,
     Runtime &runtime,
-    Handle<SymbolID> name) {
-  Handle<StringPrimitive> methodNameHnd =
-      runtime.makeHandle(runtime.getStringPrimFromSymbolID(name.get()));
+    SymbolID name) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> methodName;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.methodName = runtime.getStringPrimFromSymbolID(name);
   // If the 'name' property does not exist or is an accessor, we don't display
   // the name.
   NamedPropertyDescriptor desc;
@@ -1568,7 +1608,7 @@ static ExecutionStatus raiseErrorForOverridingStaticBuiltin(
   if (!obj || desc.flags.accessor) {
     return runtime.raiseTypeError(
         TwineChar16("Attempting to override read-only builtin method '") +
-        TwineChar16(methodNameHnd.get()) + "'");
+        TwineChar16(lv.methodName.get()) + "'");
   }
 
   // Display the name property of the builtin object if it is a string.
@@ -1583,12 +1623,12 @@ static ExecutionStatus raiseErrorForOverridingStaticBuiltin(
   if (!objName) {
     return runtime.raiseTypeError(
         TwineChar16("Attempting to override read-only builtin method '") +
-        TwineChar16(methodNameHnd.get()) + "'");
+        TwineChar16(lv.methodName.get()) + "'");
   }
 
   return runtime.raiseTypeError(
       TwineChar16("Attempting to override read-only builtin method '") +
-      TwineChar16(objName.get()) + "." + TwineChar16(methodNameHnd.get()) +
+      TwineChar16(objName.get()) + "." + TwineChar16(lv.methodName.get()) +
       "'");
 }
 
@@ -1628,7 +1668,18 @@ CallResult<bool> JSObject::putNamedWithReceiver_RJS(
       setNamedSlotValueUnsafe(*selfHandle, runtime, desc, shv);
       return true;
     }
+  }
 
+  // Slow path.
+  struct : public Locals {
+    PinnedValue<Callable> setter;
+    PinnedValue<JSObject> proxy;
+    PinnedValue<JSObject> receiver;
+    PinnedValue<> nameVal;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  if (propObj) {
     if (LLVM_UNLIKELY(desc.flags.accessor)) {
       auto *accessor = vmcast<PropertyAccessor>(
           getNamedSlotValueUnsafe(propObj, runtime, desc).getObject(runtime));
@@ -1647,19 +1698,18 @@ CallResult<bool> JSObject::putNamedWithReceiver_RJS(
       }
 
       // Execute the accessor on this object.
-      if (accessor->setter.getNonNull(runtime)->executeCall1(
-              runtime.makeHandle(accessor->setter),
-              runtime,
-              receiver,
-              *valueHandle) == ExecutionStatus::EXCEPTION) {
+      lv.setter = accessor->setter.getNonNull(runtime);
+      if (Callable::executeCall1(lv.setter, runtime, receiver, *valueHandle) ==
+          ExecutionStatus::EXCEPTION) {
         return ExecutionStatus::EXCEPTION;
       }
       return true;
     }
 
     if (LLVM_UNLIKELY(desc.flags.proxyObject)) {
-      CallResult<bool> setRes = JSProxy::setNamed(
-          runtime.makeHandle(propObj), runtime, name, valueHandle, receiver);
+      lv.proxy = propObj;
+      CallResult<bool> setRes =
+          JSProxy::setNamed(lv.proxy, runtime, name, valueHandle, receiver);
       if (LLVM_UNLIKELY(setRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
@@ -1676,8 +1726,7 @@ CallResult<bool> JSObject::putNamedWithReceiver_RJS(
 
     if (LLVM_UNLIKELY(!desc.flags.writable)) {
       if (desc.flags.staticBuiltin) {
-        return raiseErrorForOverridingStaticBuiltin(
-            selfHandle, runtime, runtime.makeHandle(name));
+        return raiseErrorForOverridingStaticBuiltin(selfHandle, runtime, name);
       }
       if (opFlags.getThrowOnError()) {
         return raiseErrorForSymbolName(
@@ -1695,7 +1744,8 @@ CallResult<bool> JSObject::putNamedWithReceiver_RJS(
   // The property does not exist as an conventional own property on
   // this object.
 
-  MutableHandle<JSObject> receiverHandle{runtime, *selfHandle};
+  lv.receiver = *selfHandle;
+  MutableHandle<JSObject> receiverHandle{lv.receiver};
   if (selfHandle.getHermesValue().getRaw() != receiver->getRaw() ||
       receiverHandle->isHostObject(runtime) ||
       receiverHandle->isProxyObject(runtime)) {
@@ -1734,11 +1784,13 @@ CallResult<bool> JSObject::putNamedWithReceiver_RJS(
       // getOwnComputedPrimitiveDescriptor and JSProxy::defineOwnProperty expect
       // the key to be passed in as a primitive string value rather than a
       // symbol, if it actually did come from a string.
-      Handle<> nameValHandle = name.isUniqued()
-          ? runtime.makeHandle(
-                HermesValue::encodeStringValue(
-                    runtime.getStringPrimFromSymbolID(name)))
-          : runtime.makeHandle(name);
+      if (name.isUniqued()) {
+        lv.nameVal = HermesValue::encodeStringValue(
+            runtime.getStringPrimFromSymbolID(name));
+      } else {
+        lv.nameVal = HermesValue::encodeSymbolValue(name);
+      }
+      Handle<> nameValHandle = lv.nameVal;
       CallResult<bool> descDefinedRes = getOwnComputedPrimitiveDescriptor(
           receiverHandle, runtime, nameValHandle, IgnoreProxy::No, desc);
       if (LLVM_UNLIKELY(descDefinedRes == ExecutionStatus::EXCEPTION)) {
@@ -1786,13 +1838,13 @@ CallResult<bool> JSObject::putNamedOrIndexed(
     // Identifier.
     if (auto nameAsIndex =
             runtime.getIdentifierTable().symbolToArrayIndex(name)) {
+      struct : public Locals {
+        PinnedValue<> index;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
+      lv.index = HermesValue::encodeTrustedNumberValue(*nameAsIndex);
       return putComputed_RJS(
-          selfHandle,
-          runtime,
-          runtime.makeHandle(
-              HermesValue::encodeTrustedNumberValue(*nameAsIndex)),
-          valueHandle,
-          opFlags);
+          selfHandle, runtime, lv.index, valueHandle, opFlags);
     }
     // Here we have indexed properties but the symbol was not index-like.
     // Fall through to putNamed().
@@ -1899,6 +1951,10 @@ CallResult<bool> JSObject::putComputedWithReceiver_RJS(
     PinnedValue<> key;
     PinnedValue<SymbolID> id;
     PinnedValue<SymbolID> descSym;
+    PinnedValue<JSObject> propObj;
+    PinnedValue<Callable> setter;
+    PinnedValue<JSObject> receiver;
+    PinnedValue<> newLength;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   auto converted = toPropertyKeyIfObject(runtime, nameValHandle);
@@ -1909,7 +1965,7 @@ CallResult<bool> JSObject::putComputedWithReceiver_RJS(
   ComputedPropertyDescWithSymStorage desc{lv.descSym};
 
   // Look for the property in this object or along the prototype chain.
-  MutableHandle<JSObject> propObj{runtime};
+  MutableHandle<JSObject> propObj{lv.propObj};
   if (LLVM_UNLIKELY(
           getComputedPrimitiveDescriptor(
               selfHandle, runtime, lv.key, propObj, desc) ==
@@ -1964,11 +2020,10 @@ CallResult<bool> JSObject::putComputedWithReceiver_RJS(
       }
 
       // Execute the accessor on this object.
-      if (accessor->setter.getNonNull(runtime)->executeCall1(
-              runtime.makeHandle(accessor->setter),
-              runtime,
-              receiver,
-              valueHandle.get()) == ExecutionStatus::EXCEPTION) {
+      lv.setter = accessor->setter.getNonNull(runtime);
+      if (Callable::executeCall1(
+              lv.setter, runtime, receiver, valueHandle.get()) ==
+          ExecutionStatus::EXCEPTION) {
         return ExecutionStatus::EXCEPTION;
       }
       return true;
@@ -1995,7 +2050,8 @@ CallResult<bool> JSObject::putComputedWithReceiver_RJS(
     if (LLVM_UNLIKELY(!desc.flags.writable)) {
       if (desc.flags.staticBuiltin) {
         LAZY_TO_IDENTIFIER(runtime, lv.key, lv.id);
-        return raiseErrorForOverridingStaticBuiltin(selfHandle, runtime, lv.id);
+        return raiseErrorForOverridingStaticBuiltin(
+            selfHandle, runtime, *lv.id);
       }
       if (opFlags.getThrowOnError()) {
         return runtime.raiseTypeErrorForValue(
@@ -2019,7 +2075,8 @@ CallResult<bool> JSObject::putComputedWithReceiver_RJS(
   // The property does not exist as an conventional own property on
   // this object.
 
-  MutableHandle<JSObject> receiverHandle{runtime, *selfHandle};
+  lv.receiver = *selfHandle;
+  MutableHandle<JSObject> receiverHandle{lv.receiver};
   if (selfHandle.getHermesValue().getRaw() != receiver->getRaw() ||
       receiverHandle->isHostObject(runtime) ||
       receiverHandle->isProxyObject(runtime)) {
@@ -2112,12 +2169,12 @@ CallResult<bool> JSObject::putComputedWithReceiver_RJS(
       // Check whether we need to update array's ".length" property.
       if (auto *array = dyn_vmcast<JSArray>(receiverHandle.get())) {
         if (LLVM_UNLIKELY(*arrayIndex >= JSArray::getLength(array, runtime))) {
+          lv.newLength = HermesValue::encodeTrustedNumberValue(*arrayIndex + 1);
           auto cr = putNamed_RJS(
               receiverHandle,
               runtime,
               Predefined::getSymbolID(Predefined::length),
-              runtime.makeHandle(
-                  HermesValue::encodeTrustedNumberValue(*arrayIndex + 1)),
+              lv.newLength,
               opFlags);
           if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
             return ExecutionStatus::EXCEPTION;
@@ -2385,16 +2442,18 @@ CallResult<bool> JSObject::defineOwnPropertyInternal(
   if (LLVM_UNLIKELY(
           selfHandle->isLazy(runtime) || selfHandle->isProxyObject(runtime))) {
     if (selfHandle->isProxyObject(runtime)) {
+      struct : public Locals {
+        PinnedValue<> nameVal;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
+      if (name.isUniqued()) {
+        lv.nameVal = HermesValue::encodeStringValue(
+            runtime.getStringPrimFromSymbolID(name));
+      } else {
+        lv.nameVal = HermesValue::encodeSymbolValue(name);
+      }
       return JSProxy::defineOwnProperty(
-          selfHandle,
-          runtime,
-          name.isUniqued() ? runtime.makeHandle(
-                                 HermesValue::encodeStringValue(
-                                     runtime.getStringPrimFromSymbolID(name)))
-                           : runtime.makeHandle(name),
-          dpFlags,
-          valueOrAccessor,
-          opFlags);
+          selfHandle, runtime, lv.nameVal, dpFlags, valueOrAccessor, opFlags);
     }
     assert(selfHandle->isLazy(runtime) && "descriptor flags are impossible");
     // if the property was not found and the object is lazy we need to
@@ -2478,6 +2537,8 @@ CallResult<bool> JSObject::defineOwnComputedPrimitive(
 
   struct : public Locals {
     PinnedValue<SymbolID> id;
+    PinnedValue<> curValueOrAccessor;
+    PinnedValue<> value;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -2528,14 +2589,13 @@ CallResult<bool> JSObject::defineOwnComputedPrimitive(
       getOwnIndexedPropertyFlags(selfHandle.get(), runtime, *arrayIndex);
   if (indexedPropPresent) {
     // The current value of the property.
-    Handle<> curValueOrAccessor =
-        runtime.makeHandle(getOwnIndexed(selfHandle, runtime, *arrayIndex));
+    lv.curValueOrAccessor = getOwnIndexed(selfHandle, runtime, *arrayIndex);
 
     auto updateStatus = checkPropertyUpdate(
         runtime,
         *indexedPropPresent,
         dpFlags,
-        *curValueOrAccessor,
+        *lv.curValueOrAccessor,
         valueOrAccessor,
         opFlags);
     if (updateStatus == ExecutionStatus::EXCEPTION)
@@ -2571,11 +2631,10 @@ CallResult<bool> JSObject::defineOwnComputedPrimitive(
 
     // Check whether to use the supplied value, or to reuse the old one, as we
     // are simply reconfiguring it.
-    MutableHandle<> value{runtime};
     if (dpFlags.setValue || dpFlags.isAccessor()) {
-      value = valueOrAccessor.get();
+      lv.value = valueOrAccessor.get();
     } else {
-      value = *curValueOrAccessor;
+      lv.value = *lv.curValueOrAccessor;
     }
 
     // Delete the existing indexed property.
@@ -2596,7 +2655,7 @@ CallResult<bool> JSObject::defineOwnComputedPrimitive(
                 runtime,
                 *lv.id,
                 updateStatus->second,
-                value,
+                lv.value,
                 /* runtimeModule */ nullptr,
                 /* unit */ nullptr,
                 /* cacheEntry */ nullptr) == ExecutionStatus::EXCEPTION))
@@ -3079,7 +3138,12 @@ CallResult<bool> JSObject::isExtensible(
     PseudoHandle<JSObject> self,
     Runtime &runtime) {
   if (LLVM_UNLIKELY(self->isProxyObject(runtime))) {
-    return JSProxy::isExtensible(runtime.makeHandle(std::move(self)), runtime);
+    struct : public Locals {
+      PinnedValue<JSObject> self;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
+    lv.self = std::move(self);
+    return JSProxy::isExtensible(lv.self, runtime);
   }
   return self->isExtensible(runtime);
 }
@@ -3962,18 +4026,23 @@ ExecutionStatus setProtoClasses(
     arr->clear(runtime);
     return ExecutionStatus::RETURNED;
   }
-  MutableHandle<JSObject> head(runtime, *obj);
-  MutableHandle<> clazz(runtime);
+  struct : public Locals {
+    PinnedValue<JSObject> head;
+    PinnedValue<> clazz;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.head = *obj;
+  MutableHandle<JSObject> head{lv.head};
   GCScopeMarkerRAII marker{runtime};
   // Push entries 0 and 1 (we'll fill them in later).
-  clazz = HermesValue::encodeTrustedNumberValue(0);
+  lv.clazz = HermesValue::encodeTrustedNumberValue(0);
   if (LLVM_UNLIKELY(
-          ArrayStorageSmall::push_back(arr, runtime, clazz) ==
+          ArrayStorageSmall::push_back(arr, runtime, lv.clazz) ==
           ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
   if (LLVM_UNLIKELY(
-          ArrayStorageSmall::push_back(arr, runtime, clazz) ==
+          ArrayStorageSmall::push_back(arr, runtime, lv.clazz) ==
           ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -3988,18 +4057,18 @@ ExecutionStatus setProtoClasses(
       // when getOwnPropertyKeys is called later.
       JSObject::initializeLazyObject(runtime, head);
     }
-    clazz = HermesValue::encodeObjectValue(head->getClass(runtime));
+    lv.clazz = HermesValue::encodeObjectValue(head->getClass(runtime));
     if (LLVM_UNLIKELY(
-            ArrayStorageSmall::push_back(arr, runtime, clazz) ==
+            ArrayStorageSmall::push_back(arr, runtime, lv.clazz) ==
             ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
     head = head->getParent(runtime);
     marker.flush();
   }
-  clazz = HermesValue::encodeNullValue();
+  lv.clazz = HermesValue::encodeNullValue();
   if (LLVM_UNLIKELY(
-          ArrayStorageSmall::push_back(arr, runtime, clazz) ==
+          ArrayStorageSmall::push_back(arr, runtime, lv.clazz) ==
           ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -4023,7 +4092,12 @@ uint32_t matchesProtoClasses(
     Runtime &runtime,
     Handle<JSObject> obj,
     Handle<ArrayStorageSmall> arr) {
-  MutableHandle<JSObject> head(runtime, obj->getParent(runtime));
+  struct : public Locals {
+    PinnedValue<JSObject> head;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.head = obj->getParent(runtime);
+  MutableHandle<JSObject> head{lv.head};
   // Skip the counts and object's own class.
   uint32_t i = 3;
   while (head.get()) {
