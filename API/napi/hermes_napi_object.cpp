@@ -411,7 +411,7 @@ napi_status NAPI_CDECL napi_get_all_property_names(
   if (!(key_filter & napi_key_skip_strings))
     okFlags = okFlags.plusIncludeNonSymbols();
   if (!(key_filter & napi_key_skip_symbols))
-    okFlags = okFlags.plusIncludeSymbols().plusKeepSymbols();
+    okFlags = okFlags.plusIncludeSymbols();
   // At least one of IncludeSymbols or IncludeNonSymbols must be set.
   if ((key_filter & napi_key_skip_strings) &&
       (key_filter & napi_key_skip_symbols))
@@ -421,6 +421,14 @@ napi_status NAPI_CDECL napi_get_all_property_names(
   // for all attribute filters (writable, enumerable, configurable).
   okFlags = okFlags.plusIncludeNonEnumerable();
 
+  // Always request KeepSymbols: string-named properties of ordinary objects
+  // come back as uniqued SymbolIDs and indices as numbers, which are
+  // GC-stable identities that can be used for deduplication. (Proxy and
+  // HostObject results can still contain plain strings; those are uniqued
+  // below.) With IncludeSymbols not set, only string-named properties are
+  // returned; real Symbols are never uniqued.
+  okFlags = okFlags.plusKeepSymbols();
+
   bool needAttrFilter =
       (key_filter &
        (napi_key_writable | napi_key_enumerable | napi_key_configurable)) != 0;
@@ -429,6 +437,8 @@ napi_status NAPI_CDECL napi_get_all_property_names(
     hermes::vm::PinnedValue<hermes::vm::JSArray> resultArray;
     hermes::vm::PinnedValue<hermes::vm::JSObject> curObj;
     hermes::vm::PinnedValue<hermes::vm::JSArray> keysArray;
+    hermes::vm::PinnedValue<hermes::vm::JSArray> seenArray;
+    hermes::vm::PinnedValue<hermes::vm::SymbolID> sym;
     hermes::vm::PinnedValue<> tmp;
   } lv;
   hermes::vm::LocalsRAII lraii(env->runtime, &lv);
@@ -446,12 +456,20 @@ napi_status NAPI_CDECL napi_get_all_property_names(
   lv.resultArray = std::move(*arrRes);
   uint32_t resultIndex = 0;
 
-  // For prototype chain deduplication, track seen keys.
-  // String keys from getOwnPropertyKeys come from the identifier
-  // table, so equal names share the same StringPrimitive pointer.
-  // Use uintptr_t to store raw pointer values for dedup.
-  llvh::SmallDenseSet<uintptr_t, 16> seenKeys;
+  // For prototype chain deduplication, track seen keys by GC-stable
+  // identity. The set key is 64 bits wide with disjoint domains: array
+  // indices have kIndexTag set, and all other keys are the raw SymbolID
+  // (uniqued or not) with the tag clear. Raw GC pointers must not be used,
+  // since strings move.
+  constexpr uint64_t kIndexTag = uint64_t(1) << 63;
+  const bool useDedup = key_mode == napi_key_include_prototypes;
+  llvh::SmallDenseSet<uint64_t, 16> seenKeys;
   bool needDedup = false;
+  // Nothing else roots the symbols recorded in seenKeys once the object they
+  // came from goes out of scope, and an unrooted SymbolID can be freed and
+  // reused for a different name. Keep every recorded symbol alive in seenArray.
+  // It is created when the first symbol is recorded.
+  uint32_t seenCount = 0;
 
   lv.curObj = hermes::vm::vmcast<hermes::vm::JSObject>(*objPhv);
 
@@ -468,40 +486,70 @@ napi_status NAPI_CDECL napi_get_all_property_names(
         hermes::vm::JSArray::getLength(lv.keysArray.get(), env->runtime);
 
     for (uint32_t i = 0; i < len; ++i) {
-      hermes::vm::HermesValue elem =
-          lv.keysArray->at(env->runtime, i).unboxToHV(env->runtime);
+      // Every element is read from the rooted keys array at its point of use,
+      // because the calls below can move the key.
+      auto keyAt = [&lv, env, i]() {
+        return lv.keysArray->at(env->runtime, i).unboxToHV(env->runtime);
+      };
 
-      // Compute a dedup key for this element.
-      // Numbers: encode the index value with a tag bit to
-      // distinguish from pointer values.
-      // Strings: use the StringPrimitive pointer (unique per name
-      // from the identifier table).
-      // Symbols: use the raw SymbolID value with a tag bit.
-      uintptr_t dedupKey;
-      if (elem.isNumber()) {
-        // Use odd values for numeric keys (pointers are even).
-        dedupKey =
-            (static_cast<uintptr_t>(static_cast<uint32_t>(elem.getNumber()))
-             << 1) |
-            1;
-      } else if (elem.isString()) {
-        dedupKey = reinterpret_cast<uintptr_t>(elem.getString());
-      } else {
-        // Symbol: use raw SymbolID.
-        dedupKey = static_cast<uintptr_t>(elem.getSymbol().unsafeGetRaw());
-      }
+      if (useDedup) {
+        // Compute the dedup key. Numbers are indices; Symbol values are
+        // uniqued string names or real Symbols; strings (from Proxy or
+        // HostObject results) are uniqued to a SymbolID.
+        uint64_t dedupKey;
+        bool isSym = true;
+        hermes::vm::HermesValue elem = keyAt();
+        if (elem.isNumber()) {
+          dedupKey = kIndexTag | static_cast<uint32_t>(elem.getNumber());
+          isSym = false;
+        } else if (elem.isSymbol()) {
+          lv.sym = elem.getSymbol();
+          dedupKey = lv.sym.get().unsafeGetRaw();
+        } else {
+          if (LLVM_UNLIKELY(
+                  env->runtime.getIdentifierTable().getSymbolFromPrimitive(
+                      env->runtime,
+                      hermes::vm::createPseudoHandle(elem.getString()),
+                      lv.sym) == hermes::vm::ExecutionStatus::EXCEPTION)) {
+            return captureRuntimeException(env, napi_pending_exception);
+          }
+          // An ordinary object reports an index-like name as a number, so map
+          // an index-like string into the index domain to dedup against it.
+          if (auto idx = env->runtime.getIdentifierTable().symbolToArrayIndex(
+                  lv.sym.get())) {
+            dedupKey = kIndexTag | *idx;
+            isSym = false;
+          } else {
+            dedupKey = lv.sym.get().unsafeGetRaw();
+          }
+        }
 
-      if (needDedup) {
-        if (!seenKeys.insert(dedupKey).second)
+        bool inserted = seenKeys.insert(dedupKey).second;
+        if (needDedup && !inserted)
           continue;
-      } else if (key_mode == napi_key_include_prototypes) {
-        seenKeys.insert(dedupKey);
+        if (inserted && isSym) {
+          if (!lv.seenArray.get()) {
+            auto seenRes = hermes::vm::JSArray::create(env->runtime, 0, 0);
+            if (LLVM_UNLIKELY(
+                    seenRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
+              return captureRuntimeException(env, napi_pending_exception);
+            }
+            lv.seenArray = std::move(*seenRes);
+          }
+          lv.tmp = hermes::vm::HermesValue::encodeSymbolValue(lv.sym.get());
+          if (LLVM_UNLIKELY(
+                  hermes::vm::JSArray::setElementAt(
+                      lv.seenArray, env->runtime, seenCount++, lv.tmp) ==
+                  hermes::vm::ExecutionStatus::EXCEPTION)) {
+            return captureRuntimeException(env, napi_pending_exception);
+          }
+        }
       }
 
       // Apply attribute filters if needed.
       if (needAttrFilter) {
         hermes::vm::ComputedPropertyDescriptor desc;
-        lv.tmp = elem;
+        lv.tmp = keyAt();
         auto found = hermes::vm::JSObject::getOwnComputedDescriptor(
             lv.curObj, env->runtime, lv.tmp, desc);
         if (LLVM_UNLIKELY(found == hermes::vm::ExecutionStatus::EXCEPTION)) {
@@ -519,17 +567,14 @@ napi_status NAPI_CDECL napi_get_all_property_names(
           continue;
       }
 
-      // getOwnComputedDescriptor above may have run a Proxy trap and
-      // triggered a GC that moved the string \c elem points to. Re-read the
-      // key from the rooted keys array.
-      hermes::vm::HermesValue key =
-          lv.keysArray->at(env->runtime, i).unboxToHV(env->runtime);
+      // The calls above may have run Proxy traps and triggered a GC that
+      // moved the key. Re-read it from the rooted keys array.
+      hermes::vm::HermesValue key = keyAt();
 
-      // When KeepSymbols is set, getOwnPropertyKeys returns ALL
-      // property names as Hermes SymbolValues, including plain string
-      // properties. Convert uniqued SymbolIDs (which represent
-      // regular string property names) back to StringPrimitive values
-      // so NAPI consumers see them as JS strings, not JS Symbols.
+      // Because KeepSymbols is set, getOwnPropertyKeys returns string-named
+      // properties as uniqued Hermes SymbolValues. Convert them back to
+      // StringPrimitive values so NAPI consumers see them as JS strings, not
+      // JS Symbols. Real Symbols are not uniqued and are kept as is.
       lv.tmp = key;
       if (key.isSymbol()) {
         hermes::vm::SymbolID symId = key.getSymbol();

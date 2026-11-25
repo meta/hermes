@@ -14,6 +14,11 @@
 #include "hermes/VM/JSObject.h"
 #include "hermes/VM/StringPrimitive.h"
 
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
 namespace {
 
 using hermes::napi::NapiTestFixture;
@@ -3260,6 +3265,473 @@ TEST_F(NapiTestFixture, GetAllPropertyNames_SkipSymbols_OnlyStrings) {
     ASSERT_EQ(napi_ok, napi_typeof(env_, elem, &type));
     EXPECT_EQ(napi_string, type);
   }
+
+  closeScope(env_, scope);
+}
+
+/// A (symbol value, display name) pair used by describeKeys().
+using NamedSymbol = std::pair<napi_value, std::string>;
+
+/// Render each element of the key array \p names as a string: numbers as
+/// "#<n>", strings as themselves, and symbols as the name registered for them
+/// in \p syms (or "<unknown symbol>").
+static std::vector<std::string> describeKeys(
+    napi_env env,
+    napi_value names,
+    const std::vector<NamedSymbol> &syms = {}) {
+  std::vector<std::string> res;
+  uint32_t length = 0;
+  EXPECT_EQ(napi_ok, napi_get_array_length(env, names, &length));
+  res.reserve(length);
+  for (uint32_t i = 0; i < length; ++i) {
+    napi_handle_scope scope = openScope(env);
+    napi_value elem = nullptr;
+    EXPECT_EQ(napi_ok, napi_get_element(env, names, i, &elem));
+    napi_valuetype type;
+    EXPECT_EQ(napi_ok, napi_typeof(env, elem, &type));
+    if (type == napi_number) {
+      double d = 0;
+      EXPECT_EQ(napi_ok, napi_get_value_double(env, elem, &d));
+      res.push_back("#" + std::to_string(static_cast<uint32_t>(d)));
+    } else if (type == napi_string) {
+      size_t len = 0;
+      EXPECT_EQ(
+          napi_ok, napi_get_value_string_utf8(env, elem, nullptr, 0, &len));
+      std::string str(len, '\0');
+      EXPECT_EQ(
+          napi_ok,
+          napi_get_value_string_utf8(env, elem, &str[0], len + 1, &len));
+      res.push_back(std::move(str));
+    } else if (type == napi_symbol) {
+      std::string name = "<unknown symbol>";
+      for (const auto &sym : syms) {
+        bool eq = false;
+        EXPECT_EQ(napi_ok, napi_strict_equals(env, elem, sym.first, &eq));
+        if (eq) {
+          name = sym.second;
+          break;
+        }
+      }
+      res.push_back(std::move(name));
+    } else {
+      res.push_back("<unexpected type>");
+    }
+    closeScope(env, scope);
+  }
+  return res;
+}
+
+/// Join \p v into a single space-separated string, for readable diffs.
+static std::string join(const std::vector<std::string> &v) {
+  std::string res;
+  for (const std::string &e : v)
+    res += (res.empty() ? "" : " ") + e;
+  return res;
+}
+
+/// Set the own property \p name of \p obj to 1.
+static void setNamed(napi_env env, napi_value obj, const char *name) {
+  napi_value one = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_int32(env, 1, &one));
+  ASSERT_EQ(napi_ok, napi_set_named_property(env, obj, name, one));
+}
+
+/// Set the own property keyed by symbol \p sym of \p obj to 1.
+static void setSym(napi_env env, napi_value obj, napi_value sym) {
+  napi_value one = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_int32(env, 1, &one));
+  ASSERT_EQ(napi_ok, napi_set_property(env, obj, sym, one));
+}
+
+/// Set \p proto as the prototype of \p obj.
+static void setProto(napi_env env, napi_value obj, napi_value proto) {
+  napi_value global = nullptr;
+  napi_value objectCtor = nullptr;
+  napi_value setPrototypeOf = nullptr;
+  napi_value args[2] = {obj, proto};
+  napi_value ignored = nullptr;
+  ASSERT_EQ(napi_ok, napi_get_global(env, &global));
+  ASSERT_EQ(
+      napi_ok, napi_get_named_property(env, global, "Object", &objectCtor));
+  ASSERT_EQ(
+      napi_ok,
+      napi_get_named_property(
+          env, objectCtor, "setPrototypeOf", &setPrototypeOf));
+  ASSERT_EQ(
+      napi_ok,
+      napi_call_function(env, objectCtor, setPrototypeOf, 2, args, &ignored));
+}
+
+/// Make \p obj a null-prototype object, so that Object.prototype does not
+/// contribute keys to a prototype-chain walk.
+static void setProtoNull(napi_env env, napi_value obj) {
+  napi_value null = nullptr;
+  ASSERT_EQ(napi_ok, napi_get_null(env, &null));
+  setProto(env, obj, null);
+}
+
+TEST_F(NapiTestFixture, GetAllPropertyNames_DedupAcrossPrototypes) {
+  // Names that appear on both an object and its prototype are reported once,
+  // for every combination of key conversion and symbol filter.
+  napi_handle_scope scope = openScope(env_);
+
+  napi_value obj = nullptr;
+  napi_value proto = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_object(env_, &obj));
+  ASSERT_EQ(napi_ok, napi_create_object(env_, &proto));
+  setProto(env_, obj, proto);
+  setProtoNull(env_, proto);
+
+  napi_value sA = nullptr;
+  napi_value sB = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_symbol(env_, nullptr, &sA));
+  ASSERT_EQ(napi_ok, napi_create_symbol(env_, nullptr, &sB));
+  std::vector<NamedSymbol> syms = {{sA, "symA"}, {sB, "symB"}};
+
+  // Own: 5, "a", "b", "c", symA.   Proto: 5, "b", "c", "d", symA, symB.
+  napi_value one = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_int32(env_, 1, &one));
+  for (napi_value o : {obj, proto})
+    ASSERT_EQ(napi_ok, napi_set_element(env_, o, 5, one));
+  for (const char *n : {"a", "b", "c"})
+    setNamed(env_, obj, n);
+  for (const char *n : {"b", "c", "d"})
+    setNamed(env_, proto, n);
+  setSym(env_, obj, sA);
+  setSym(env_, proto, sA);
+  setSym(env_, proto, sB);
+
+  auto run = [&](napi_key_filter filter, napi_key_conversion conv) {
+    napi_value names = nullptr;
+    EXPECT_EQ(
+        napi_ok,
+        napi_get_all_property_names(
+            env_, obj, napi_key_include_prototypes, filter, conv, &names));
+    return describeKeys(env_, names, syms);
+  };
+
+  using V = std::vector<std::string>;
+  EXPECT_EQ(
+      (V{"#5", "a", "b", "c", "symA", "d", "symB"}),
+      run(napi_key_all_properties, napi_key_keep_numbers));
+  EXPECT_EQ(
+      (V{"5", "a", "b", "c", "symA", "d", "symB"}),
+      run(napi_key_all_properties, napi_key_numbers_to_strings));
+  EXPECT_EQ(
+      (V{"#5", "a", "b", "c", "d"}),
+      run(napi_key_skip_symbols, napi_key_keep_numbers));
+  EXPECT_EQ(
+      (V{"5", "a", "b", "c", "d"}),
+      run(napi_key_skip_symbols, napi_key_numbers_to_strings));
+  EXPECT_EQ(
+      (V{"symA", "symB"}), run(napi_key_skip_strings, napi_key_keep_numbers));
+  // The same, filtering on attributes (goes through the descriptor lookup).
+  EXPECT_EQ(
+      (V{"#5", "a", "b", "c", "symA", "d", "symB"}),
+      run(napi_key_enumerable, napi_key_keep_numbers));
+  EXPECT_EQ(
+      (V{"#5", "a", "b", "c", "d"}),
+      run(static_cast<napi_key_filter>(
+              napi_key_enumerable | napi_key_skip_symbols),
+          napi_key_keep_numbers));
+
+  closeScope(env_, scope);
+}
+
+/// Like NapiTestFixture, but with room for large key arrays.
+class NapiLargeHeapTest : public NapiTestFixture {
+ protected:
+  void SetUp() override {
+    auto config = hermes::vm::RuntimeConfig::Builder()
+                      .withGCConfig(
+                          hermes::vm::GCConfig::Builder()
+                              .withInitHeapSize(1 << 16)
+                              .withMaxHeapSize(1 << 26)
+                              .build())
+                      .build();
+    rt_ = hermes::vm::Runtime::create(config);
+    env_ = hermes_napi_create_env(&*rt_);
+  }
+};
+
+TEST_F(NapiLargeHeapTest, GetAllPropertyNames_NoIndexSymbolCollision) {
+  // Regression test: the prototype-chain dedup used to encode an index n as
+  // (n << 1) | 1 and a symbol as its raw SymbolID, so an odd SymbolID could
+  // collide with an index and a distinct key was dropped. Fresh names get
+  // consecutive SymbolIDs above the identifier table's current size, so a
+  // large index range is guaranteed to overlap (SymbolID - 1) / 2 for the odd
+  // ones.
+  constexpr uint32_t kNumIndices = 20000;
+  constexpr uint32_t kNumNames = 300;
+  napi_handle_scope scope = openScope(env_);
+
+  napi_value obj = nullptr;
+  napi_value proto = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_object(env_, &obj));
+  ASSERT_EQ(napi_ok, napi_create_object(env_, &proto));
+  setProto(env_, obj, proto);
+  setProtoNull(env_, proto);
+
+  napi_value one = nullptr;
+  ASSERT_EQ(napi_ok, napi_create_int32(env_, 1, &one));
+  for (uint32_t i = 0; i < kNumIndices; ++i)
+    ASSERT_EQ(napi_ok, napi_set_element(env_, obj, i, one));
+  for (uint32_t i = 0; i < kNumNames; ++i)
+    setNamed(env_, proto, ("p" + std::to_string(i)).c_str());
+
+  napi_value names = nullptr;
+  ASSERT_EQ(
+      napi_ok,
+      napi_get_all_property_names(
+          env_,
+          obj,
+          napi_key_include_prototypes,
+          napi_key_all_properties,
+          napi_key_keep_numbers,
+          &names));
+
+  std::vector<std::string> keys = describeKeys(env_, names);
+  ASSERT_EQ(kNumIndices + kNumNames, keys.size());
+  for (uint32_t i = 0; i < kNumIndices; ++i)
+    ASSERT_EQ("#" + std::to_string(i), keys[i]);
+  std::set<std::string> seen(keys.begin() + kNumIndices, keys.end());
+  EXPECT_EQ(kNumNames, seen.size());
+  for (uint32_t i = 0; i < kNumNames; ++i)
+    EXPECT_EQ(1u, seen.count("p" + std::to_string(i))) << "p" << i;
+
+  closeScope(env_, scope);
+}
+
+/// Native function that forces a full garbage collection.
+static napi_value forceGC(napi_env env, napi_callback_info) {
+  env->runtime.collect("napi test");
+  return nullptr;
+}
+
+TEST_F(NapiLargeHeapTest, GetAllPropertyNames_ProxyWithGC) {
+  // Proxy traps run during the walk and force collections (which move
+  // objects), while the dedup bookkeeping holds keys across them. Trap results
+  // are fresh, non-identifier-table strings.
+  napi_handle_scope scope = openScope(env_);
+
+  napi_value gcFn = nullptr;
+  ASSERT_EQ(
+      napi_ok,
+      napi_create_function(
+          env_, "gc", NAPI_AUTO_LENGTH, forceGC, nullptr, &gcFn));
+
+  static const char kScript[] = R"JS(
+    (function(gc) {
+      var S = Symbol('S'), S2 = Symbol('S2');
+      var protoObj = Object.create(null);
+      protoObj.k3 = 1; protoObj.t2 = 1; protoObj.z1 = 1; protoObj.z2 = 1;
+      protoObj[S] = 1; protoObj[S2] = 1;
+      var mid = Object.create(protoObj);
+      mid.k7 = 1; mid.t1 = 1; mid.t2 = 1;
+      var junk;
+      function churn(tag) {
+        junk = [];
+        for (var i = 0; i < 200; i++) junk.push({a: tag + i, b: [i]});
+        gc();
+        junk = [];
+      }
+      var handler = {
+        ownKeys: function(t) {
+          var keys = [];
+          for (var i = 0; i < 50; i++) { keys.push('k' + i); churn('own' + i); }
+          keys.push(S);
+          return keys;
+        },
+        getOwnPropertyDescriptor: function(t, k) {
+          churn('d');
+          return {value: 1, enumerable: true, configurable: true};
+        },
+        getPrototypeOf: function(t) { churn('p'); return mid; },
+      };
+      return {proxy: new Proxy({}, handler), S: S, S2: S2};
+    })
+  )JS";
+  napi_value script = nullptr;
+  ASSERT_EQ(
+      napi_ok,
+      napi_create_string_utf8(env_, kScript, NAPI_AUTO_LENGTH, &script));
+  napi_value factory = nullptr;
+  ASSERT_EQ(napi_ok, napi_run_script(env_, script, &factory));
+  napi_value undef = nullptr;
+  ASSERT_EQ(napi_ok, napi_get_undefined(env_, &undef));
+  napi_value bundle = nullptr;
+  ASSERT_EQ(
+      napi_ok, napi_call_function(env_, undef, factory, 1, &gcFn, &bundle));
+
+  napi_value proxy = nullptr;
+  napi_value symS = nullptr;
+  napi_value symS2 = nullptr;
+  ASSERT_EQ(napi_ok, napi_get_named_property(env_, bundle, "proxy", &proxy));
+  ASSERT_EQ(napi_ok, napi_get_named_property(env_, bundle, "S", &symS));
+  ASSERT_EQ(napi_ok, napi_get_named_property(env_, bundle, "S2", &symS2));
+  std::vector<NamedSymbol> syms = {{symS, "S"}, {symS2, "S2"}};
+
+  std::vector<std::string> kNames;
+  for (int i = 0; i < 50; ++i)
+    kNames.push_back("k" + std::to_string(i));
+
+  auto run = [&](napi_key_filter filter) {
+    napi_value names = nullptr;
+    EXPECT_EQ(
+        napi_ok,
+        napi_get_all_property_names(
+            env_,
+            proxy,
+            napi_key_include_prototypes,
+            filter,
+            napi_key_keep_numbers,
+            &names));
+    return describeKeys(env_, names, syms);
+  };
+
+  std::vector<std::string> strs = kNames;
+  strs.insert(strs.end(), {"t1", "t2", "z1", "z2"});
+  std::vector<std::string> all = kNames;
+  all.insert(all.end(), {"S", "t1", "t2", "z1", "z2", "S2"});
+
+  EXPECT_EQ(join(all), join(run(napi_key_all_properties)));
+  EXPECT_EQ(join(all), join(run(napi_key_enumerable)));
+  EXPECT_EQ(join(strs), join(run(napi_key_skip_symbols)));
+  EXPECT_EQ(
+      join(strs),
+      join(
+          run(static_cast<napi_key_filter>(
+              napi_key_enumerable | napi_key_skip_symbols))));
+  EXPECT_EQ("S S2", join(run(napi_key_skip_strings)));
+  EXPECT_EQ(
+      "S S2",
+      join(
+          run(static_cast<napi_key_filter>(
+              napi_key_configurable | napi_key_skip_strings))));
+
+  closeScope(env_, scope);
+}
+
+TEST_F(NapiLargeHeapTest, GetAllPropertyNames_RecordedSymbolsStayAlive) {
+  // The receiver's ownKeys trap returns fresh names, so only the dedup
+  // bookkeeping keeps their SymbolIDs alive. The getPrototypeOf trap then
+  // collects and returns a prototype with other fresh names. If a recorded
+  // SymbolID were freed and reused for one of those, that name would be
+  // dropped as a duplicate.
+  napi_handle_scope scope = openScope(env_);
+
+  napi_value gcFn = nullptr;
+  ASSERT_EQ(
+      napi_ok,
+      napi_create_function(
+          env_, "gc", NAPI_AUTO_LENGTH, forceGC, nullptr, &gcFn));
+
+  static const char kScript[] = R"JS(
+    (function(gc) {
+      var desc = {value: 1, enumerable: true, configurable: true};
+      return new Proxy(Object.create(null), {
+        ownKeys: function(t) {
+          var keys = [];
+          for (var i = 0; i < 20; i++) keys.push('own' + i + '_' + i);
+          return keys;
+        },
+        getOwnPropertyDescriptor: function(t, k) { return desc; },
+        getPrototypeOf: function(t) {
+          gc();
+          var proto = Object.create(null);
+          for (var i = 0; i < 20; i++) proto['other' + i + '_' + i] = 1;
+          return proto;
+        },
+      });
+    })
+  )JS";
+  napi_value script = nullptr;
+  ASSERT_EQ(
+      napi_ok,
+      napi_create_string_utf8(env_, kScript, NAPI_AUTO_LENGTH, &script));
+  napi_value factory = nullptr;
+  ASSERT_EQ(napi_ok, napi_run_script(env_, script, &factory));
+  napi_value undef = nullptr;
+  ASSERT_EQ(napi_ok, napi_get_undefined(env_, &undef));
+  napi_value proxy = nullptr;
+  ASSERT_EQ(
+      napi_ok, napi_call_function(env_, undef, factory, 1, &gcFn, &proxy));
+
+  napi_value names = nullptr;
+  ASSERT_EQ(
+      napi_ok,
+      napi_get_all_property_names(
+          env_,
+          proxy,
+          napi_key_include_prototypes,
+          napi_key_all_properties,
+          napi_key_keep_numbers,
+          &names));
+
+  std::vector<std::string> expected;
+  for (int i = 0; i < 20; ++i)
+    expected.push_back("own" + std::to_string(i) + "_" + std::to_string(i));
+  for (int i = 0; i < 20; ++i)
+    expected.push_back("other" + std::to_string(i) + "_" + std::to_string(i));
+  EXPECT_EQ(join(expected), join(describeKeys(env_, names)));
+
+  closeScope(env_, scope);
+}
+
+TEST_F(NapiTestFixture, GetAllPropertyNames_IndexLikeProxyKey) {
+  // A Proxy ownKeys trap reports an index-like name as a string, while an
+  // ordinary object reports it as a number. Dedup must treat them as the
+  // same name, in either order along the prototype chain.
+  napi_handle_scope scope = openScope(env_);
+
+  static const char kScript[] = R"JS(
+    (function() {
+      var plain = Object.create(null);
+      plain[0] = 1;
+      plain.y = 1;
+      var handler = {
+        ownKeys: function(t) { return ['0', 'x']; },
+        getOwnPropertyDescriptor: function(t, k) {
+          return {value: 1, enumerable: true, configurable: true};
+        },
+      };
+      // Proxy above an ordinary object that owns index 0.
+      var below = Object.create(new Proxy(Object.create(null), handler));
+      below[0] = 1;
+      // Ordinary object that owns index 0 above a Proxy.
+      var above = new Proxy(Object.create(null), {
+        ownKeys: handler.ownKeys,
+        getOwnPropertyDescriptor: handler.getOwnPropertyDescriptor,
+        getPrototypeOf: function(t) { return plain; },
+      });
+      return {below: below, above: above};
+    })()
+  )JS";
+  napi_value script = nullptr;
+  ASSERT_EQ(
+      napi_ok,
+      napi_create_string_utf8(env_, kScript, NAPI_AUTO_LENGTH, &script));
+  napi_value bundle = nullptr;
+  ASSERT_EQ(napi_ok, napi_run_script(env_, script, &bundle));
+
+  auto run = [&](const char *name) {
+    napi_value obj = nullptr;
+    EXPECT_EQ(napi_ok, napi_get_named_property(env_, bundle, name, &obj));
+    napi_value names = nullptr;
+    EXPECT_EQ(
+        napi_ok,
+        napi_get_all_property_names(
+            env_,
+            obj,
+            napi_key_include_prototypes,
+            napi_key_all_properties,
+            napi_key_keep_numbers,
+            &names));
+    return join(describeKeys(env_, names));
+  };
+
+  EXPECT_EQ("#0 x", run("below"));
+  EXPECT_EQ("0 x y", run("above"));
 
   closeScope(env_, scope);
 }
