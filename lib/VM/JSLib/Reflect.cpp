@@ -17,6 +17,7 @@ namespace vm {
 
 CallResult<HermesValue> reflectApply(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  GCScope gcScope(runtime);
   auto target = args.dyncastArg<Callable>(0);
   if (LLVM_UNLIKELY(!target)) {
     return runtime.raiseTypeError("target is not callable");
