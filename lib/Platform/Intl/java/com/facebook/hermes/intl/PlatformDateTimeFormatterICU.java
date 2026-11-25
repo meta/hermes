@@ -10,6 +10,7 @@ package com.facebook.hermes.intl;
 import static com.facebook.hermes.intl.IPlatformDateTimeFormatter.DateStyle.UNDEFINED;
 
 import android.icu.text.DateFormat;
+import android.icu.text.DateTimePatternGenerator;
 import android.icu.text.NumberingSystem;
 import android.icu.text.SimpleDateFormat;
 import android.icu.util.Calendar;
@@ -127,6 +128,64 @@ public class PlatformDateTimeFormatterICU implements IPlatformDateTimeFormatter 
 
       return segment.toString();
     }
+
+    public static String withHourCycle(String pattern, HourCycle hourCycle) {
+      char hourSymbol;
+      switch (hourCycle) {
+        case H11:
+          hourSymbol = 'K';
+          break;
+        case H12:
+          hourSymbol = 'h';
+          break;
+        case H23:
+          hourSymbol = 'H';
+          break;
+        case H24:
+          hourSymbol = 'k';
+          break;
+        default:
+          return pattern;
+      }
+
+      StringBuilder result = new StringBuilder(pattern.length());
+      boolean inLiteral = false;
+      for (int i = 0; i < pattern.length(); i++) {
+        char c = pattern.charAt(i);
+        if (c == '\'') {
+          result.append(c);
+          if (i + 1 < pattern.length() && pattern.charAt(i + 1) == '\'') {
+            result.append(pattern.charAt(++i));
+          } else {
+            inLiteral = !inLiteral;
+          }
+        } else if (!inLiteral && (c == 'h' || c == 'H' || c == 'K' || c == 'k')) {
+          result.append(hourSymbol);
+        } else {
+          result.append(c);
+        }
+      }
+      return result.toString();
+    }
+
+    public static String withoutDayPeriod(String pattern) {
+      StringBuilder result = new StringBuilder(pattern.length());
+      boolean inLiteral = false;
+      for (int i = 0; i < pattern.length(); i++) {
+        char c = pattern.charAt(i);
+        if (c == '\'') {
+          result.append(c);
+          if (i + 1 < pattern.length() && pattern.charAt(i + 1) == '\'') {
+            result.append(pattern.charAt(++i));
+          } else {
+            inLiteral = !inLiteral;
+          }
+        } else if (inLiteral || (c != 'a' && c != 'b' && c != 'B')) {
+          result.append(c);
+        }
+      }
+      return result.toString();
+    }
   }
 
   @RequiresApi(api = Build.VERSION_CODES.N)
@@ -152,6 +211,21 @@ public class PlatformDateTimeFormatterICU implements IPlatformDateTimeFormatter 
     }
 
     return hourCycle;
+  }
+
+  @RequiresApi(api = Build.VERSION_CODES.N)
+  @Override
+  public HourCycle getPreferredHourCycle(ILocaleObject<?> localeObject, boolean hour12)
+      throws JSRangeErrorException {
+    ULocale locale = (ULocale) localeObject.getLocaleWithoutExtensions();
+    String pattern =
+        DateTimePatternGenerator.getInstance(locale).getBestPattern(hour12 ? "hm" : "Hm");
+    String fields = PatternUtils.getPatternWithoutLiterals(pattern);
+    if (fields.indexOf('K') >= 0) return HourCycle.H11;
+    if (fields.indexOf('h') >= 0) return HourCycle.H12;
+    if (fields.indexOf('H') >= 0) return HourCycle.H23;
+    if (fields.indexOf('k') >= 0) return HourCycle.H24;
+    throw new JSRangeErrorException("No hour field in locale time pattern");
   }
 
   @RequiresApi(api = Build.VERSION_CODES.N)
@@ -293,6 +367,10 @@ public class PlatformDateTimeFormatterICU implements IPlatformDateTimeFormatter 
           replacePatternChars(skeletonBuffer, new char[] {'h', 'H', 'K'}, 'k');
         }
       }
+
+      if (hourCycle == HourCycle.H23 || hourCycle == HourCycle.H24) {
+        skeletonBuffer = new StringBuilder(PatternUtils.withoutDayPeriod(skeletonBuffer.toString()));
+      }
     } else {
       skeletonBuffer.append(weekDay.getSkeleonSymbol());
       skeletonBuffer.append(era.getSkeleonSymbol());
@@ -387,6 +465,11 @@ public class PlatformDateTimeFormatterICU implements IPlatformDateTimeFormatter 
     else
       mDateFormat =
           DateFormat.getPatternInstance(skeleton, (ULocale) resolvedLocaleObject.getLocale());
+
+    if (hourCycle != HourCycle.UNDEFINED) {
+      SimpleDateFormat formatter = (SimpleDateFormat) mDateFormat;
+      formatter.applyPattern(PatternUtils.withHourCycle(formatter.toPattern(), hourCycle));
+    }
 
     if (!JSObjects.isUndefined(timeZone) && !JSObjects.isNull(timeZone)) {
       TimeZone timeZoneObject = TimeZone.getTimeZone(JSObjects.getJavaString(timeZone));
