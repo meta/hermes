@@ -187,6 +187,11 @@ napi_status NAPI_CDECL napi_create_function(
 
   Runtime &runtime = env->runtime;
   GCScope gcScope(runtime);
+  struct : public Locals {
+    PinnedValue<Callable> func;
+    PinnedValue<JSObject> proto;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
   // Allocate a callback bundle owned by the env. The bundle's
   // address is stable because we use a deque.
@@ -233,28 +238,28 @@ napi_status NAPI_CDECL napi_create_function(
   // Root the function handle before creating the prototype, since
   // JSObject::create is a GC safepoint that can invalidate the
   // PseudoHandle.
-  auto funcHV = runtime.makeHandle(funcHandle.getHermesValue());
+  lv.func.castAndSetHermesValue<Callable>(funcHandle.getHermesValue());
 
   // Create a prototype object so the function can be used as a base class
   // (class Foo extends napiFunc {}). Without .prototype, JS would see
   // undefined and throw "Base class .prototype is neither null nor object".
   auto protoObj = JSObject::create(runtime);
-  auto protoHandle = runtime.makeHandle(protoObj.getHermesValue());
+  lv.proto = std::move(protoObj);
 
   // Set .name, .length, and .prototype properties.
   auto defRes = Callable::defineNameLengthAndPrototype(
-      Handle<Callable>::vmcast(funcHV),
+      lv.func,
       runtime,
       nameSym,
       0, // paramCount (.length)
-      Handle<JSObject>::vmcast(protoHandle),
+      lv.proto,
       Callable::WritablePrototype::Yes);
   if (LLVM_UNLIKELY(defRes == ExecutionStatus::EXCEPTION)) {
     env->callbackBundles_.pop_back();
     return captureRuntimeException(env, napi_generic_failure);
   }
 
-  *result = env->addToCurrentScope(funcHV.getHermesValue());
+  *result = env->addToCurrentScope(lv.func.getHermesValue());
   return napi_clear_last_error(env);
 }
 
@@ -446,6 +451,10 @@ hermes::vm::CallResult<hermes::vm::HermesValue> napiConstructorTrampoline(
   napi_env env = bundle->env;
 
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  struct : public Locals {
+    PinnedValue<JSObject> parent;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
   // Open a handle scope for the callback.
   napi_handle_scope scope = nullptr;
@@ -476,8 +485,8 @@ hermes::vm::CallResult<hermes::vm::HermesValue> napiConstructorTrampoline(
       return ExecutionStatus::EXCEPTION;
     }
 
-    auto parentHandle = runtime.makeHandle(std::move(*protoRes));
-    auto thisObj = JSObject::create(runtime, parentHandle);
+    lv.parent = std::move(*protoRes);
+    auto thisObj = JSObject::create(runtime, lv.parent);
 
     // Store the 'this' object in the handle scope so it's rooted
     // across the user's callback (which may trigger GC).
@@ -564,6 +573,10 @@ napi_status NAPI_CDECL napi_define_class(
     PinnedValue<Callable> ctor;
     PinnedValue<JSObject> proto;
     PinnedValue<SymbolID> name;
+    PinnedValue<Callable> getter;
+    PinnedValue<Callable> setter;
+    PinnedValue<PropertyAccessor> accessor;
+    PinnedValue<NativeFunction> method;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -692,20 +705,20 @@ napi_status NAPI_CDECL napi_define_class(
         PseudoHandle<NativeFunction> getterFunc{};
         STATUS_CALL(createNapiNativeFunction(
             env, p->getter, p->data, propertySym, 0, getterFunc));
-        getterHandle =
-            runtime.makeHandle<Callable>(getterFunc.getHermesValue());
+        lv.getter.castAndSetHermesValue<Callable>(getterFunc.getHermesValue());
+        getterHandle = lv.getter;
       }
       if (p->setter != nullptr) {
         PseudoHandle<NativeFunction> setterFunc{};
         STATUS_CALL(createNapiNativeFunction(
             env, p->setter, p->data, propertySym, 1, setterFunc));
-        setterHandle =
-            runtime.makeHandle<Callable>(setterFunc.getHermesValue());
+        lv.setter.castAndSetHermesValue<Callable>(setterFunc.getHermesValue());
+        setterHandle = lv.setter;
       }
 
       auto accessor =
           PropertyAccessor::create(runtime, getterHandle, setterHandle);
-      auto accessorHandle = runtime.makeHandle(accessor.getHermesValue());
+      lv.accessor = std::move(accessor);
 
       DefinePropertyFlags dpf{};
       dpf.setEnumerable = 1;
@@ -720,7 +733,7 @@ napi_status NAPI_CDECL napi_define_class(
           runtime,
           propertySym,
           dpf,
-          accessorHandle,
+          lv.accessor,
           PropOpFlags().plusThrowOnError());
       if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
         return captureRuntimeException(env, napi_pending_exception);
@@ -731,7 +744,7 @@ napi_status NAPI_CDECL napi_define_class(
       PseudoHandle<NativeFunction> methodFunc{};
       STATUS_CALL(createNapiNativeFunction(
           env, p->method, p->data, propertySym, 0, methodFunc));
-      auto methodHandle = runtime.makeHandle(methodFunc.getHermesValue());
+      lv.method = std::move(methodFunc);
 
       DefinePropertyFlags dpf{};
       dpf.setEnumerable = 1;
@@ -747,7 +760,7 @@ napi_status NAPI_CDECL napi_define_class(
           runtime,
           propertySym,
           dpf,
-          methodHandle,
+          lv.method,
           PropOpFlags().plusThrowOnError());
       if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
         return captureRuntimeException(env, napi_pending_exception);

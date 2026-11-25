@@ -253,6 +253,7 @@ CallResult<HermesValue> JSStringIterator::nextElement(
 
   struct : public Locals {
     PinnedValue<StringPrimitive> s;
+    PinnedValue<StringPrimitive> resultString;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -273,21 +274,19 @@ CallResult<HermesValue> JSStringIterator::nextElement(
         .getHermesValue();
   }
 
-  MutableHandle<StringPrimitive> resultString{runtime};
-
   // 9. Let first be the code unit value at index position in s.
   char16_t first = lv.s->at(position);
   if (first < 0xd800 || first > 0xdbff || position + 1 == len) {
     // 10. If first < 0xD800 or first > 0xDBFF or position+1 = len,
     // let resultString be the string consisting of the single code unit first.
-    resultString = runtime.getCharacterString(first).get();
+    lv.resultString = runtime.getCharacterString(first).get();
   } else {
     // 11a. Let second the code unit value at index position+1 in the String S.
     char16_t second = lv.s->at(position + 1);
     if (second < 0xdc00 || second > 0xdfff) {
       // 11b. If second < 0xDC00 or second > 0xDFFF, let resultString be the
       // string consisting of the single code unit first.
-      resultString = runtime.getCharacterString(first).get();
+      lv.resultString = runtime.getCharacterString(first).get();
     } else {
       // 11c. Let resultString be the string consisting of the code unit first
       // followed by the code unit second.
@@ -296,16 +295,17 @@ CallResult<HermesValue> JSStringIterator::nextElement(
       if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      resultString = vmcast<StringPrimitive>(*strRes);
+      lv.resultString = vmcast<StringPrimitive>(*strRes);
     }
   }
 
   // 13. Set the value of the [[StringIteratorNextIndex]] internal slot of O to
   // position+resultSize.
-  self->nextIndex_ = position + resultString->getStringLength();
+  self->nextIndex_ = position + lv.resultString->getStringLength();
 
   // 14. Return CreateIterResultObject(resultString, false).
-  return createIterResultObject(runtime, resultString, false).getHermesValue();
+  return createIterResultObject(runtime, lv.resultString, false)
+      .getHermesValue();
 }
 
 //===----------------------------------------------------------------------===//

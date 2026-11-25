@@ -329,9 +329,12 @@ ExecutionStatus Debugger::debuggerLoop(
   EvalResultMetadata evalResultMetadata;
   CallResult<InterpreterState> result{ExecutionStatus::EXCEPTION};
   GCScope gcScope{runtime_};
-  MutableHandle<> evalResult{runtime_};
-  // Keep the evalResult alive, even if all other handles are flushed.
-  static constexpr unsigned KEEP_HANDLES = 1;
+  struct : public Locals {
+    PinnedValue<> evalResult;
+  } lv;
+  LocalsRAII lraii{runtime_, &lv};
+  // evalResult is pinned in Locals, so no handles need to be kept.
+  static constexpr unsigned KEEP_HANDLES = 0;
 #if HERMESVM_SAMPLING_PROFILER_AVAILABLE
   SuspendSamplingProfilerRAII ssp{
       runtime_, SamplingProfiler::SuspendFrameInfo::Kind::Debugger};
@@ -339,8 +342,8 @@ ExecutionStatus Debugger::debuggerLoop(
   while (true) {
     GCScopeMarkerRAII marker{runtime_};
     auto command = getNextCommand(
-        state, pauseReason, *evalResult, evalResultMetadata, breakpoint);
-    evalResult.clear();
+        state, pauseReason, *lv.evalResult, evalResultMetadata, breakpoint);
+    lv.evalResult = HermesValue::encodeUndefinedValue();
     switch (command.type) {
       case DebugCommandType::NONE:
         break;
@@ -349,7 +352,7 @@ ExecutionStatus Debugger::debuggerLoop(
         curStepMode_ = llvh::None;
         return ExecutionStatus::RETURNED;
       case DebugCommandType::EVAL:
-        evalResult = evalInFrame(
+        lv.evalResult = evalInFrame(
             command.evalArgs, command.text, startState, &evalResultMetadata);
         pauseReason = PauseReason::EvalComplete;
         break;
@@ -636,8 +639,11 @@ auto Debugger::getStackTrace() const -> StackTrace {
       "Must have at least one stack frame to call this function");
   using fhd::CallFrameInfo;
   GCScopeMarkerRAII marker{runtime_};
-  MutableHandle<> displayName{runtime_};
-  MutableHandle<JSObject> propObj{runtime_};
+  struct : public Locals {
+    PinnedValue<> displayName;
+    PinnedValue<JSObject> propObj;
+  } lv;
+  LocalsRAII lraii{runtime_, &lv};
   std::vector<CallFrameInfo> frames;
   // Note that we are iterating backwards from the top.
   // Also note that each frame saves its caller's code block and IP (the
@@ -653,18 +659,18 @@ auto Debugger::getStackTrace() const -> StackTrace {
     if (auto callableHandle = Handle<Callable>::dyn_vmcast(
             Handle<>(&cf.getCalleeClosureOrCBRef()))) {
       NamedPropertyDescriptor desc;
-      propObj = JSObject::getNamedDescriptorPredefined(
+      lv.propObj = JSObject::getNamedDescriptorPredefined(
           callableHandle, runtime_, Predefined::displayName, desc);
-      if (propObj) {
+      if (*lv.propObj) {
         auto displayNameRes = JSObject::getNamedSlotValue(
-            createPseudoHandle(*propObj), runtime_, desc);
+            createPseudoHandle(*lv.propObj), runtime_, desc);
         if (LLVM_UNLIKELY(displayNameRes == ExecutionStatus::EXCEPTION)) {
-          displayName = HermesValue::encodeUndefinedValue();
+          lv.displayName = HermesValue::encodeUndefinedValue();
         } else {
-          displayName = std::move(*displayNameRes);
-          if (displayName->isString()) {
+          lv.displayName = std::move(*displayNameRes);
+          if (lv.displayName->isString()) {
             llvh::SmallVector<char16_t, 64> storage;
-            displayName->getString()->appendUTF16String(storage);
+            lv.displayName->getString()->appendUTF16String(storage);
             convertUTF16ToUTF8WithReplacements(frameInfo.functionName, storage);
           }
         }
@@ -1254,13 +1260,17 @@ HermesValue Debugger::getExceptionAsEvalResult(
     EvalResultMetadata *outMetadata) {
   outMetadata->isException = true;
 
-  Handle<> thrownValue = runtime_.makeHandle(runtime_.getThrownValue());
-  assert(!thrownValue->isEmpty() && "Runtime did not throw");
+  struct : public Locals {
+    PinnedValue<> thrownValue;
+  } lv;
+  LocalsRAII lraii{runtime_, &lv};
+  lv.thrownValue = runtime_.getThrownValue();
+  assert(!lv.thrownValue->isEmpty() && "Runtime did not throw");
   runtime_.clearThrownValue();
 
   // Set the exceptionDetails.text to toString_RJS() of the thrown value.
   // TODO: rationalize what should happen if toString_RJS() itself throws.
-  auto res = toString_RJS(runtime_, thrownValue);
+  auto res = toString_RJS(runtime_, lv.thrownValue);
   if (res != ExecutionStatus::EXCEPTION) {
     llvh::SmallVector<char16_t, 64> errorText;
     res->get()->appendUTF16String(errorText);
@@ -1271,7 +1281,8 @@ HermesValue Debugger::getExceptionAsEvalResult(
   // Try to fetch the stack trace. It may not exist; for example, if the
   // exception was a parse error in eval(), then the exception will be set
   // directly and the stack trace will not be collected.
-  if (auto errorHandle = Handle<JSError>::dyn_vmcast(thrownValue)) {
+  if (auto errorHandle =
+          Handle<JSError>::dyn_vmcast(Handle<>(lv.thrownValue))) {
     if (auto stackTracePtr = errorHandle->getStackTrace()) {
       // Copy the stack trace to ensure it's not moved out from under us.
       const auto stackTraceCopy = *stackTracePtr;
@@ -1292,7 +1303,7 @@ HermesValue Debugger::getExceptionAsEvalResult(
       outMetadata->exceptionDetails.stackTrace_ = StackTrace{std::move(frames)};
     }
   }
-  return *thrownValue;
+  return *lv.thrownValue;
 }
 
 HermesValue Debugger::evalInFrame(

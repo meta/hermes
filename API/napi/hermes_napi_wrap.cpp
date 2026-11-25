@@ -129,16 +129,18 @@ napi_status getOrCreateNapiObjectData(
   // Create a new NapiObjectData and define the internal property.
   auto *data = new NapiObjectData{env};
 
-  auto *ns = NativeState::create(runtime, data, finalizeNapiObjectData);
-
-  auto valHandle = runtime.makeHandle(HermesValue::encodeObjectValue(ns));
+  struct : public Locals {
+    PinnedValue<NativeState> ns;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.ns = NativeState::create(runtime, data, finalizeNapiObjectData);
 
   auto defRes = JSObject::defineOwnProperty(
       objHandle,
       runtime,
       napiDataSymbolID(),
       DefinePropertyFlags::getDefaultNewPropertyFlags(),
-      valHandle);
+      lv.ns);
 
   if (LLVM_UNLIKELY(defRes == ExecutionStatus::EXCEPTION)) {
     // The NativeState's finalizer will eventually clean up data.
@@ -148,7 +150,7 @@ napi_status getOrCreateNapiObjectData(
   if (!*defRes) {
     // defineOwnProperty returned false (e.g., object not extensible).
     // Prevent the NativeState finalizer from calling user code.
-    auto *nsAfter = vmcast<NativeState>(*valHandle);
+    auto *nsAfter = *lv.ns;
     nsAfter->setContext(nullptr);
     delete data;
     return napi_set_last_error(env, napi_generic_failure);

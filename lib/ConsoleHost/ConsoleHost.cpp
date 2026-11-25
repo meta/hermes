@@ -379,7 +379,11 @@ static vm::CallResult<vm::HermesValue> hermescliLoadHBC(
         llvh::StringRef(ret.second));
   }
 
-  Handle<Domain> domain = runtime.makeHandle(Domain::create(runtime));
+  struct : public Locals {
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.domain = Domain::create(runtime);
 
   RuntimeModuleFlags flags;
   flags.persistent = true;
@@ -389,7 +393,7 @@ static vm::CallResult<vm::HermesValue> hermescliLoadHBC(
       flags,
       /*sourceURL*/ "",
       Runtime::makeNullHandle<Environment>(),
-      domain);
+      lv.domain);
 }
 
 /// Return an array of extra CLI arguments passed after the script filename.
@@ -440,8 +444,11 @@ static vm::CallResult<vm::HermesValue> hermescliGetScriptArgs(
 ///       exists)
 /// - alert, alias to print
 static void initTest262Harness(vm::Runtime &runtime) {
-  vm::Handle<vm::JSObject> test262Obj =
-      runtime.makeHandle(vm::JSObject::create(runtime));
+  struct : public vm::Locals {
+    vm::PinnedValue<vm::JSObject> test262Obj;
+  } lv;
+  vm::LocalsRAII lraii{runtime, &lv};
+  lv.test262Obj = vm::JSObject::create(runtime);
 
   vm::DefinePropertyFlags nonEnumerableDPF =
       vm::DefinePropertyFlags::getNewNonEnumerableFlags();
@@ -450,7 +457,7 @@ static void initTest262Harness(vm::Runtime &runtime) {
   auto global = runtime.getGlobal();
   runtime.ignoreAllocationFailure(
       vm::JSObject::defineOwnProperty(
-          test262Obj,
+          lv.test262Obj,
           runtime,
           vm::Predefined::getSymbolID(vm::Predefined::global),
           nonEnumerableDPF,
@@ -464,8 +471,12 @@ static void initTest262Harness(vm::Runtime &runtime) {
           vm::SymbolID name) -> llvh::Optional<vm::Handle<>> {
     auto propRes = vm::JSObject::getNamed_RJS(selfHandle, runtime, name);
     if (propRes == vm::ExecutionStatus::EXCEPTION) {
-      runtime.printException(
-          llvh::outs(), runtime.makeHandle(runtime.getThrownValue()));
+      struct : public vm::Locals {
+        vm::PinnedValue<> thrown;
+      } lv;
+      vm::LocalsRAII lraii{runtime, &lv};
+      lv.thrown = runtime.getThrownValue();
+      runtime.printException(llvh::outs(), lv.thrown);
       return llvh::None;
     }
 
@@ -498,7 +509,7 @@ static void initTest262Harness(vm::Runtime &runtime) {
   tryCopyProperty(
       global,
       vm::Predefined::getSymbolID(vm::Predefined::eval),
-      test262Obj,
+      lv.test262Obj,
       vm::Predefined::getSymbolID(vm::Predefined::evalScript));
 
   // Define $262.detachArrayBuffer
@@ -510,7 +521,7 @@ static void initTest262Harness(vm::Runtime &runtime) {
     tryCopyProperty(
         hermesInternalObj,
         vm::Predefined::getSymbolID(vm::Predefined::detachArrayBuffer),
-        test262Obj,
+        lv.test262Obj,
         vm::Predefined::getSymbolID(vm::Predefined::detachArrayBuffer));
   }
 
@@ -521,7 +532,7 @@ static void initTest262Harness(vm::Runtime &runtime) {
           runtime,
           vm::Predefined::getSymbolID(vm::Predefined::test262),
           nonEnumerableDPF,
-          test262Obj));
+          lv.test262Obj));
 
   // Define global function alert()
   tryCopyProperty(
@@ -543,6 +554,7 @@ void installConsoleBindings(
   struct : public vm::Locals {
     vm::PinnedValue<vm::JSObject> console;
     vm::PinnedValue<> print;
+    vm::PinnedValue<vm::JSObject> hermescliObj;
   } lv;
   vm::LocalsRAII lraii{runtime, &lv};
 
@@ -667,8 +679,7 @@ void installConsoleBindings(
   // Register hermescli object with test utility functions, gated on the
   // -Xhermes-internal-test-methods flag.
   if (ctx.enableTestMethods_) {
-    vm::Handle<vm::JSObject> hermescliObj =
-        runtime.makeHandle(vm::JSObject::create(runtime));
+    lv.hermescliObj = vm::JSObject::create(runtime);
 
     auto defineMethod = [&](const char *name,
                             vm::NativeFunctionPtr functionPtr,
@@ -683,7 +694,7 @@ void installConsoleBindings(
       auto func = vm::NativeFunction::create(
           runtime, context, functionPtr, sym, paramCount);
       auto res = vm::JSObject::defineOwnProperty(
-          hermescliObj, runtime, sym, normalDPF, func);
+          lv.hermescliObj, runtime, sym, normalDPF, func);
       (void)res;
       assert(
           res != vm::ExecutionStatus::EXCEPTION && *res &&
@@ -704,7 +715,7 @@ void installConsoleBindings(
                         runtime, llvh::createASCIIRef("hermescli")))
                 .get(),
             normalDPF,
-            hermescliObj));
+            lv.hermescliObj));
   }
 }
 

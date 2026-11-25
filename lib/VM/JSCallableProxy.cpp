@@ -77,6 +77,9 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
   bool isConstructorCall = callerFrame->isConstructorCall();
   struct : public Locals {
     PinnedValue<> thisArg;
+    PinnedValue<JSObject> target;
+    PinnedValue<JSObject> handler;
+    PinnedValue<JSArray> argArray;
   } lv;
   LocalsRAII lraii(runtime, &lv);
   // We do the constructor related work of checking for a valid call and making
@@ -107,8 +110,8 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
     lv.thisArg = callerFrame.getThisArgRef();
   }
   auto &slots = detail::slots(*selfHandle);
-  Handle<JSObject> target = runtime.makeHandle(slots.target);
-  Handle<JSObject> handler = runtime.makeHandle(slots.handler);
+  lv.target = slots.target.get(runtime);
+  lv.handler = slots.handler.get(runtime);
   Predefined::Str trapName =
       isConstructorCall ? Predefined::construct : Predefined::apply;
   CallResult<Handle<Callable>> trapRes =
@@ -125,7 +128,7 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
     ScopedNativeCallFrame newFrame{
         runtime,
         callerFrame.getArgCount(),
-        target.getHermesValue(),
+        lv.target.getHermesValue(),
         callerFrame.getNewTargetRef(),
         lv.thisArg.getHermesValue()};
     if (LLVM_UNLIKELY(newFrame.overflowed()))
@@ -138,7 +141,8 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
     // I know statically that target is a Callable, but storing it as
     // a Callable makes it much harder to share all the JSProxy code,
     // so we cast here.
-    auto res = Callable::call(Handle<Callable>::vmcast(target), runtime);
+    auto res = Callable::call(
+        Handle<Callable>::vmcast(Handle<JSObject>(lv.target)), runtime);
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -156,21 +160,21 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
   if (LLVM_UNLIKELY(argArrayRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<JSArray> argArray = runtime.makeHandle(std::move(*argArrayRes));
-  JSArray::setStorageEndIndex(argArray, runtime, callerFrame->getArgCount());
+  lv.argArray = std::move(*argArrayRes);
+  JSArray::setStorageEndIndex(lv.argArray, runtime, callerFrame->getArgCount());
   for (uint32_t i = 0; i < callerFrame->getArgCount(); ++i) {
     const auto shv =
         SmallHermesValue::encodeHermesValue(callerFrame.getArgRef(i), runtime);
-    JSArray::unsafeSetExistingElementAt(*argArray, runtime, i, shv);
+    JSArray::unsafeSetExistingElementAt(*lv.argArray, runtime, i, shv);
   }
   // 8. Let newObj be ? Call(trap, handler, « target, argArray, newTarget »).
   if (isConstructorCall) {
     CallResult<PseudoHandle<>> newObjRes = Callable::executeCall3(
         *trapRes,
         runtime,
-        handler,
-        target.getHermesValue(),
-        argArray.getHermesValue(),
+        lv.handler,
+        lv.target.getHermesValue(),
+        lv.argArray.getHermesValue(),
         callerFrame.getNewTargetRef());
     if (LLVM_UNLIKELY(newObjRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -186,10 +190,10 @@ CallResult<HermesValue> JSCallableProxy::_proxyNativeCall(
     auto res = Callable::executeCall3(
         *trapRes,
         runtime,
-        handler,
-        target.getHermesValue(),
+        lv.handler,
+        lv.target.getHermesValue(),
         callerFrame.getThisArgRef(),
-        argArray.getHermesValue());
+        lv.argArray.getHermesValue());
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }

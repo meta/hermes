@@ -68,6 +68,15 @@ PseudoHandle<JSRegExpStringIterator> JSRegExpStringIterator::create(
 CallResult<HermesValue> JSRegExpStringIterator::nextElement(
     Handle<JSRegExpStringIterator> O,
     Runtime &runtime) {
+  struct : public Locals {
+    PinnedValue<JSObject> R;
+    PinnedValue<StringPrimitive> S;
+    PinnedValue<JSObject> matchObj;
+    PinnedValue<> prop;
+    PinnedValue<StringPrimitive> matchStr;
+    PinnedValue<> lastIndex;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // 4. If O.[[Done]] is true, then
   if (O->done_) {
     // a. Return ! CreateIterResultObject(undefined, true).
@@ -75,16 +84,16 @@ CallResult<HermesValue> JSRegExpStringIterator::nextElement(
         .getHermesValue();
   }
   // 5. Let R be O.[[IteratingRegExp]].
-  auto R = runtime.makeHandle(O->iteratedRegExp_);
+  lv.R = O->iteratedRegExp_.getNonNull(runtime);
   // 6. Let S be O.[[IteratedString]].
-  auto S = runtime.makeHandle(O->iteratedString_);
+  lv.S = O->iteratedString_.getNonNull(runtime);
 
   // 7. Let global be O.[[Global]].
   // 8. Let fullUnicode be O.[[Unicode]].
   // we will just use JSRegExpStringIterator's fields for non pointer types.
 
   // 9. Let match be ? RegExpExec(R, S).
-  auto matchRes = regExpExec(runtime, R, S);
+  auto matchRes = regExpExec(runtime, lv.R, lv.S);
   if (LLVM_UNLIKELY(matchRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -99,50 +108,54 @@ CallResult<HermesValue> JSRegExpStringIterator::nextElement(
         .getHermesValue();
   } else {
     // 11. Else,
-    auto matchObj = runtime.makeHandle<JSObject>(match);
+    lv.matchObj.castAndSetHermesValue<JSObject>(match);
     // a. If global is true, then
     if (O->global_) {
       //  i. Let matchStr be ? ToString(? Get(match, "0")).
-      auto propRes = getIndexed_RJS(runtime, matchObj, 0);
+      auto propRes = getIndexed_RJS(runtime, lv.matchObj, 0);
       if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      auto matchStrRes =
-          toString_RJS(runtime, runtime.makeHandle(std::move(*propRes)));
+      lv.prop = std::move(*propRes);
+      auto matchStrRes = toString_RJS(runtime, lv.prop);
       if (matchStrRes == ExecutionStatus::EXCEPTION) {
         return ExecutionStatus::EXCEPTION;
       }
-      auto matchStr = runtime.makeHandle(std::move(*matchStrRes));
+      lv.matchStr = std::move(*matchStrRes);
 
       //  ii. If matchStr is the empty String, then
-      if (matchStr->getStringLength() == 0) {
+      if (lv.matchStr->getStringLength() == 0) {
         // 1. Let thisIndex be ? ToLength(? Get(R, "lastIndex")).
-        auto lastIndexRes = runtime.getNamed(R, PropCacheID::RegExpLastIndex);
+        auto lastIndexRes =
+            runtime.getNamed(lv.R, PropCacheID::RegExpLastIndex);
         if (lastIndexRes == ExecutionStatus::EXCEPTION) {
           return ExecutionStatus::EXCEPTION;
         }
-        auto lastIndex = runtime.makeHandle(std::move(*lastIndexRes));
-        auto thisIndex = toLength(runtime, lastIndex);
+        lv.lastIndex = std::move(*lastIndexRes);
+        auto thisIndex = toLength(runtime, lv.lastIndex);
         if (thisIndex == ExecutionStatus::EXCEPTION) {
           return ExecutionStatus::EXCEPTION;
         }
         // 2. Let nextIndex be ! AdvanceStringIndex(S, thisIndex, fullUnicode).
         double nextIndex = advanceStringIndex(
-            S.get(), thisIndex->getNumberAs<uint64_t>(), O->unicode_);
+            lv.S.get(), thisIndex->getNumberAs<uint64_t>(), O->unicode_);
         // 3. Perform ? Set(R, "lastIndex", nextIndex, true).
-        if (setLastIndex(R, runtime, nextIndex) == ExecutionStatus::EXCEPTION) {
+        if (setLastIndex(lv.R, runtime, nextIndex) ==
+            ExecutionStatus::EXCEPTION) {
           return ExecutionStatus::EXCEPTION;
         }
       }
       // iii. Return ! CreateIterResultObject(match, false).
-      return createIterResultObject(runtime, matchObj, false).getHermesValue();
+      return createIterResultObject(runtime, lv.matchObj, false)
+          .getHermesValue();
     }
     // b. Else,
     else {
       // i. Set O.[[Done]] to true.
       O->done_ = true;
       // ii. Return ! CreateIterResultObject(match, false).
-      return createIterResultObject(runtime, matchObj, false).getHermesValue();
+      return createIterResultObject(runtime, lv.matchObj, false)
+          .getHermesValue();
     }
   }
 }

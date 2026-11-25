@@ -33,10 +33,14 @@ extern "C" bool _sh_initialize_units(SHRuntime *shr, uint32_t count, ...) {
     SHLegacyValue val;
     if (!_sh_unit_init_guarded(shr, unitCreator, &val)) {
       GCScope gcScope{runtime};
+      struct : public Locals {
+        PinnedValue<> exc;
+      } lv;
+      LocalsRAII lraii{runtime, &lv};
+      lv.exc = HermesValue::fromRaw(val.raw);
       // Make sure stdout catches up to stderr.
       llvh::outs().flush();
-      runtime.printException(
-          llvh::errs(), runtime.makeHandle(HermesValue::fromRaw(val.raw)));
+      runtime.printException(llvh::errs(), lv.exc);
       success = false;
       break;
     }
@@ -328,6 +332,12 @@ extern "C" SHLegacyValue _sh_get_template_object(
 
   CallResult<HermesValue> result = [&]() -> CallResult<HermesValue> {
     GCScope gcScope{runtime};
+    struct : public Locals {
+      PinnedValue<JSObject> rawObj;
+      PinnedValue<JSObject> templateObj;
+      PinnedValue<> idx;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
 
     // Try finding the template object in the template object cache.
     // _sh_find_cached_template_object returns nullptr if cache entry hasn't
@@ -348,29 +358,28 @@ extern "C" SHLegacyValue _sh_get_template_object(
     if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    Handle<JSObject> rawObj = runtime.makeHandle(std::move(*arrRes));
+    lv.rawObj = std::move(*arrRes);
     auto arrRes2 = JSArray::create(runtime, count, 0);
     if (LLVM_UNLIKELY(arrRes2 == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    Handle<JSObject> templateObj = runtime.makeHandle(std::move(*arrRes2));
+    lv.templateObj = std::move(*arrRes2);
 
     // Set cooked and raw strings as elements in template object and raw object,
     // respectively.
     DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
     dpf.writable = 0;
     dpf.configurable = 0;
-    MutableHandle<> idx{runtime};
     auto marker = gcScope.createMarker();
     for (uint32_t i = 0; i < count; ++i) {
       gcScope.flushToMarker(marker);
-      idx = HermesValue::encodeTrustedNumberValue(i);
+      lv.idx = HermesValue::encodeTrustedNumberValue(i);
 
       const SHLegacyValue *rawLegacyValue = va_arg(args, const SHLegacyValue *);
       Handle<> value{toPHV(rawLegacyValue)};
 
       auto putRes = JSObject::defineOwnComputedPrimitive(
-          rawObj, runtime, idx, dpf, value);
+          lv.rawObj, runtime, lv.idx, dpf, value);
       assert(
           putRes != ExecutionStatus::EXCEPTION && *putRes &&
           "Failed to set raw value to raw object.");
@@ -378,7 +387,7 @@ extern "C" SHLegacyValue _sh_get_template_object(
       if (dup) {
         // Cooked value is the same as the raw value.
         putRes = JSObject::defineOwnComputedPrimitive(
-            templateObj, runtime, idx, dpf, value);
+            lv.templateObj, runtime, lv.idx, dpf, value);
         assert(
             putRes != ExecutionStatus::EXCEPTION && *putRes &&
             "Failed to set cooked value to template object.");
@@ -387,13 +396,13 @@ extern "C" SHLegacyValue _sh_get_template_object(
     if (!dup) {
       for (uint32_t i = 0; i < count; ++i) {
         gcScope.flushToMarker(marker);
-        idx = HermesValue::encodeTrustedNumberValue(i);
+        lv.idx = HermesValue::encodeTrustedNumberValue(i);
 
         const SHLegacyValue *cookedLegacyValue =
             va_arg(args, const SHLegacyValue *);
         Handle<> value{toPHV(cookedLegacyValue)};
         auto putRes = JSObject::defineOwnComputedPrimitive(
-            templateObj, runtime, idx, dpf, value);
+            lv.templateObj, runtime, lv.idx, dpf, value);
         (void)putRes;
         assert(
             putRes != ExecutionStatus::EXCEPTION && *putRes &&
@@ -402,15 +411,15 @@ extern "C" SHLegacyValue _sh_get_template_object(
     }
 
     if (LLVM_UNLIKELY(
-            setTemplateObjectProps(runtime, templateObj, rawObj) ==
+            setTemplateObjectProps(runtime, lv.templateObj, lv.rawObj) ==
             ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
 
     // Cache the template object.
     _sh_cache_template_object(
-        unit, templateObjID, templateObj.getHermesValue());
+        unit, templateObjID, lv.templateObj.getHermesValue());
 
-    return templateObj.getHermesValue();
+    return lv.templateObj.getHermesValue();
   }();
 
   va_end(args);

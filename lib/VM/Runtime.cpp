@@ -238,9 +238,13 @@ ExecutionStatus Runtime::putNamedThrowOnError(
     JSObject::setNamedSlotValueUnsafe(*obj, *this, desc.slot, shv);
     return ExecutionStatus::RETURNED;
   }
-  Handle<> value = makeHandle(shv.unboxToHV(*this));
+  struct : public Locals {
+    PinnedValue<> value;
+  } lv;
+  LocalsRAII lraii(*this, &lv);
+  lv.value = shv.unboxToHV(*this);
   return JSObject::putNamed_RJS(
-             obj, *this, sym, value, PropOpFlags().plusThrowOnError())
+             obj, *this, sym, lv.value, PropOpFlags().plusThrowOnError())
       .getStatus();
 }
 
@@ -1192,10 +1196,20 @@ CallResult<HermesValue> Runtime::runBytecode(
 
   GCScope scope(*this);
 
-  Handle<Domain> domain = makeHandle(Domain::create(*this));
+  struct : public Locals {
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii(*this, &lv);
+
+  lv.domain = Domain::create(*this);
 
   auto runtimeModuleRes = RuntimeModule::create(
-      *this, domain, allocateScriptId(), std::move(bytecode), flags, sourceURL);
+      *this,
+      lv.domain,
+      allocateScriptId(),
+      std::move(bytecode),
+      flags,
+      sourceURL);
   if (LLVM_UNLIKELY(runtimeModuleRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1209,18 +1223,20 @@ CallResult<HermesValue> Runtime::runBytecode(
 
   if (runtimeModule->hasCJSModules()) {
     auto requireContext = RequireContext::create(
-        *this, domain, getPredefinedStringHandle(Predefined::dotSlash));
+        *this, lv.domain, getPredefinedStringHandle(Predefined::dotSlash));
     return runRequireCall(
         *this,
         requireContext,
-        domain,
-        *domain->getCJSModuleOffset(*this, domain->getCJSEntryModuleID()));
+        lv.domain,
+        *lv.domain->getCJSModuleOffset(
+            *this, lv.domain->getCJSEntryModuleID()));
   } else if (runtimeModule->hasCJSModulesStatic()) {
     return runRequireCall(
         *this,
         makeNullHandle<RequireContext>(),
-        domain,
-        *domain->getCJSModuleOffset(*this, domain->getCJSEntryModuleID()));
+        lv.domain,
+        *lv.domain->getCJSModuleOffset(
+            *this, lv.domain->getCJSEntryModuleID()));
   } else {
     // Create a JSFunction which will reference count the runtime module.
     // Note that its handle gets registered in the scope, so we don't need to
@@ -1228,7 +1244,7 @@ CallResult<HermesValue> Runtime::runBytecode(
     // this is local eval.
     auto func = JSFunction::create(
         *this,
-        domain,
+        lv.domain,
         Handle<JSObject>::vmcast(&functionPrototype),
         environment,
         globalCode);
@@ -1248,12 +1264,20 @@ ExecutionStatus Runtime::loadSegment(
     Handle<RequireContext> requireContext,
     RuntimeModuleFlags flags) {
   GCScopeMarkerRAII marker{*this};
-  auto domain = makeHandle(RequireContext::getDomain(*this, *requireContext));
+  struct : public Locals {
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii(*this, &lv);
+  lv.domain = RequireContext::getDomain(*this, *requireContext);
 
   if (LLVM_UNLIKELY(
           RuntimeModule::create(
-              *this, domain, nextScriptId_++, std::move(bytecode), flags, "") ==
-          ExecutionStatus::EXCEPTION)) {
+              *this,
+              lv.domain,
+              nextScriptId_++,
+              std::move(bytecode),
+              flags,
+              "") == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
 
@@ -1326,6 +1350,10 @@ Handle<JSObject> Runtime::runInternalJavaScript() {
 }
 
 void Runtime::printException(llvh::raw_ostream &os, Handle<> valueHandle) {
+  struct : public Locals {
+    PinnedValue<> stack;
+  } lv;
+  LocalsRAII lraii(*this, &lv);
   os << "Uncaught ";
   clearThrownValue();
 
@@ -1377,7 +1405,8 @@ void Runtime::printException(llvh::raw_ostream &os, Handle<> valueHandle) {
     return;
   }
   // stack trace is available, try to convert it to string.
-  auto strRes = toString_RJS(*this, makeHandle(std::move(*propRes)));
+  lv.stack = std::move(*propRes);
+  auto strRes = toString_RJS(*this, lv.stack);
   if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
     os << "exception thrown in toString of stack trace\n";
     return;
@@ -1460,10 +1489,14 @@ static ExecutionStatus raisePlaceholder(
     Handle<JSObject> prototype,
     Handle<> message) {
   GCScopeMarkerRAII gcScope{runtime};
+  struct : public Locals {
+    PinnedValue<JSError> errorObj;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
   // Create the error object, initialize stack property and set message.
-  auto errorObj = runtime.makeHandle(JSError::create(runtime, prototype));
-  return raisePlaceholder(runtime, errorObj, message);
+  lv.errorObj = JSError::create(runtime, prototype);
+  return raisePlaceholder(runtime, Handle<JSError>(lv.errorObj), message);
 }
 
 /// A placeholder used to construct a Error Object that takes in a const
@@ -1476,6 +1509,10 @@ static ExecutionStatus raisePlaceholder(
   // Since this happens unexpectedly and rarely, don't rely on the parent
   // GCScope.
   GCScope gcScope{runtime};
+  struct : public Locals {
+    PinnedValue<StringPrimitive> str;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
   SmallU16String<64> buf;
   msg.toVector(buf);
@@ -1484,9 +1521,9 @@ static ExecutionStatus raisePlaceholder(
   if (strRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto str = runtime.makeHandle<StringPrimitive>(*strRes);
+  lv.str.castAndSetHermesValue<StringPrimitive>(*strRes);
   LLVM_DEBUG(llvh::errs() << buf.arrayRef() << "\n");
-  return raisePlaceholder(runtime, prototype, str);
+  return raisePlaceholder(runtime, prototype, lv.str);
 }
 
 ExecutionStatus Runtime::raiseError(const TwineChar16 &msg) {
@@ -1604,15 +1641,19 @@ ExecutionStatus Runtime::raiseTimeoutError() {
 ExecutionStatus Runtime::raiseUncatchableError(
     Handle<JSObject> prototype,
     llvh::StringRef errMessage) {
-  Handle<JSError> err =
-      makeHandle(JSError::createUncatchable(*this, prototype));
+  struct : public Locals {
+    PinnedValue<JSError> err;
+    PinnedValue<> str;
+  } lv;
+  LocalsRAII lraii(*this, &lv);
+  lv.err = JSError::createUncatchable(*this, prototype);
   auto res = StringPrimitive::create(
       *this, llvh::ASCIIRef{errMessage.begin(), errMessage.end()});
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto str = makeHandle(*res);
-  return raisePlaceholder(*this, err, str);
+  lv.str = *res;
+  return raisePlaceholder(*this, Handle<JSError>(lv.err), lv.str);
 }
 
 ExecutionStatus Runtime::raiseEvalUnsupported(llvh::StringRef code) {
@@ -1811,7 +1852,13 @@ ExecutionStatus Runtime::forEachPublicNativeBuiltin(
         Predefined::Str objectName,
         Handle<JSObject> &object,
         SymbolID methodID)> &callback) {
-  MutableHandle<JSObject> lastObject{*this};
+  struct : public Locals {
+    PinnedValue<JSObject> lastObject;
+  } lv;
+  LocalsRAII lraii(*this, &lv);
+  // The callback takes a reference to a Handle, so keep one aliasing the
+  // pinned slot.
+  Handle<JSObject> lastObject = lv.lastObject;
   Predefined::Str lastObjectName = Predefined::_STRING_AFTER_LAST;
 
   for (unsigned methodIndex = 0; methodIndex < BuiltinMethod::_firstPrivate;
@@ -1850,7 +1897,7 @@ ExecutionStatus Runtime::forEachPublicNativeBuiltin(
             getPredefinedString(objectName) + " is not an object");
       }
 
-      lastObject = vmcast<JSObject>(cr->get());
+      lv.lastObject = vmcast<JSObject>(cr->get());
       lastObjectName = objectName;
     }
 
@@ -2041,17 +2088,20 @@ ExecutionStatus Runtime::drainJobs() {
     cb();
 
   GCScope gcScope{*this};
-  MutableHandle<Callable> job{*this};
+  struct : public Locals {
+    PinnedValue<Callable> job;
+  } lv;
+  LocalsRAII lraii(*this, &lv);
   // Note that new jobs can be enqueued during the draining.
   while (!jobQueue_.empty()) {
     GCScopeMarkerRAII marker{gcScope};
 
-    job = jobQueue_.front();
+    lv.job = jobQueue_.front();
     jobQueue_.pop_front();
 
     // Jobs are guaranteed to behave as thunks.
     auto callRes =
-        Callable::executeCall0(job, *this, Runtime::getUndefinedValue());
+        Callable::executeCall0(lv.job, *this, Runtime::getUndefinedValue());
 
     // Early return to signal the caller. Note that the exceptional job has been
     // popped, so re-invocation would pick up from the next available job.

@@ -123,13 +123,18 @@ CallResult<PseudoHandle<JSGeneratorObject>> Interpreter::createGenerator_RJS(
     unsigned funcIndex,
     Handle<Environment> envHandle,
     NativeArgs args) {
+  struct : public Locals {
+    PinnedValue<JSFunction> innerFunc;
+    PinnedValue<JSObject> prototype;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
   auto innerFuncPH = JSFunction::create(
       runtime,
       runtimeModule->getDomain(runtime),
       Handle<JSObject>::vmcast(&runtime.functionPrototype),
       envHandle,
       runtimeModule->getCodeBlockMayAllocate(funcIndex));
-  auto innerFunc = runtime.makeHandle(std::move(innerFuncPH));
+  lv.innerFunc = std::move(innerFuncPH);
 
   auto generatorFunction = Handle<JSFunction>::vmcast(
       runtime.getCurrentFrame().getCalleeClosureHandleUnsafe());
@@ -140,7 +145,7 @@ CallResult<PseudoHandle<JSGeneratorObject>> Interpreter::createGenerator_RJS(
       FuncKind::Async) {
     return JSGeneratorObject::create(
         runtime,
-        innerFunc,
+        lv.innerFunc,
         Handle<JSObject>::vmcast(&runtime.generatorPrototype));
   }
 
@@ -151,11 +156,14 @@ CallResult<PseudoHandle<JSGeneratorObject>> Interpreter::createGenerator_RJS(
   if (LLVM_UNLIKELY(prototypeProp == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<JSObject> prototype = vmisa<JSObject>(prototypeProp->get())
-      ? runtime.makeHandle<JSObject>(prototypeProp->get())
-      : Handle<JSObject>::vmcast(&runtime.generatorPrototype);
+  Handle<JSObject> prototype =
+      Handle<JSObject>::vmcast(&runtime.generatorPrototype);
+  if (vmisa<JSObject>(prototypeProp->get())) {
+    lv.prototype.castAndSetHermesValue<JSObject>(prototypeProp->get());
+    prototype = lv.prototype;
+  }
 
-  return JSGeneratorObject::create(runtime, innerFunc, prototype);
+  return JSGeneratorObject::create(runtime, lv.innerFunc, prototype);
 }
 
 CallResult<Handle<Arguments>> Interpreter::reifyArgumentsSlowPath(
@@ -199,6 +207,13 @@ CallResult<PseudoHandle<>> Interpreter::getArgumentsPropByValSlowPath_RJS(
         Handle<JSObject>::vmcast(lazyReg), runtime, Handle<>(valueReg));
   }
 
+  struct : public Locals {
+    PinnedValue<StringPrimitive> strPrim;
+    PinnedValue<JSObject> inObject;
+    PinnedValue<SymbolID> descSymStorage;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
   if (!valueReg->isSymbol()) {
     // Attempt a fast path in the case that the key is not a symbol.
     // If it is a symbol, force reification for now.
@@ -206,10 +221,10 @@ CallResult<PseudoHandle<>> Interpreter::getArgumentsPropByValSlowPath_RJS(
     auto strRes = toString_RJS(runtime, Handle<>(valueReg));
     if (strRes == ExecutionStatus::EXCEPTION)
       return ExecutionStatus::EXCEPTION;
-    auto strPrim = runtime.makeHandle(std::move(*strRes));
+    lv.strPrim = std::move(*strRes);
 
     // Check if the string is a valid argument index.
-    if (auto index = toArrayIndex(*strPrim)) {
+    if (auto index = toArrayIndex(*lv.strPrim)) {
       if (*index < frame.getArgCount()) {
         return createPseudoHandle(frame.getArgRef(*index));
       }
@@ -219,26 +234,25 @@ CallResult<PseudoHandle<>> Interpreter::getArgumentsPropByValSlowPath_RJS(
       // OK, they are requesting an index that either doesn't exist or is
       // somewhere up in the prototype chain. Since we want to avoid reifying,
       // check which it is:
-      MutableHandle<JSObject> inObject{runtime};
-      ComputedPropertyDescWithSymStorage desc{MutableHandle<SymbolID>{runtime}};
+      ComputedPropertyDescWithSymStorage desc{lv.descSymStorage};
       JSObject::getComputedPrimitiveDescriptor(
-          objectPrototype, runtime, strPrim, inObject, desc);
+          objectPrototype, runtime, lv.strPrim, lv.inObject, desc);
 
       // If we couldn't find the property, just return 'undefined'.
-      if (!inObject)
+      if (!*lv.inObject)
         return createPseudoHandle(HermesValue::encodeUndefinedValue());
 
       // If the property isn't an accessor, we can just return it without
       // reifying.
       if (!desc.flags.accessor) {
         return JSObject::getComputedSlotValue(
-            createPseudoHandle(inObject.get()), runtime, desc);
+            createPseudoHandle(*lv.inObject), runtime, desc);
       }
     }
 
     // Are they requesting "arguments.length"?
     if (runtime.symbolEqualsToStringPrim(
-            Predefined::getSymbolID(Predefined::length), *strPrim)) {
+            Predefined::getSymbolID(Predefined::length), *lv.strPrim)) {
       return createPseudoHandle(
           HermesValue::encodeTrustedNumberValue(frame.getArgCount()));
     }
@@ -2772,8 +2786,7 @@ tailCall:
       CASE(NewFastArray) {
         {
           GCScopeMarkerRAII marker{runtime};
-          auto protoHandle =
-              Handle<JSObject>::vmcast(runtime.makeHandle(O2REG(NewFastArray)));
+          auto protoHandle = Handle<JSObject>::vmcast(&O2REG(NewFastArray));
           CAPTURE_IP_ASSIGN(
               auto createRes,
               FastArray::create(runtime, protoHandle, ip->iNewFastArray.op3));

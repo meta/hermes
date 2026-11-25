@@ -90,6 +90,11 @@ static llvh::Optional<Handle<JSError>> getErrorFromStackTarget(
 CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   GCScope gcScope(runtime);
+  struct : public Locals {
+    PinnedValue<> prepareStackTraceVal;
+    PinnedValue<> stackTraceFormatted;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
   auto targetHandle = args.dyncastThis<JSObject>();
   auto errorHandleOpt = getErrorFromStackTarget(runtime, targetHandle);
@@ -122,10 +127,9 @@ CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
     return ExecutionStatus::EXCEPTION;
   }
 
-  MutableHandle<> stackTraceFormatted{runtime};
-
-  auto prepareStackTrace = Handle<Callable>::dyn_vmcast(
-      runtime.makeHandle(std::move(*prepareStackTraceRes)));
+  lv.prepareStackTraceVal = std::move(*prepareStackTraceRes);
+  auto prepareStackTrace =
+      Handle<Callable>::dyn_vmcast(Handle<>(lv.prepareStackTraceVal));
   if (LLVM_UNLIKELY(prepareStackTrace && !runtime.formattingStackTrace())) {
     const auto &recursionGuard = llvh::make_scope_exit(
         [&runtime]() { runtime.setFormattingStackTrace(false); });
@@ -147,7 +151,7 @@ CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
     if (LLVM_UNLIKELY(prepareRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    stackTraceFormatted = std::move(*prepareRes);
+    lv.stackTraceFormatted = std::move(*prepareRes);
   } else {
     if (JSError::constructStackTraceString_RJS(
             runtime, errorHandle, targetHandle, stack) ==
@@ -159,11 +163,11 @@ CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
     if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
       // StringPrimitive creation can throw if the stacktrace string is too
       // long. In that case, we replace it with a predefined string.
-      stackTraceFormatted = HermesValue::encodeStringValue(
+      lv.stackTraceFormatted = HermesValue::encodeStringValue(
           runtime.getPredefinedString(Predefined::stacktraceTooLong));
       runtime.clearThrownValue();
     } else {
-      stackTraceFormatted = std::move(*strRes);
+      lv.stackTraceFormatted = std::move(*strRes);
     }
   }
 
@@ -175,24 +179,28 @@ CallResult<HermesValue> errorStackGetter(void *, Runtime &runtime) {
           runtime,
           Predefined::getSymbolID(Predefined::stack),
           dpf,
-          stackTraceFormatted) == ExecutionStatus::EXCEPTION) {
+          lv.stackTraceFormatted) == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  return *stackTraceFormatted;
+  return lv.stackTraceFormatted.getHermesValue();
 }
 
 CallResult<HermesValue> errorStackSetter(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  struct : public Locals {
+    PinnedValue<JSObject> selfHandle;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto res = toObject(runtime, args.getThisHandle());
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto selfHandle = runtime.makeHandle<JSObject>(res.getValue());
+  lv.selfHandle.castAndSetHermesValue<JSObject>(res.getValue());
 
   // Redefines the stack property to a regular property.
   DefinePropertyFlags dpf = DefinePropertyFlags::getNewNonEnumerableFlags();
   if (JSObject::defineOwnProperty(
-          selfHandle,
+          lv.selfHandle,
           runtime,
           Predefined::getSymbolID(Predefined::stack),
           dpf,
@@ -309,13 +317,18 @@ ExecutionStatus JSError::setMessage(
     Handle<JSError> selfHandle,
     Runtime &runtime,
     Handle<> message) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> stringMessageStr;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto stringMessage = Handle<StringPrimitive>::dyn_vmcast(message);
   if (LLVM_UNLIKELY(!stringMessage)) {
     auto strRes = toString_RJS(runtime, message);
     if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    stringMessage = runtime.makeHandle(std::move(*strRes));
+    lv.stringMessageStr = std::move(*strRes);
+    stringMessage = lv.stringMessageStr;
   }
 
   DefinePropertyFlags dpf = DefinePropertyFlags::getNewNonEnumerableFlags();
@@ -408,6 +421,12 @@ ExecutionStatus JSError::recordStackTrace(
   if (selfHandle->stacktrace_)
     return ExecutionStatus::RETURNED;
 
+  struct : public Locals {
+    PinnedValue<ArrayStorageSmall> domains;
+    PinnedValue<Domain> domain;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   auto frames = runtime.getStackFrames();
 
   StackTracePtr stack{new StackTrace()};
@@ -415,23 +434,22 @@ ExecutionStatus JSError::recordStackTrace(
   if (LLVM_UNLIKELY(domainsRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto domains = runtime.makeMutableHandle<ArrayStorageSmall>(
-      vmcast<ArrayStorageSmall>(*domainsRes));
+  lv.domains.castAndSetHermesValue<ArrayStorageSmall>(*domainsRes);
 
   // Add the domain to the domains list, provided that it's not the same as the
   // last domain in the list. This allows us to save storage with a constant
   // time check, but we don't have to loop through and check every domain to
   // deduplicate.
-  auto addDomain = [&domains,
-                    &runtime](CodeBlock *codeBlock) -> ExecutionStatus {
+  auto addDomain = [&lv, &runtime](CodeBlock *codeBlock) -> ExecutionStatus {
     GCScopeMarkerRAII marker{runtime};
-    Handle<Domain> domain = codeBlock->getRuntimeModule()->getDomain(runtime);
-    if (domains->size() > 0 &&
-        vmcast<Domain>(domains->at(domains->size() - 1).getObject(runtime)) ==
-            domain.get()) {
+    lv.domain = codeBlock->getRuntimeModule()->getDomainUnsafe(runtime);
+    if (lv.domains->size() > 0 &&
+        vmcast<Domain>(
+            lv.domains->at(lv.domains->size() - 1).getObject(runtime)) ==
+            lv.domain.get()) {
       return ExecutionStatus::RETURNED;
     }
-    return ArrayStorageSmall::push_back(domains, runtime, domain);
+    return ArrayStorageSmall::push_back(lv.domains, runtime, lv.domain);
   };
 
   auto tryAddNativeFrame = [&stack](const SHLocals *locals) {
@@ -503,7 +521,7 @@ ExecutionStatus JSError::recordStackTrace(
       }
     }
   }
-  selfHandle->domains_.set(runtime, domains.get(), runtime.getHeap());
+  selfHandle->domains_.set(runtime, lv.domains.get(), runtime.getHeap());
 
   // Remove the last entry.
   stack->pop_back();
@@ -600,6 +618,10 @@ ExecutionStatus JSError::constructStackTraceString_RJS(
   }
 
   GCScope gcScope(runtime);
+  struct : public Locals {
+    PinnedValue<JSObject> thrownObj;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // First of all, the stacktrace string starts with
   // %Error.prototype.toString%(target).
   CallResult<Handle<StringPrimitive>> res =
@@ -618,8 +640,8 @@ ExecutionStatus JSError::constructStackTraceString_RJS(
         // Clear the pending exception, and try to convert thrownValue to string
         // with %Error.prototype.toString%(thrownValue).
         runtime.clearThrownValue();
-        res = JSError::toString(
-            runtime.makeHandle<JSObject>(thrownValue), runtime);
+        lv.thrownObj.castAndSetHermesValue<JSObject>(thrownValue);
+        res = JSError::toString(lv.thrownObj, runtime);
       }
     }
   }
@@ -814,6 +836,11 @@ void JSError::appendNativeFrame(
 CallResult<HermesValue> JSError::constructCallSitesArray(
     Runtime &runtime,
     Handle<JSError> selfHandle) {
+  struct : public Locals {
+    PinnedValue<JSArray> array;
+    PinnedValue<JSCallSite> callSite;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // For now, JSCallSites are only supported with regular stack traces, not
   // native traces.
   auto max = selfHandle->stacktrace_
@@ -824,9 +851,9 @@ CallResult<HermesValue> JSError::constructCallSitesArray(
     return ExecutionStatus::EXCEPTION;
   }
 
-  Handle<JSArray> array = runtime.makeHandle(std::move(*arrayRes));
+  lv.array = std::move(*arrayRes);
   if (!selfHandle->stacktrace_) {
-    return array.getHermesValue();
+    return lv.array.getHermesValue();
   }
 
   size_t callSiteIndex = 0;
@@ -848,23 +875,24 @@ CallResult<HermesValue> JSError::constructCallSitesArray(
     if (callSiteRes == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    auto callSite = runtime.makeHandle(*callSiteRes);
+    lv.callSite.castAndSetHermesValue<JSCallSite>(*callSiteRes);
 
     if (LLVM_UNLIKELY(
-            JSArray::setElementAt(array, runtime, callSiteIndex++, callSite) ==
+            JSArray::setElementAt(
+                lv.array, runtime, callSiteIndex++, lv.callSite) ==
             ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
 
     gcScope.flushToMarker(marker);
   }
 
-  auto cr =
-      JSArray::setLengthProperty(array, runtime, callSiteIndex, PropOpFlags{});
+  auto cr = JSArray::setLengthProperty(
+      lv.array, runtime, callSiteIndex, PropOpFlags{});
   (void)cr;
   assert(
       cr != ExecutionStatus::EXCEPTION && *cr && "JSArray::setLength() failed");
 
-  return array.getHermesValue();
+  return lv.array.getHermesValue();
 }
 
 /// \return the code block associated with \p callableHandle if it is a

@@ -380,14 +380,18 @@ StringPrimitive *IdentifierTable::getExistingStringPrimitiveOrNullWithHash(
   if (!hashTable_.isValid(idx)) {
     return nullptr;
   }
+  struct : public Locals {
+    PinnedValue<SymbolID> sym;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // Use a handle since getStringPrim may need to materialize the string.
   const auto id = hashTable_.get(idx);
   auto symID = SymbolID::unsafeCreate(id);
   // Read barrier here because a symbol value is getting read out of the hash
   // map.
   runtime.getHeap().weakRefReadBarrier(symID);
-  Handle<SymbolID> sym = runtime.makeHandle(symID);
-  return getStringPrim(runtime, *sym);
+  lv.sym = symID;
+  return getStringPrim(runtime, *lv.sym);
 }
 
 template <typename T>

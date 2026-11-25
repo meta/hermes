@@ -406,6 +406,7 @@ CallResult<PseudoHandle<Arguments>> Arguments::create(
     bool strictMode) {
   struct : Locals {
     PinnedValue<Arguments> self;
+    PinnedValue<> lengthValue;
   } lv;
   LocalsRAII lraii{runtime, &lv};
   auto clazz = runtime.getHiddenClassForPrototype(
@@ -444,10 +445,8 @@ CallResult<PseudoHandle<Arguments>> Arguments::create(
   pf.writable = 1;
   pf.configurable = 1;
 
-  DEFINE_PROP(
-      lv.self,
-      P::length,
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(length)));
+  lv.lengthValue = HermesValue::encodeTrustedNumberValue(length);
+  DEFINE_PROP(lv.self, P::length, lv.lengthValue);
 
   DEFINE_PROP(lv.self, P::SymbolIterator, runtime.arrayPrototypeValues);
 
@@ -741,6 +740,11 @@ CallResult<bool> JSArray::setLength(
     return true;
   }
 
+  struct : public Locals {
+    PinnedValue<HiddenClass> clazz;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   // Length adjusted to the index of the highest non-deletable property + 1.
   // Nothing smaller than it can be deleted.
   uint32_t adjustedLength = newLength;
@@ -790,8 +794,9 @@ CallResult<bool> JSArray::setLength(
 
     GCScope scope{runtime};
 
+    lv.clazz = selfHandle->getClass(runtime);
     HiddenClass::forEachProperty(
-        runtime.makeHandle(selfHandle->getClassGCPtr()),
+        lv.clazz,
         runtime,
         [&runtime, &adjustedLength, &toBeDeleted, &scope](
             SymbolID id, NamedPropertyDescriptor desc) {
@@ -894,6 +899,7 @@ CallResult<HermesValue> JSArrayIterator::nextElement(
     PinnedValue<> index;
     PinnedValue<> value;
     PinnedValue<JSArray> arr;
+    PinnedValue<> propValue;
   } lv;
   LocalsRAII lraii{runtime, &lv};
 
@@ -922,7 +928,8 @@ CallResult<HermesValue> JSArrayIterator::nextElement(
     if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    auto lenRes = toLength(runtime, runtime.makeHandle(std::move(*propRes)));
+    lv.propValue = std::move(*propRes);
+    auto lenRes = toLength(runtime, lv.propValue);
     if (LLVM_UNLIKELY(lenRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }

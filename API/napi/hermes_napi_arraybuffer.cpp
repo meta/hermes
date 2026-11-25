@@ -167,8 +167,12 @@ napi_detach_arraybuffer(napi_env env, napi_value arraybuffer) {
   // setExternalFinalizer (called inside detach for external buffers)
   // may allocate handles internally.
   GCScope gcScope(runtime);
-  auto handle = runtime.makeHandle(HermesValue::encodeObjectValue(ab));
-  JSArrayBuffer::detach(runtime, Handle<JSArrayBuffer>::vmcast(handle));
+  struct : public Locals {
+    PinnedValue<JSArrayBuffer> ab;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.ab = ab;
+  JSArrayBuffer::detach(runtime, lv.ab);
 
   return napi_clear_last_error(env);
 }

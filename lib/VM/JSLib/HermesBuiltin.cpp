@@ -484,6 +484,7 @@ CallResult<HermesValue> hermesBuiltinCopyRestArgsFast(
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   struct : public Locals {
     PinnedValue<FastArray> array;
+    PinnedValue<> val;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -507,9 +508,9 @@ CallResult<HermesValue> hermesBuiltinCopyRestArgsFast(
 
   for (uint32_t i = 0; i != length; ++i) {
     GCScopeMarkerRAII marker{runtime};
-    auto valHandle = runtime.makeHandle(it->getArgRef(from));
+    lv.val = it->getArgRef(from);
     if (LLVM_UNLIKELY(
-            FastArray::push(lv.array, runtime, valHandle) ==
+            FastArray::push(lv.array, runtime, lv.val) ==
             ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
     ++from;

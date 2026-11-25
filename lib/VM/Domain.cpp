@@ -109,7 +109,10 @@ ExecutionStatus Domain::importCJSModuleTable(
   static_assert(
       CJSModuleSize < 10, "CJSModuleSize must be small to avoid overflow");
 
-  MutableHandle<ArrayStorage> cjsModules{runtime};
+  struct : public Locals {
+    PinnedValue<ArrayStorage> cjsModules;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
   if (!self->cjsModules_) {
     // Create the module table on first import.
@@ -134,7 +137,7 @@ ExecutionStatus Domain::importCJSModuleTable(
     if (LLVM_UNLIKELY(cjsModulesRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    cjsModules = vmcast<ArrayStorage>(*cjsModulesRes);
+    lv.cjsModules = vmcast<ArrayStorage>(*cjsModulesRes);
     self->cjsRuntimeModules_.reserve(firstSegmentModules);
     for (size_t i = self->cjsRuntimeModules_.size(); i < firstSegmentModules;
          i++) {
@@ -169,14 +172,14 @@ ExecutionStatus Domain::importCJSModuleTable(
 
     self->throwingRequire_.set(runtime, *requireFn, runtime.getHeap());
   } else {
-    cjsModules = self->cjsModules_.get(runtime);
+    lv.cjsModules = self->cjsModules_.get(runtime);
   }
 
-  assert(cjsModules && "cjsModules not set");
+  assert(lv.cjsModules.get() && "cjsModules not set");
 
   // Find the maximum module ID so we can resize cjsModules at most once per
   // RuntimeModule.
-  uint64_t maxModuleID = cjsModules->size() / CJSModuleSize;
+  uint64_t maxModuleID = lv.cjsModules->size() / CJSModuleSize;
 
   // The non-static module table does not store module IDs. They are assigned
   // during registration by counting insertions to cjsModuleTable_. Count the
@@ -210,9 +213,9 @@ ExecutionStatus Domain::importCJSModuleTable(
   }
 
   // Resize the array to allow for the new modules, if necessary.
-  if (requiredSize > cjsModules->size()) {
+  if (requiredSize > lv.cjsModules->size()) {
     if (LLVM_UNLIKELY(
-            ArrayStorage::resize(cjsModules, runtime, requiredSize) ==
+            ArrayStorage::resize(lv.cjsModules, runtime, requiredSize) ==
             ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -225,7 +228,7 @@ ExecutionStatus Domain::importCJSModuleTable(
   /// \return Whether the module with ID \param moduleID has been registered in
   /// cjsModules. \pre Space has been allocated for this module's record in
   /// cjsModules.
-  const auto isModuleRegistered = [&cjsModules,
+  const auto isModuleRegistered = [&lv,
                                    maxModuleID](uint32_t moduleID) -> bool {
     assert(
         moduleID <= maxModuleID &&
@@ -234,10 +237,10 @@ ExecutionStatus Domain::importCJSModuleTable(
     uint32_t index = moduleID * CJSModuleSize;
     uint32_t requiredSize = index + CJSModuleSize;
     assert(
-        cjsModules->size() >= requiredSize &&
+        lv.cjsModules->size() >= requiredSize &&
         "CJS module ID exceeds allocated storage");
     (void)requiredSize;
-    return !cjsModules->at(index + FunctionIndexOffset).isEmpty();
+    return !lv.cjsModules->at(index + FunctionIndexOffset).isEmpty();
   };
 
   /// Register CJS module \param moduleID in the runtime module table.
@@ -250,7 +253,7 @@ ExecutionStatus Domain::importCJSModuleTable(
   auto &cjsRuntimeModules = self->cjsRuntimeModules_;
   const auto registerModule =
       [&runtime,
-       &cjsModules,
+       &lv,
        &cjsRuntimeModules,
        runtimeModule,
        &isModuleRegistered,
@@ -261,15 +264,15 @@ ExecutionStatus Domain::importCJSModuleTable(
       cjsEntryModuleID = moduleID;
     }
     uint32_t index = moduleID * CJSModuleSize;
-    cjsModules->set(
+    lv.cjsModules->set(
         index + CachedExportsOffset,
         HermesValue::encodeEmptyValue(),
         runtime.getHeap());
-    cjsModules->set(
+    lv.cjsModules->set(
         index + ModuleOffset,
         HermesValue::encodeNullValue(),
         runtime.getHeap());
-    cjsModules->set(
+    lv.cjsModules->set(
         index + FunctionIndexOffset,
         HermesValue::encodeNativeUInt32(functionID),
         runtime.getHeap());
@@ -308,7 +311,7 @@ ExecutionStatus Domain::importCJSModuleTable(
     }
   }
 
-  self->cjsModules_.set(runtime, cjsModules.get(), runtime.getHeap());
+  self->cjsModules_.set(runtime, lv.cjsModules.get(), runtime.getHeap());
   return ExecutionStatus::RETURNED;
 }
 

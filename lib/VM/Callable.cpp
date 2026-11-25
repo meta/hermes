@@ -127,6 +127,10 @@ static Handle<JSObject> inferredParent(Runtime &runtime, FuncKind kind) {
 }
 
 void Callable::defineLazyProperties(Handle<Callable> fn, Runtime &runtime) {
+  struct : public Locals {
+    PinnedValue<JSObject> prototypeObject;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   // lazy functions can be Bound or JS Functions.
   if (auto jsFun = Handle<JSFunction>::dyn_vmcast(fn)) {
     const CodeBlock *codeBlock = jsFun->getCodeBlock();
@@ -149,18 +153,17 @@ void Callable::defineLazyProperties(Handle<Callable> fn, Runtime &runtime) {
     // Functions that cannot be used with `new` should also not define a
     // 'prototype' property, such as arrow functions per 15.3.4, except for
     // generator functions.
-    auto prototypeObjectHandle =
-        codeBlock->getHeaderFlags().isCallProhibited(/* construct */ true) &&
-            !Callable::isGeneratorFunction(*jsFun)
-        ? Runtime::makeNullHandle<JSObject>()
-        : runtime.makeHandle(JSObject::create(runtime, prototypeParent));
+    if (!(codeBlock->getHeaderFlags().isCallProhibited(/* construct */ true) &&
+          !Callable::isGeneratorFunction(*jsFun))) {
+      lv.prototypeObject = JSObject::create(runtime, prototypeParent);
+    }
 
     auto cr = Callable::defineNameLengthAndPrototype(
         fn,
         runtime,
         codeBlock->getNameMayAllocate(),
         codeBlock->getParamCount() - 1,
-        prototypeObjectHandle,
+        lv.prototypeObject,
         Callable::WritablePrototype::Yes);
     assert(
         cr != ExecutionStatus::EXCEPTION && "failed to define length and name");
@@ -182,12 +185,11 @@ void Callable::defineLazyProperties(Handle<Callable> fn, Runtime &runtime) {
     // Functions that cannot be used with `new` should also not define a
     // 'prototype' property, such as arrow functions per 15.3.4, except for
     // generator functions.
-    auto prototypeObjectHandle =
-        nativeFun->getFunctionInfo()->prohibit_invoke ==
-                ProhibitInvoke::Construct &&
-            !Callable::isGeneratorFunction(*nativeFun)
-        ? Runtime::makeNullHandle<JSObject>()
-        : runtime.makeHandle(JSObject::create(runtime, prototypeParent));
+    if (!(nativeFun->getFunctionInfo()->prohibit_invoke ==
+              ProhibitInvoke::Construct &&
+          !Callable::isGeneratorFunction(*nativeFun))) {
+      lv.prototypeObject = JSObject::create(runtime, prototypeParent);
+    }
 
     const SHNativeFuncInfo *funcInfo = nativeFun->getFunctionInfo();
     assert(funcInfo && "funcInfo cannot be null for a lazy NativeJSFunction");
@@ -199,7 +201,7 @@ void Callable::defineLazyProperties(Handle<Callable> fn, Runtime &runtime) {
         runtime,
         name,
         argCount,
-        prototypeObjectHandle,
+        lv.prototypeObject,
         Callable::WritablePrototype::Yes);
     assert(
         cr != ExecutionStatus::EXCEPTION && "failed to define length and name");
@@ -225,6 +227,12 @@ ExecutionStatus Callable::defineNameLengthAndPrototype(
 
   GCScope scope{runtime, "defineNameLengthAndPrototype"};
 
+  struct : public Locals {
+    PinnedValue<> length;
+    PinnedValue<StringPrimitive> name;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   namespace P = Predefined;
 /// Adds a property to the object in \p OBJ_HANDLE.  \p SYMBOL provides its name
 /// as a \c Predefined enum value, and its value is  rooted in \p HANDLE.  If
@@ -243,14 +251,13 @@ ExecutionStatus Callable::defineNameLengthAndPrototype(
 
   // Length is the number of formal arguments.
   // 10.2.9 SetFunctionLength is performed during 10.2.3 OrdinaryFunctionCreate.
-  auto lengthHandle =
-      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(paramCount));
-  DEFINE_PROP(selfHandle, P::length, lengthHandle);
+  lv.length = HermesValue::encodeTrustedNumberValue(paramCount);
+  DEFINE_PROP(selfHandle, P::length, lv.length);
 
   // Define the name.
   // 10.2.8 SetFunctionName is performed after 10.2.3 OrdinaryFunctionCreate.
-  auto nameHandle = runtime.makeHandle(runtime.getStringPrimFromSymbolID(name));
-  DEFINE_PROP(selfHandle, P::name, nameHandle);
+  lv.name = runtime.getStringPrimFromSymbolID(name);
+  DEFINE_PROP(selfHandle, P::name, lv.name);
 
   if (prototypeObjectHandle) {
     // Set its 'prototype' property.
@@ -550,6 +557,10 @@ CallResult<PseudoHandle<>> Callable::createThisForConstruct_RJS(
 CallResult<double> Callable::extractOwnLengthProperty_RJS(
     Handle<Callable> selfHandle,
     Runtime &runtime) {
+  struct : public Locals {
+    PinnedValue<> propValue;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   CallResult<PseudoHandle<>> propRes{
       createPseudoHandle(HermesValue::encodeUndefinedValue())};
   NamedPropertyDescriptor desc;
@@ -592,8 +603,8 @@ CallResult<double> Callable::extractOwnLengthProperty_RJS(
     }
   }
 
-  auto intRes =
-      toIntegerOrInfinity(runtime, runtime.makeHandle(std::move(*propRes)));
+  lv.propValue = std::move(*propRes);
+  auto intRes = toIntegerOrInfinity(runtime, lv.propValue);
   if (intRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -700,6 +711,12 @@ ExecutionStatus BoundFunction::initializeLengthAndName_RJS(
     Runtime &runtime,
     Handle<Callable> target,
     unsigned argCount) {
+  struct : public Locals {
+    PinnedValue<> length;
+    PinnedValue<StringPrimitive> name;
+    PinnedValue<StringPrimitive> boundName;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   if (LLVM_UNLIKELY(target->isLazy(runtime))) {
     Callable::initializeLazyObject(runtime, target);
   }
@@ -716,16 +733,15 @@ ExecutionStatus BoundFunction::initializeLengthAndName_RJS(
   pf.configurable = 1;
 
   // Length is the number of formal arguments.
-  auto length = runtime.makeHandle(
-      HermesValue::encodeTrustedNumberValue(
-          argCount >= *targetLength ? 0.0 : *targetLength - argCount));
+  lv.length = HermesValue::encodeTrustedNumberValue(
+      argCount >= *targetLength ? 0.0 : *targetLength - argCount);
   if (LLVM_UNLIKELY(
           JSObject::defineNewOwnProperty(
               selfHandle,
               runtime,
               Predefined::getSymbolID(Predefined::length),
               pf,
-              length) == ExecutionStatus::EXCEPTION)) {
+              lv.length) == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
 
@@ -735,10 +751,12 @@ ExecutionStatus BoundFunction::initializeLengthAndName_RJS(
   if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto nameHandle = (*propRes)->isString()
-      ? runtime.makeHandle<StringPrimitive>(propRes->getHermesValue())
-      : runtime.getPredefinedStringHandle(Predefined::emptyString);
-  auto nameView = StringPrimitive::createStringView(runtime, nameHandle);
+  if ((*propRes)->isString()) {
+    lv.name.castAndSetHermesValue<StringPrimitive>(propRes->getHermesValue());
+  } else {
+    lv.name = runtime.getPredefinedString(Predefined::emptyString);
+  }
+  auto nameView = StringPrimitive::createStringView(runtime, lv.name);
   llvh::SmallU16String<32> boundName{"bound "};
   boundName.append(nameView.begin(), nameView.end());
   // Share name strings for repeatedly bound functions by using the
@@ -749,8 +767,7 @@ ExecutionStatus BoundFunction::initializeLengthAndName_RJS(
   if (LLVM_UNLIKELY(boundNameSym == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  Handle<StringPrimitive> boundNameHandle = runtime.makeHandle(
-      identifierTable.getStringPrim(runtime, **boundNameSym));
+  lv.boundName = identifierTable.getStringPrim(runtime, **boundNameSym);
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.writable = 0;
   dpf.enumerable = 0;
@@ -761,7 +778,7 @@ ExecutionStatus BoundFunction::initializeLengthAndName_RJS(
               runtime,
               Predefined::getSymbolID(Predefined::name),
               dpf,
-              boundNameHandle) == ExecutionStatus::EXCEPTION)) {
+              lv.boundName) == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
 

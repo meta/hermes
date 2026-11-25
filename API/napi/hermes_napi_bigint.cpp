@@ -134,6 +134,11 @@ napi_status NAPI_CDECL napi_create_bigint_words(
   std::memcpy(bytes.data(), words, byteCount);
   // Extra bytes are already zero-initialized.
 
+  struct : public Locals {
+    PinnedValue<BigIntPrimitive> bigint;
+  } lv;
+  LocalsRAII lraii(env->runtime, &lv);
+
   auto bigintRes = BigIntPrimitive::fromBytes(
       env->runtime, llvh::makeArrayRef(bytes.data(), totalBytes));
   if (LLVM_UNLIKELY(bigintRes == ExecutionStatus::EXCEPTION)) {
@@ -151,9 +156,8 @@ napi_status NAPI_CDECL napi_create_bigint_words(
     }
     if (!isZero) {
       // Negate the positive magnitude to get two's complement negative.
-      auto handle =
-          Handle<BigIntPrimitive>::vmcast(env->runtime.makeHandle(*bigintRes));
-      auto negRes = BigIntPrimitive::unaryMinus(env->runtime, handle);
+      lv.bigint.castAndSetHermesValue<BigIntPrimitive>(*bigintRes);
+      auto negRes = BigIntPrimitive::unaryMinus(env->runtime, lv.bigint);
       if (LLVM_UNLIKELY(negRes == ExecutionStatus::EXCEPTION)) {
         return captureRuntimeException(env, napi_generic_failure);
       }

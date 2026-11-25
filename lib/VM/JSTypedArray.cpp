@@ -203,10 +203,13 @@ ExecutionStatus JSTypedArrayBase::createBuffer(
     Handle<JSTypedArrayBase> selfObj,
     uint64_t length) {
   assert(selfObj);
+  struct : public Locals {
+    PinnedValue<JSArrayBuffer> tmpbuf;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
-  auto tmpbuf = runtime.makeHandle(
-      JSArrayBuffer::create(
-          runtime, Handle<JSObject>::vmcast(&runtime.arrayBufferPrototype)));
+  lv.tmpbuf = JSArrayBuffer::create(
+      runtime, Handle<JSObject>::vmcast(&runtime.arrayBufferPrototype));
 
   // Ensure that the buffer size in bytes will not overflow
   // JSArrayBuffer::size_type (maybe not same as JSTypedArrayBase::size_type).
@@ -216,13 +219,14 @@ ExecutionStatus JSTypedArrayBase::createBuffer(
         "Cannot allocate a data block for the ArrayBuffer");
   }
   JSArrayBuffer::size_type bufferSize = length * selfObj->getByteWidth();
-  if (JSArrayBuffer::createDataBlock(runtime, tmpbuf, bufferSize) ==
+  if (JSArrayBuffer::createDataBlock(runtime, lv.tmpbuf, bufferSize) ==
       ExecutionStatus::EXCEPTION) {
     // Failed to allocate, don't modify what it currently points to.
     return ExecutionStatus::EXCEPTION;
   }
   // Commit the change.
-  setBuffer(runtime, *selfObj, *tmpbuf, 0, bufferSize, selfObj->getByteWidth());
+  setBuffer(
+      runtime, *selfObj, *lv.tmpbuf, 0, bufferSize, selfObj->getByteWidth());
   return ExecutionStatus::RETURNED;
 }
 
@@ -267,11 +271,14 @@ ExecutionStatus JSTypedArrayBase::setToCopyOfTypedArray(
         runtime, dst, dstIndex, src, srcIndex, count);
   } else {
     // Else must do type conversions.
-    MutableHandle<> storage(runtime);
+    struct : public Locals {
+      PinnedValue<> storage;
+    } lv;
+    LocalsRAII lraii(runtime, &lv);
     for (auto k = srcIndex; k < srcIndex + count; ++k) {
-      storage =
+      lv.storage =
           JSObject::getOwnIndexed(createPseudoHandle(src.get()), runtime, k);
-      if (JSObject::setOwnIndexed(dst, runtime, dstIndex++, storage) ==
+      if (JSObject::setOwnIndexed(dst, runtime, dstIndex++, lv.storage) ==
           ExecutionStatus::EXCEPTION) {
         return ExecutionStatus::EXCEPTION;
       }

@@ -93,10 +93,16 @@ size_t TransitionMap::getMemorySize() const {
 void TransitionMap::uncleanMakeLarge(Runtime &runtime) {
   assert(!isClean() && "must not still be clean");
   assert(!isLarge() && "must not yet be large");
+  struct : public Locals {
+    PinnedValue<HiddenClass> value;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   auto large = new WeakValueMap<Transition, HiddenClass>();
   // Move any valid entry into the allocated map.
-  if (auto value = smallValue().get(runtime))
-    large->insertNew(runtime, smallKey_, runtime.makeHandle(value));
+  if (auto *value = smallValue().get(runtime)) {
+    lv.value = value;
+    large->insertNew(runtime, smallKey_, lv.value);
+  }
   smallValue().releaseSlot();
   u.large_ = large;
   smallKey_.symbolID = SymbolID::deleted();
@@ -344,7 +350,12 @@ OptValue<HiddenClass::PropertyPos> HiddenClass::findPropertyNoMap(
     SymbolID name,
     NamedPropertyDescriptor &desc) {
   assert(!self->propertyMap_ && "property map must not exist");
-  auto selfHandle = runtime.makeHandle(std::move(self));
+  struct : public Locals {
+    PinnedValue<HiddenClass> selfHandle;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.selfHandle = std::move(self);
+  auto selfHandle = Handle<HiddenClass>(lv.selfHandle);
   initializeMissingPropertyMap(selfHandle, runtime);
 
   auto *propMap = selfHandle->propertyMap_.getNonNull(runtime);
@@ -1109,9 +1120,14 @@ ExecutionStatus HiddenClass::addToPropertyMap(
     NamedPropertyDescriptor desc) {
   assert(selfHandle->propertyMap_ && "the property map must be initialized");
 
+  struct : public Locals {
+    PinnedValue<DictPropertyMap> updatedMap;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   // Add the new field to the property map.
-  MutableHandle<DictPropertyMap> updatedMap{
-      runtime, selfHandle->propertyMap_.getNonNull(runtime)};
+  lv.updatedMap = selfHandle->propertyMap_.getNonNull(runtime);
+  MutableHandle<DictPropertyMap> updatedMap(lv.updatedMap);
 
   if (LLVM_UNLIKELY(
           DictPropertyMap::add(updatedMap, runtime, name, desc) ==
@@ -1138,6 +1154,11 @@ void HiddenClass::initializeMissingPropertyMap(
   LLVM_DEBUG(
       dbgs() << "Class:" << selfHandle->getDebugAllocationId()
              << " allocating new map\n");
+
+  struct : public Locals {
+    PinnedValue<DictPropertyMap> mapHandle;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
   // First collect all entries in reverse order. This avoids recursion.
   using MapEntry = std::pair<SymbolID, PropertyFlags>;
@@ -1169,7 +1190,8 @@ void HiddenClass::initializeMissingPropertyMap(
   assert(
       res != ExecutionStatus::EXCEPTION &&
       "Since the entries would fit, there shouldn't be an exception");
-  MutableHandle<DictPropertyMap> mapHandle{runtime, res->get()};
+  lv.mapHandle = res->get();
+  MutableHandle<DictPropertyMap> mapHandle(lv.mapHandle);
 
   // Add the collected entries in reverse order. Note that there could be
   // duplicates.

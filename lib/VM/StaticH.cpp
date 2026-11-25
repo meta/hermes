@@ -86,8 +86,12 @@ extern "C" SHLegacyValue _sh_ljs_coerce_this_ns(
     {
       Runtime &runtime = getRuntime(shr);
       GCScopeMarkerRAII marker{runtime};
-      res = toObject(
-          runtime, runtime.makeHandle(HermesValue::fromRaw(value.raw)));
+      struct : public Locals {
+        PinnedValue<> value;
+      } lv;
+      LocalsRAII lraii{runtime, &lv};
+      lv.value = HermesValue::fromRaw(value.raw);
+      res = toObject(runtime, lv.value);
     }
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
       _sh_throw_current(shr);
@@ -632,6 +636,11 @@ extern "C" SHLegacyValue _sh_ljs_create_generator_object(
   auto genObjRes =
       [&runtime, env, func, funcInfo, unit]() -> CallResult<SHLegacyValue> {
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<NativeJSFunction> generatorFunction;
+      PinnedValue<JSObject> prototype;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
     Handle<NativeJSFunction> innerFunc = NativeJSFunction::create(
         runtime,
         Handle<JSObject>::vmcast(&runtime.functionPrototype),
@@ -640,10 +649,9 @@ extern "C" SHLegacyValue _sh_ljs_create_generator_object(
         func,
         funcInfo,
         unit);
-    auto generatorFunction = runtime.makeHandle(
-        vmcast<NativeJSFunction>(
-            runtime.getCurrentFrame().getCalleeClosureUnsafe()));
-    uint8_t kind = generatorFunction->getFunctionInfo()->kind;
+    lv.generatorFunction = vmcast<NativeJSFunction>(
+        runtime.getCurrentFrame().getCalleeClosureUnsafe());
+    uint8_t kind = lv.generatorFunction->getFunctionInfo()->kind;
     assert(
         (kind == FuncKind::Generator || kind == FuncKind::Async) &&
         "should be called from a generator or async function");
@@ -659,16 +667,19 @@ extern "C" SHLegacyValue _sh_ljs_create_generator_object(
     }
 
     auto prototypeProp = JSObject::getNamed_RJS(
-        generatorFunction,
+        lv.generatorFunction,
         runtime,
         Predefined::getSymbolID(Predefined::prototype));
     if (LLVM_UNLIKELY(prototypeProp == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
 
-    Handle<JSObject> prototype = vmisa<JSObject>(prototypeProp->get())
-        ? runtime.makeHandle<JSObject>(prototypeProp->get())
-        : Handle<JSObject>::vmcast(&runtime.generatorPrototype);
+    Handle<JSObject> prototype =
+        Handle<JSObject>::vmcast(&runtime.generatorPrototype);
+    if (vmisa<JSObject>(prototypeProp->get())) {
+      lv.prototype.castAndSetHermesValue<JSObject>(prototypeProp->get());
+      prototype = lv.prototype;
+    }
     return JSGeneratorObject::create(runtime, innerFunc, prototype)
         ->getHermesValue();
   }();
@@ -1082,37 +1093,41 @@ static inline void putByIndex_RJS(
       }
     }
     // Generic path.
+    // The throw must happen after the Locals scope ends: longjmp skips
+    // ~LocalsRAII and would leave runtime.vmLocals dangling.
+    bool failed;
     {
       GCScopeMarkerRAII marker{runtime};
+      struct : public Locals {
+        PinnedValue<> indexValue;
+      } lv;
+      LocalsRAII lraii{runtime, &lv};
+      lv.indexValue = HermesValue::encodeTrustedNumberValue(index);
       const PropOpFlags defaultPropOpFlags = DEFAULT_PROP_OP_FLAGS(strictMode);
       auto putRes = JSObject::putComputed_RJS(
-          objHandle,
-          runtime,
-          runtime.makeHandle(HermesValue::encodeTrustedNumberValue(index)),
-          valueHandle,
-          defaultPropOpFlags);
-      if (LLVM_UNLIKELY(putRes == ExecutionStatus::EXCEPTION)) {
-        marker.flush();
-        _sh_throw_current(shr);
-      }
+          objHandle, runtime, lv.indexValue, valueHandle, defaultPropOpFlags);
+      failed = putRes == ExecutionStatus::EXCEPTION;
     }
+    if (LLVM_UNLIKELY(failed))
+      _sh_throw_current(shr);
     return;
   }
 
   // Non-object (transient).
+  bool failed;
   {
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<> indexValue;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
+    lv.indexValue = HermesValue::encodeTrustedNumberValue(index);
     auto retStatus = Interpreter::putByValTransient_RJS(
-        runtime,
-        targetHandle,
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(index)),
-        valueHandle,
-        strictMode);
-    if (LLVM_UNLIKELY(retStatus == ExecutionStatus::EXCEPTION)) {
-      marker.flush();
-      _sh_throw_current(shr);
-    }
+        runtime, targetHandle, lv.indexValue, valueHandle, strictMode);
+    failed = retStatus == ExecutionStatus::EXCEPTION;
   }
+  if (LLVM_UNLIKELY(failed))
+    _sh_throw_current(shr);
 }
 
 LLVM_ATTRIBUTE_NOINLINE
@@ -1568,12 +1583,15 @@ extern "C" void _sh_ljs_define_own_by_index(
   CallResult<bool> cr{ExecutionStatus::EXCEPTION};
   {
     GCScopeMarkerRAII marker{runtime};
-    Handle<> indexHandle =
-        runtime.makeHandle(HermesValue::encodeTrustedNumberValue(key));
+    struct : public Locals {
+      PinnedValue<> indexValue;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
+    lv.indexValue = HermesValue::encodeTrustedNumberValue(key);
     cr = JSObject::defineOwnComputedPrimitive(
         Handle<JSObject>::vmcast(toPHV(target)),
         runtime,
-        indexHandle,
+        lv.indexValue,
         DefinePropertyFlags::getDefaultNewPropertyFlags(),
         Handle<>(toPHV(value)),
         PropOpFlags().plusThrowOnError());
@@ -1595,6 +1613,10 @@ extern "C" void _sh_ljs_define_own_getter_setter_by_val(
 
   ExecutionStatus cr = [&runtime, target, key, getter, setter, isEnumerable]() {
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<PropertyAccessor> accessor;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
 
     DefinePropertyFlags dpFlags{};
     dpFlags.setConfigurable = 1;
@@ -1618,14 +1640,14 @@ extern "C" void _sh_ljs_define_own_getter_setter_by_val(
 
     auto res =
         PropertyAccessor::create(runtime, getterCallable, setterCallable);
-    auto accessor = runtime.makeHandle<PropertyAccessor>(std::move(res));
+    lv.accessor = std::move(res);
 
     return JSObject::defineOwnComputed(
                Handle<JSObject>::vmcast(toPHV(target)),
                runtime,
                Handle<>(toPHV(key)),
                dpFlags,
-               accessor,
+               lv.accessor,
                PropOpFlags().plusThrowOnError())
         .getStatus();
   }();
@@ -1734,9 +1756,13 @@ static HermesValue delByVal(
     }
     {
       GCScopeMarkerRAII marker{runtime};
-      Handle<> tmpHandle = runtime.makeHandle(res.getValue());
+      struct : public Locals {
+        PinnedValue<> tmpValue;
+      } lv;
+      LocalsRAII lraii{runtime, &lv};
+      lv.tmpValue = res.getValue();
       status = JSObject::deleteComputed(
-          Handle<JSObject>::vmcast(tmpHandle),
+          Handle<JSObject>::vmcast(&lv.tmpValue),
           runtime,
           Handle<>(toPHV(key)),
           defaultPropOpFlags);
@@ -2126,8 +2152,13 @@ extern "C" SHLegacyValue _sh_ljs_new_array_with_buffer(
                      arrayBuffer,
                      arrayBufferIndex]() {
     GCScopeMarkerRAII marker{runtime};
+    struct : public Locals {
+      PinnedValue<JSArray> arr;
+    } lv;
+    LocalsRAII lraii{runtime, &lv};
     // Resize the array storage in advance.
-    Handle<JSArray> arr = runtime.makeHandle(vmcast<JSArray>(*arrayRes));
+    lv.arr = vmcast<JSArray>(*arrayRes);
+    Handle<JSArray> arr = lv.arr;
     JSArray::setStorageEndIndex(arr, runtime, numElements);
 
     struct {

@@ -240,6 +240,10 @@ napi_is_promise(napi_env env, napi_value value, bool *is_promise) {
   }
 
   Runtime &runtime = env->runtime;
+  struct : public Locals {
+    PinnedValue<Callable> promiseCtor;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
   GCScope gcScope(runtime);
 
   // Look up the global Promise constructor.
@@ -267,9 +271,9 @@ napi_is_promise(napi_env env, napi_value value, bool *is_promise) {
 
   // Use the instanceof operator: value instanceof Promise.
   auto valHandle = Handle<>(phv);
-  auto ctorHandle = runtime.makeHandle(promiseCtorRes->get());
+  lv.promiseCtor.castAndSetHermesValue<Callable>(promiseCtorRes->get());
 
-  auto instRes = instanceOfOperator_RJS(runtime, valHandle, ctorHandle);
+  auto instRes = instanceOfOperator_RJS(runtime, valHandle, lv.promiseCtor);
   if (LLVM_UNLIKELY(instRes == ExecutionStatus::EXCEPTION)) {
     runtime.clearThrownValue();
     return napi_clear_last_error(env);
