@@ -519,14 +519,20 @@ napi_status NAPI_CDECL napi_get_all_property_names(
           continue;
       }
 
+      // getOwnComputedDescriptor above may have run a Proxy trap and
+      // triggered a GC that moved the string \c elem points to. Re-read the
+      // key from the rooted keys array.
+      hermes::vm::HermesValue key =
+          lv.keysArray->at(env->runtime, i).unboxToHV(env->runtime);
+
       // When KeepSymbols is set, getOwnPropertyKeys returns ALL
       // property names as Hermes SymbolValues, including plain string
       // properties. Convert uniqued SymbolIDs (which represent
       // regular string property names) back to StringPrimitive values
       // so NAPI consumers see them as JS strings, not JS Symbols.
-      lv.tmp = elem;
-      if (elem.isSymbol()) {
-        hermes::vm::SymbolID symId = elem.getSymbol();
+      lv.tmp = key;
+      if (key.isSymbol()) {
+        hermes::vm::SymbolID symId = key.getSymbol();
         if (symId.isUniqued()) {
           lv.tmp = hermes::vm::HermesValue::encodeStringValue(
               env->runtime.getStringPrimFromSymbolID(symId));
@@ -534,7 +540,7 @@ napi_status NAPI_CDECL napi_get_all_property_names(
       }
 
       // Convert number to string if requested.
-      if (key_conversion == napi_key_numbers_to_strings && elem.isNumber()) {
+      if (key_conversion == napi_key_numbers_to_strings && key.isNumber()) {
         auto strRes = hermes::vm::toString_RJS(env->runtime, lv.tmp);
         if (LLVM_UNLIKELY(strRes == hermes::vm::ExecutionStatus::EXCEPTION)) {
           return captureRuntimeException(env, napi_pending_exception);
