@@ -2021,6 +2021,57 @@ TEST_P(HermesRuntimeTest, PropNameIDForPredefinedStringUtf16Test) {
   EXPECT_EQ(prop.utf8(*rt), "+Infinity");
 }
 
+TEST_P(HermesRuntimeTest, PropNameIDFromAsciiAndUtf8) {
+  // A name that is already an identifier.
+  auto length = PropNameID::forAscii(*rt, "length");
+  EXPECT_EQ(
+      eval("[1, 2, 3]").getObject(*rt).getProperty(*rt, length).getNumber(), 3);
+
+  // A name that is not an identifier yet. Collect garbage while only the
+  // PropNameID refers to it, to check that the PropNameID keeps it alive.
+  auto fresh = PropNameID::forAscii(*rt, "propNameIDFromAsciiTest");
+  rt->instrumentation().collectGarbage("test");
+  EXPECT_EQ(fresh.utf8(*rt), "propNameIDFromAsciiTest");
+  EXPECT_TRUE(
+      PropNameID::compare(
+          *rt,
+          fresh,
+          PropNameID::forUtf8(*rt, std::string("propNameIDFromAsciiTest"))));
+  Object obj(*rt);
+  obj.setProperty(*rt, fresh, 1);
+  rt->global().setProperty(*rt, "obj", obj);
+  EXPECT_EQ(eval("obj.propNameIDFromAsciiTest").getNumber(), 1);
+
+  // A UTF-8 name that is not ASCII.
+  auto nonAscii = PropNameID::forUtf8(*rt, std::string("caf\xc3\xa9"));
+  EXPECT_EQ(nonAscii.utf16(*rt), u"café");
+  obj.setProperty(*rt, nonAscii, 2);
+  EXPECT_EQ(eval("obj['caf\\u00e9']").getNumber(), 2);
+}
+
+TEST_P(HermesRuntimeTest, PropNameIDFromUtf8NonAscii) {
+  // One non-ASCII character at each position, for lengths that use each
+  // branch of the ASCII check (up to 4, up to 16, and longer).
+  for (size_t length = 1; length <= 40; ++length) {
+    for (size_t pos = 0; pos < length; ++pos) {
+      std::string utf8(length, 'a');
+      std::u16string utf16(length, u'a');
+      utf8.replace(pos, 1, "\xc3\xa9");
+      utf16[pos] = u'é';
+      EXPECT_EQ(PropNameID::forUtf8(*rt, utf8).utf16(*rt), utf16)
+          << "length " << length << ", position " << pos;
+    }
+  }
+
+  // A non-ASCII name that JS made first.
+  auto obj = eval("({'gr\\u00fcn': 3})").getObject(*rt);
+  auto name = PropNameID::forUtf8(*rt, std::string("gr\xc3\xbcn"));
+  EXPECT_EQ(obj.getProperty(*rt, name).getNumber(), 3);
+
+  // Invalid UTF-8 stops the name before the first invalid code point.
+  EXPECT_EQ(PropNameID::forUtf8(*rt, std::string("ab\x80xy")).utf8(*rt), "ab");
+}
+
 TEST_P(HermesRuntimeTest, CreateFromUtf16Test) {
   std::u16string utf16 = u"foobar";
 
