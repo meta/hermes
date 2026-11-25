@@ -68,6 +68,32 @@ std::string flatten(const std::vector<CapturedRange> &ranges) {
   return result;
 }
 
+TEST(Regex, RepeatedBracketCompilation) {
+  for (auto pattern : {u"[A-Z]+", u"[^A-Z]+", u"[\\u0400-\\u052f]+"}) {
+    for (auto flags : {u"", u"i", u"u", u"iu"}) {
+      cregex reg(pattern, flags);
+      ASSERT_TRUE(reg.valid());
+      const auto bytecode = reg.compile();
+      EXPECT_EQ(bytecode, reg.compile());
+      EXPECT_EQ(bytecode, reg.compile());
+    }
+  }
+}
+
+#ifdef HERMES_ENABLE_UNICODE_REGEXP_PROPERTY_ESCAPES
+TEST(Regex, RepeatedUnicodePropertyCompilation) {
+  for (auto pattern : {u"[\\p{L}\\p{N}_]+", u"[^\\p{L}\\p{N}_]+"}) {
+    for (auto flags : {u"u", u"iu"}) {
+      cregex reg(pattern, flags);
+      ASSERT_TRUE(reg.valid());
+      const auto bytecode = reg.compile();
+      EXPECT_EQ(bytecode, reg.compile());
+      EXPECT_EQ(bytecode, reg.compile());
+    }
+  }
+}
+#endif
+
 TEST(Regex, Short) {
   std::u16string pattern = u"a([0-9]+)b";
   cregex reg(pattern.c_str());

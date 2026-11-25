@@ -1045,10 +1045,14 @@ class BracketNode : public Node {
 
   /// \return the code point set this bracket emits: the parsed set, closed
   /// under canonical equivalence when icase_. emitStep() and addStartSet()
-  /// both use it, so they cannot diverge.
-  CodePointSet emittedCodePointSet() const {
-    return icase_ ? makeCanonicallyEquivalent(codePointSet_, unicode_)
-                  : codePointSet_;
+  /// both use it, so they cannot diverge. \p storage holds the canonicalized
+  /// set when icase_, and must outlive the returned reference.
+  const CodePointSet &emittedCodePointSet(CodePointSet &storage) const {
+    if (!icase_) {
+      return codePointSet_;
+    }
+    storage = makeCanonicallyEquivalent(codePointSet_, unicode_);
+    return storage;
   }
 
   /// Helper implementation of emit(). Given that we have emitted an instruction
@@ -1065,7 +1069,8 @@ class BracketNode : public Node {
       }
     }
 
-    CodePointSet cps = emittedCodePointSet();
+    CodePointSet storage;
+    const CodePointSet &cps = emittedCodePointSet(storage);
     for (const CodePointRange &range : cps.ranges()) {
       assert(range.length > 0 && "Ranges should never be empty");
       bcs.emitBracketRange(
@@ -1120,7 +1125,8 @@ class BracketNode : public Node {
   /// set unless the bracket is not negated, has no class other than a
   /// positive \d, and has no emitted range reaching 0x80.
   StartSetResult addStartSet(StartSet &set, unsigned) const override {
-    const CodePointSet cps = emittedCodePointSet();
+    CodePointSet storage;
+    const CodePointSet &cps = emittedCodePointSet(storage);
     llvh::SmallVector<BracketRange32, 8> ranges;
     for (const CodePointRange &range : cps.ranges())
       ranges.push_back(
