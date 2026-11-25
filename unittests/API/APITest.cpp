@@ -2529,6 +2529,103 @@ TEST_P(HermesRuntimeTest, FinalizableHostFunctionConstructorTest) {
   EXPECT_THROW(eval("new HostFunc(false)"), JSError);
 }
 
+TEST_P(HermesRuntimeTest, HostFunctionNameAndLengthTest) {
+  auto noop = [](Runtime &, const Value &, const Value *, size_t) {
+    return Value::undefined();
+  };
+
+  Function f = Function::createFromHostFunction(
+      *rt, PropNameID::forAscii(*rt, "hostFn"), 2, noop);
+  rt->global().setProperty(*rt, "f", f);
+
+  EXPECT_TRUE(eval("f.name === 'hostFn' && f.length === 2").getBool());
+  // Same order and attributes as the properties of other built-in functions.
+  EXPECT_TRUE(
+      eval("Object.getOwnPropertyNames(f).join() === 'length,name'").getBool());
+  EXPECT_TRUE(eval(
+                  "var d = Object.getOwnPropertyDescriptor(f, 'length');"
+                  "d.value === 2 && !d.writable && !d.enumerable &&"
+                  "d.configurable")
+                  .getBool());
+  EXPECT_TRUE(eval(
+                  "var d = Object.getOwnPropertyDescriptor(f, 'name');"
+                  "d.value === 'hostFn' && !d.writable && !d.enumerable &&"
+                  "d.configurable")
+                  .getBool());
+
+  // Properties added later go after 'length' and 'name'.
+  EXPECT_TRUE(eval(
+                  "for (var i = 0; i < 10; ++i) f['p' + i] = i;"
+                  "f.p0 === 0 && f.p9 === 9 && f.name === 'hostFn' &&"
+                  "f.length === 2 &&"
+                  "Object.getOwnPropertyNames(f).slice(0, 3).join() ==="
+                  "'length,name,p0'")
+                  .getBool());
+
+  // Both properties are configurable.
+  EXPECT_TRUE(eval(
+                  "delete f.length;"
+                  "Object.defineProperty(f, 'name', {value: 'renamed'});"
+                  "!f.hasOwnProperty('length') && f.length === 0 &&"
+                  "f.name === 'renamed'")
+                  .getBool());
+
+  // A length that does not fit in a small integer, and a non-ASCII name.
+  Function big = Function::createFromHostFunction(
+      *rt, PropNameID::forUtf8(*rt, "b\xc3\xafg"), 0xffffffffu, noop);
+  EXPECT_EQ(big.getProperty(*rt, "length").getNumber(), 4294967295.0);
+  EXPECT_EQ(
+      big.getProperty(*rt, "name").getString(*rt).utf8(*rt), "b\xc3\xafg");
+
+  // The properties keep their values when the GC moves the functions.
+  std::vector<Function> fns;
+  for (unsigned i = 0; i < 1000; ++i) {
+    fns.push_back(
+        Function::createFromHostFunction(
+            *rt, PropNameID::forAscii(*rt, "fn" + std::to_string(i)), i, noop));
+  }
+  rt->instrumentation().collectGarbage("test");
+  for (unsigned i = 0; i < fns.size(); ++i) {
+    EXPECT_EQ(fns[i].getProperty(*rt, "length").getNumber(), i);
+    EXPECT_EQ(
+        fns[i].getProperty(*rt, "name").getString(*rt).utf8(*rt),
+        "fn" + std::to_string(i));
+  }
+}
+
+// In a build with HERMESVM_SANITIZE_HANDLES, a sanitize rate of 1.0 moves the
+// young generation at every allocation. So this test finds a GC pointer that
+// host function creation keeps across an allocation without rooting it, while
+// the new function is still in the young generation. Other builds ignore the
+// rate.
+TEST(HermesRuntimeSanitizeHandlesTest, HostFunctionNameAndLength) {
+  auto rt = makeHermesRuntime(
+      ::hermes::vm::RuntimeConfig::Builder()
+          .withGCConfig(
+              ::hermes::vm::GCConfig::Builder()
+                  .withSanitizeConfig(
+                      ::hermes::vm::GCSanitizeConfig::Builder()
+                          .withSanitizeRate(1.0)
+                          .build())
+                  .build())
+          .build());
+  auto noop = [](Runtime &, const Value &, const Value *, size_t) {
+    return Value::undefined();
+  };
+
+  // With boxed doubles, encoding the length can allocate. On 64-bit hosts,
+  // only a HEAP_HV_BOXED build finds a stale pointer across that allocation.
+  // With compressed pointers, the property storage allocation comes first,
+  // and it moves the function to the old generation.
+  for (unsigned length : {0u, 3u, 0xffffffffu}) {
+    std::string name = "fn" + std::to_string(length);
+    Function f = Function::createFromHostFunction(
+        *rt, PropNameID::forAscii(*rt, name), length, noop);
+    EXPECT_EQ(f.getProperty(*rt, "length").getNumber(), length);
+    EXPECT_EQ(f.getProperty(*rt, "name").getString(*rt).utf8(*rt), name);
+  }
+}
+
 TEST_P(HermesRuntimeTest, ArrayPush) {
   // Push to an empty array
   Array arr(*rt, 0);

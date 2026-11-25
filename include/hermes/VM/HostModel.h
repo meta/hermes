@@ -24,6 +24,18 @@ typedef void (*FinalizeNativeFunctionPtr)(void *context);
 class FinalizableNativeFunction final : public NativeFunction {
   FinalizeNativeFunctionPtr finalizePtr_;
 
+  /// \return the slot index of the 'length' property in the class made by
+  /// createClass(). It is the first slot after the overlap slots.
+  static constexpr SlotIndex lengthPropIndex() {
+    return numOverlapSlots<FinalizableNativeFunction>();
+  }
+
+  /// \return the slot index of the 'name' property in the class made by
+  /// createClass().
+  static constexpr SlotIndex namePropIndex() {
+    return lengthPropIndex() + 1;
+  }
+
  public:
   static const CallableVTable vt;
 
@@ -34,7 +46,18 @@ class FinalizableNativeFunction final : public NativeFunction {
     return cell->getKind() == CellKind::FinalizableNativeFunctionKind;
   }
 
-  /// Create an instance of FinalizableNativeFunction.
+  /// Create the class that createWithoutPrototype() uses. It adds the
+  /// 'length' and 'name' properties to \p rootClazz, with the same flags and
+  /// in the same order as Callable::defineNameLengthAndPrototype().
+  /// \param rootClazz the root class of FinalizableNativeFunction, whose
+  ///   object parent is Function.prototype.
+  /// \return the new class. The caller must root it before it allocates.
+  static HiddenClass *createClass(
+      Runtime &runtime,
+      Handle<HiddenClass> rootClazz);
+
+  /// Create an instance of FinalizableNativeFunction. Its parent is
+  /// Function.prototype, and it has the 'length' and 'name' properties.
   /// \param functionPtr the host function
   /// \param finalizePtr the finalizer function
   /// \param paramCount number of parameters (excluding `this`)
