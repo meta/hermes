@@ -7,6 +7,7 @@
 
 #include "Extensions.h"
 
+#include "Crypto.h"
 #include "Dummy.h"
 #include "Intrinsics.h"
 #include "TextEncoder.h"
@@ -27,6 +28,7 @@ void installExtensions(jsi::Runtime &rt, jsi::Object extensions) {
 
   // Delegate to each extension's install function.
   installTextEncoder(rt, extensions);
+  installCrypto(rt, extensions);
   installDummy(rt, extensions);
 
 #ifdef JSI_UNSTABLE
