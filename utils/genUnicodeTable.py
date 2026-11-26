@@ -189,7 +189,7 @@ struct StringPoolRef {
   uint16_t size;
 };
 
-/// A reference to a UnicodeRange pool entry.
+/// A byte offset and range count in the encoded Unicode property range pool.
 struct UnicodeRangePoolRef {
   uint16_t offset;
   uint16_t size;
@@ -1056,6 +1056,17 @@ def parse_property_aliases(
 range_array_pool_entry = tuple[int, int]
 
 
+def encode_uleb128(value: int) -> list[int]:
+    """Encode a nonnegative integer as unsigned LEB128."""
+    assert value >= 0
+    data = []
+    while value >= 0x80:
+        data.append((value & 0x7F) | 0x80)
+        value >>= 7
+    data.append(value)
+    return data
+
+
 class UnicodePropertyCategory:
     """
     A pool of property names and aliases, and codepoint range arrays, that exist
@@ -1580,12 +1591,43 @@ range_array_pool_size_bits: {self._metrics["range_array_pool_size"].bit_length()
             self.general_category_pool._range_array_pool["Cn"]
         )
 
+    def encode_range_pool(
+        self,
+    ) -> tuple[list[int], dict[int, int], list[tuple[str, str, int, int]]]:
+        """Encode unsigned gaps and inclusive lengths as ULEB128, remapping offsets.
+
+        Each property block contains sorted, disjoint ranges. Zero resets the
+        previous endpoint so references can span Script and extension blocks.
+        """
+        data = []
+        offsets = {}
+        spans = []
+        range_index = 0
+        for (cat, name), (_, ranges, _) in self._range_pool.items():
+            begin = len(data)
+            if ranges is None:
+                spans.append((cat, name, begin, begin))
+                continue
+            offsets[range_index] = begin
+            data.append(0)
+            previous_end = 0
+            for start, end in ranges:
+                assert previous_end <= start <= end <= 0x10FFFF
+                data.extend(encode_uleb128(start - previous_end + 1))
+                data.extend(encode_uleb128(end - start))
+                previous_end = end + 1
+                range_index += 1
+            spans.append((cat, name, begin, len(data)))
+        assert len(data) < 0xFFFF, "Encoded range pool exceeds uint16_t offsets"
+        return data, offsets, spans
+
     def print_template(self):
         """
         Produce the generated C++ code for the gathered Unicode properties data.
 
         This includes the string pool, range pool, and range array pool data.
         """
+        range_data, range_offsets, range_spans = self.encode_range_pool()
         all_strings = sorted(
             self._names,
             key=lambda name: (len(name), name),
@@ -1613,30 +1655,18 @@ range_array_pool_size_bits: {self._metrics["range_array_pool_size"].bit_length()
             return f"{{ {offset}, {size} }}"
 
         def _range_pool():
-            """
-            Using the range pool, generate the UnicodeRange entries for the C++
-            code, that reference the shared range pool.
-
-            Example output:
-
-                static constexpr UnicodeRange UNICODE_RANGE_POOL[] = {
-                    // General_Category: Cc
-                    {0x0000, 0x001F},
-                    {0x007F, 0x009F},
-                };
-            """
-            for (cat, name), (offset, ranges, range_size) in self._range_pool.items():
+            """Emit the encoded byte pool without reformatting its rows."""
+            for cat, name, begin, end in range_spans:
                 if self.INCLUDE_COMMENTS:
                     yield f"// {cat}: {name}"
-                if ranges:
-                    # Manually batch the ranges into 3 per line, because
-                    # clang-format wants to format them to a single item per
-                    # line.
-                    for batch in batched(ranges, 3):
-                        yield "".join(
-                            f"{{{as_hex(start)}, {as_hex(end)}}},".ljust(20)
-                            for start, end in batch
-                        ).strip()
+                for offset in range(begin, end, 16):
+                    yield (
+                        ", ".join(
+                            f"0x{byte:02X}"
+                            for byte in range_data[offset : min(offset + 16, end)]
+                        )
+                        + ","
+                    )
 
         def _range_array_pool():
             """
@@ -1657,8 +1687,9 @@ range_array_pool_size_bits: {self._metrics["range_array_pool_size"].bit_length()
                     yield f"// {cat}: {name}"
                 if ranges is not None:
                     size = len(ranges) if range_size is None else range_size
-                    assert offset + size < 0xFFFF, (
-                        "Range array offset+size exceeds uint16_t"
+                    offset = range_offsets[offset]
+                    assert offset < 0xFFFF and size < 0xFFFF, (
+                        "Range array offset or size exceeds uint16_t"
                     )
                     self._metrics["range_pool_offset"] = max(
                         self._metrics["range_pool_offset"], offset
@@ -1722,7 +1753,7 @@ range_array_pool_size_bits: {self._metrics["range_array_pool_size"].bit_length()
 static constexpr std::string_view UNICODE_DATA_STRING_POOL = "${string_pool}";
 
 // clang-format off
-static constexpr UnicodeRange UNICODE_RANGE_POOL[] = {
+static constexpr uint8_t UNICODE_RANGE_POOL[] = {
 ${range_pool}
 };
 // clang-format on

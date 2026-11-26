@@ -356,17 +356,39 @@ llvh::ArrayRef<UnicodeRangePoolRef> unicodePropertyRanges(
       rangeMapEntry->rangeArraySize};
 }
 
+/// Decode an unsigned LEB128 value from the generated property range pool.
+static uint32_t decodeRangeValue(const uint8_t *&cursor) {
+  uint32_t value = 0;
+  unsigned shift = 0;
+  uint8_t byte;
+  do {
+    assert(cursor < std::end(UNICODE_RANGE_POOL) && shift < 32);
+    byte = *cursor++;
+    value |= static_cast<uint32_t>(byte & 0x7f) << shift;
+    shift += 7;
+  } while (byte & 0x80);
+  return value;
+}
+
 void addRangeArrayPoolToBracket(
     CodePointSet *receiver,
     const llvh::ArrayRef<UnicodeRangePoolRef> rangeArrayPool,
     bool inverted) {
   auto addAllRanges = [&rangeArrayPool](CodePointSet *target) {
     for (auto rangePoolRef : rangeArrayPool) {
-      auto rangePool = llvh::ArrayRef<UnicodeRange>{
-          &UNICODE_RANGE_POOL[rangePoolRef.offset], rangePoolRef.size};
-      for (auto range : rangePool) {
-        const uint32_t length = range.second - range.first + 1;
-        target->add(CodePointRange{range.first, length});
+      const uint8_t *cursor = &UNICODE_RANGE_POOL[rangePoolRef.offset];
+      uint32_t previousEnd = 0;
+      for (uint32_t i = 0; i < rangePoolRef.size; ++i) {
+        uint32_t gap = decodeRangeValue(cursor);
+        // Script_Extensions can span two independently encoded range blocks.
+        while (gap == 0) {
+          previousEnd = 0;
+          gap = decodeRangeValue(cursor);
+        }
+        const uint32_t first = previousEnd + gap - 1;
+        const uint32_t length = decodeRangeValue(cursor) + 1;
+        previousEnd = first + length;
+        target->add(CodePointRange{first, length});
       }
     }
   };

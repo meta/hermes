@@ -143,6 +143,67 @@ TEST(UnicodeTest, CodePointSet) {
   EXPECT_EQ("0-1000", flatten(cps));
 }
 
+#ifdef HERMES_ENABLE_UNICODE_REGEXP_PROPERTY_ESCAPES
+
+static CodePointSet propertySet(
+    std::string_view name,
+    std::string_view value = "",
+    bool inverted = false) {
+  CodePointSet result;
+  addRangeArrayPoolToBracket(
+      &result, unicodePropertyRanges(name, value), inverted);
+  return result;
+}
+
+TEST(UnicodeTest, PropertyRangeBoundaries) {
+  EXPECT_EQ("0-127", flatten(propertySet("ASCII")));
+  EXPECT_EQ("0-1114111", flatten(propertySet("Any")));
+  auto letters = propertySet("L");
+  EXPECT_TRUE(letters.contains('A'));
+  EXPECT_FALSE(letters.contains('0'));
+  EXPECT_TRUE(letters.contains(0x10400));
+  EXPECT_FALSE(letters.contains(UNICODE_MAX_VALUE));
+}
+
+TEST(UnicodeTest, InvertedPropertyRangeBoundaries) {
+  auto inverted = propertySet("ASCII", "", true);
+  EXPECT_FALSE(inverted.contains(0));
+  EXPECT_FALSE(inverted.contains(127));
+  EXPECT_TRUE(inverted.contains(128));
+  EXPECT_TRUE(inverted.contains(0x10400));
+  EXPECT_TRUE(inverted.contains(UNICODE_MAX_VALUE));
+}
+
+TEST(UnicodeTest, CompoundPropertyRangeResets) {
+  CodePointSet letters;
+  for (auto category : {"Ll", "Lt", "Lu", "Lm", "Lo"}) {
+    addRangeArrayPoolToBracket(
+        &letters, unicodePropertyRanges(category, ""), false);
+  }
+  EXPECT_EQ(flatten(letters), flatten(propertySet("L")));
+  EXPECT_EQ(flatten(propertySet("Cn")), flatten(propertySet("Script", "Zzzz")));
+}
+
+TEST(UnicodeTest, ScriptExtensionRangeResets) {
+  EXPECT_FALSE(propertySet("Script", "Hira").contains(0x30A0));
+  auto hiragana = propertySet("Script_Extensions", "Hira");
+  EXPECT_TRUE(hiragana.contains(0x30A0));
+  EXPECT_TRUE(hiragana.contains(0x3042));
+  EXPECT_FALSE(hiragana.contains('A'));
+
+  auto latin = propertySet("Script_Extensions", "Latin");
+  auto inverted = propertySet("Script_Extensions", "Latin", true);
+  EXPECT_TRUE(latin.contains(0x202F));
+  EXPECT_FALSE(inverted.contains(0x202F));
+  EXPECT_TRUE(latin.contains('A'));
+  EXPECT_FALSE(inverted.contains('A'));
+  EXPECT_FALSE(latin.contains(0x4F60));
+  EXPECT_TRUE(inverted.contains(0x4F60));
+  EXPECT_TRUE(inverted.contains(UNICODE_MAX_VALUE));
+}
+
+#endif
+
 TEST(UnicodeTest, AddLegacyCanonicalEquivalentCharacters) {
   auto flattenCanonically = [](const CodePointSet &cps) {
     return flatten(makeCanonicallyEquivalent(cps, false /* not unicode */));
