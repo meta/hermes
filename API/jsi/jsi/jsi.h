@@ -329,6 +329,49 @@ class JSI_EXPORT ISerialization : public ICast {
 
 #endif // JSI_UNSTABLE
 
+/// Provides an API to read the enumerable properties of an object with
+/// their values, without the array of getPropertyNames or a String for each
+/// name.
+class JSI_EXPORT IPropertyEnumeration : public ICast {
+ public:
+  static constexpr jsi::UUID uuid{
+      0xdf3c7545,
+      0x65b0,
+      0x44b4,
+      0xaa11,
+      0xe03358f93907};
+
+  /// Invokes the callback \p cb with \p ctx and the name and value of each
+  /// enumerable string-keyed property of \p object and its prototype chain.
+  /// The result is the same as calling getProperty for each name that
+  /// getPropertyNames returns, in that order: the names are collected before
+  /// the first call, getters and Proxy traps run, a property added during the
+  /// enumeration is not visited, and a property deleted before it's visited is
+  /// still visited with the value that getProperty returns at that time.
+  ///
+  /// If \p ascii is true, \p name points to \p length ASCII characters.
+  /// Otherwise, it points to \p length UTF-16 code units, which may include
+  /// unpaired surrogates. The name is not null-terminated, and it is valid
+  /// only until \p cb returns. The callback may move \p value.
+  ///
+  /// The callback may use the runtime, for example to allocate, call
+  /// functions or modify \p object. If a getter or Proxy trap throws, the
+  /// enumeration stops and the method throws a JSError. If the callback throws,
+  /// the enumeration stops and the exception propagates to the caller.
+  virtual void forEachProperty(
+      const Object& object,
+      void* ctx,
+      void (*cb)(
+          void* ctx,
+          bool ascii,
+          const void* name,
+          size_t length,
+          Value& value)) = 0;
+
+ protected:
+  ~IPropertyEnumeration() = default;
+};
+
 /// An interface that provides various functionalities of the JS runtime.
 /// The APIs must not be called from multiple threads concurrently. It is the
 /// user's responsibility ensure thread safety when using IRuntime.
