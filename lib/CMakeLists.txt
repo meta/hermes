@@ -197,6 +197,19 @@ target_link_libraries(hermesvmlean_a PUBLIC
 add_library(hermesvm SHARED dummy.cpp)
 add_library(hermesvmlean SHARED dummy.cpp)
 
+# Define the deployment target in the framework's metadata.
+function(hermes_set_framework_min_os_version target)
+  if(HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone|appletv|xr")
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND plutil -replace MinimumOSVersion -string ${CMAKE_OSX_DEPLOYMENT_TARGET} $<TARGET_FILE_DIR:${target}>/Info.plist
+    )
+  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "catalyst|macos")
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND plutil -replace LSMinimumSystemVersion -string ${CMAKE_OSX_DEPLOYMENT_TARGET} $<TARGET_FILE_DIR:${target}>/Resources/Info.plist
+    )
+  endif()
+endfunction()
+
 if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
   set_target_properties(hermesvm PROPERTIES
     FRAMEWORK TRUE
@@ -207,32 +220,10 @@ if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
     MACOSX_FRAMEWORK_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_FRAMEWORK_IDENTIFIER dev.hermesengine.${HERMES_APPLE_TARGET_PLATFORM}
   )
-  # Define the deployment target in the frameworks metadata
-  if(HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone")
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Info.plist
-    )
-  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "appletv")
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Info.plist
-    )
-  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "catalyst")
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Resources/Info.plist
-    )
-  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "macos")
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Resources/Info.plist
-    )
-  elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "xr")
-    if(CMAKE_VERSION VERSION_LESS 3.28.4)
-      message("VisionOS Simulator requires CMake version >= 3.28.4")
-    endif()
-
-    add_custom_command(TARGET hermesvm POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:hermesvm>/Info.plist
-    )
+  if(HERMES_APPLE_TARGET_PLATFORM MATCHES "xr" AND CMAKE_VERSION VERSION_LESS 3.28.4)
+    message("VisionOS Simulator requires CMake version >= 3.28.4")
   endif()
+  hermes_set_framework_min_os_version(hermesvm)
 endif()
 
 # Force the entire hermesvm_a library to be used by hermesvm. There is
@@ -277,6 +268,69 @@ if(HERMES_ENABLE_NAPI)
     target_link_libraries(hermesvmlean PRIVATE
       -Wl,--whole-archive hermesNapi -Wl,--no-whole-archive)
   endif()
+endif()
+
+# A library with a stable name for Node-API addons to link against, which
+# forwards only the Node-API functions to hermesvm.
+if(HERMES_ENABLE_NAPI AND (APPLE OR HERMES_IS_ANDROID))
+  set(NODE_API_DIR ${PROJECT_SOURCE_DIR}/API/napi)
+  add_library(node-api SHARED dummy.cpp)
+
+  if(APPLE)
+    set(NODE_API_REEXPORTS ${NODE_API_DIR}/node-api.reexports)
+    if(HERMES_BUILD_APPLE_FRAMEWORK)
+      set_target_properties(node-api PROPERTIES
+        FRAMEWORK TRUE
+        # Part of the install name addons record, so it can't follow the Hermes version.
+        FRAMEWORK_VERSION A
+        MACOSX_FRAMEWORK_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_FRAMEWORK_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_FRAMEWORK_IDENTIFIER dev.hermesengine.node-api.${HERMES_APPLE_TARGET_PLATFORM}
+      )
+      hermes_set_framework_min_os_version(node-api)
+    endif()
+    target_link_options(node-api PRIVATE
+      "LINKER:-reexported_symbols_list,${NODE_API_REEXPORTS}"
+      ${HERMES_EXTRA_LINKER_FLAGS}
+    )
+    set_property(TARGET node-api APPEND PROPERTY LINK_DEPENDS ${NODE_API_REEXPORTS})
+    add_custom_command(TARGET node-api POST_BUILD
+      COMMAND ${Python_EXECUTABLE} ${NODE_API_DIR}/check_node_api.py apple
+        --nm ${CMAKE_NM}
+        --hermesvm $<TARGET_FILE:hermesvm>
+        --reexports ${NODE_API_REEXPORTS}
+      VERBATIM
+    )
+  elseif(HERMES_IS_ANDROID)
+    # bionic searches libnode-api.so before libhermesvm.so, so this defines
+    # nothing and has to keep its DT_NEEDED on hermesvm.
+    target_link_options(node-api PRIVATE "LINKER:--no-as-needed")
+
+    # lld doesn't resolve symbols through libnode-api.so's DT_NEEDED, so addons
+    # link against this libnode-api.so instead.
+    set(HERMES_NODE_API_STUB_DIR ${CMAKE_CURRENT_BINARY_DIR}/node-api-stub CACHE PATH
+      "Directory for the libnode-api.so that Node-API addons link against")
+    add_library(node-api-stub SHARED ${NODE_API_DIR}/node-api-stub.c)
+    set_target_properties(node-api-stub PROPERTIES
+      OUTPUT_NAME node-api
+      LIBRARY_OUTPUT_DIRECTORY ${HERMES_NODE_API_STUB_DIR}/${ANDROID_ABI}
+    )
+    add_dependencies(node-api node-api-stub)
+    # Relinks node-api, and so reruns the check, when the stub changes.
+    set_property(TARGET node-api APPEND PROPERTY LINK_DEPENDS $<TARGET_FILE:node-api-stub>)
+    add_custom_command(TARGET node-api POST_BUILD
+      COMMAND ${Python_EXECUTABLE} ${NODE_API_DIR}/check_node_api.py android
+        --nm ${CMAKE_NM}
+        --readelf ${CMAKE_READELF}
+        --hermesvm $<TARGET_FILE:hermesvm>
+        --stub $<TARGET_FILE:node-api-stub>
+        --node-api $<TARGET_FILE:node-api>
+      VERBATIM
+    )
+  endif()
+
+  target_link_libraries(node-api PRIVATE hermesvm)
+  target_include_directories(node-api PUBLIC ${PROJECT_SOURCE_DIR}/include/hermes/napi)
 endif()
 
 # Since we use private dependencies above, we need to enumerate all the headers

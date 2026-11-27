@@ -6,6 +6,7 @@
  */
 
 import com.facebook.hermes.helpers.internal.SerializeHermesCompilerPackageJson
+import com.android.build.gradle.tasks.PrefabPackageTask
 import com.facebook.hermes.tasks.internal.CustomExecTask
 import org.apache.tools.ant.taskdefs.condition.Os
 
@@ -84,6 +85,8 @@ val hermesBuildOutputFileTree =
 
 val ndkBuildJobs = Runtime.getRuntime().availableProcessors().toString()
 val prefabHeadersDir = File("$buildDir/prefab-headers")
+val prefabNodeApiHeadersDir = File("$buildDir/prefab-headers-node-api")
+val nodeApiStubDir = File("$buildDir/node-api-stub")
 
 // We inject the JSI directory used inside the Hermes build with the -DJSI_DIR config.
 val jsiDir = File("$hermesDir/API/jsi")
@@ -160,6 +163,14 @@ val prepareHeadersForPrefab by
       into(prefabHeadersDir)
     }
 
+val prepareNodeApiHeadersForPrefab by
+    tasks.registering(Copy::class) {
+      dependsOn(buildHermesC)
+      from("$hermesDir/include/hermes/napi")
+      include("*.h")
+      into(prefabNodeApiHeadersDir)
+    }
+
 val buildHermesLib by
     tasks.registering(CustomExecTask::class) {
       dependsOn(buildHermesC)
@@ -232,9 +243,10 @@ android {
             // We intentionally build Hermes with Intl support only. This is to simplify
             // the build setup and to avoid overcomplicating the build-type matrix.
             "-DHERMES_ENABLE_INTL=True",
+            "-DHERMES_NODE_API_STUB_DIR=${nodeApiStubDir}",
         )
 
-        targets("hermesvm")
+        targets("hermesvm", "node-api")
       }
     }
 
@@ -308,12 +320,28 @@ android {
     }
   }
 
-  prefab { create("hermesvm") { headers = prefabHeadersDir.absolutePath } }
+  prefab {
+    create("hermesvm") { headers = prefabHeadersDir.absolutePath }
+    create("node-api") { headers = prefabNodeApiHeadersDir.absolutePath }
+  }
 }
 
 afterEvaluate {
   tasks.getByName("preBuild").dependsOn(buildHermesC)
   tasks.getByName("preBuild").dependsOn(prepareHeadersForPrefab)
+  tasks.getByName("preBuild").dependsOn(prepareNodeApiHeadersForPrefab)
+}
+
+// AGP takes a prefab module's library from the CMake target of the same name, but addons have to
+// link against the stub instead.
+tasks.withType<PrefabPackageTask>().configureEach {
+  doLast {
+    val libsDir = outputs.files.singleFile.resolve("modules/node-api/libs")
+    for (abiDir in checkNotNull(libsDir.listFiles()) { "$libsDir not found" }) {
+      val abi = abiDir.name.removePrefix("android.")
+      nodeApiStubDir.resolve("$abi/libnode-api.so").copyTo(abiDir.resolve("libnode-api.so"), true)
+    }
+  }
 }
 
 tasks.withType<JavaCompile>().configureEach {
