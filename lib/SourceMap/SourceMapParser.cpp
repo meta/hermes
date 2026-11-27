@@ -101,7 +101,7 @@ std::unique_ptr<SourceMap> SourceMapParser::parse(
   }
 
   std::vector<SourceMap::SegmentList> lines;
-  bool succeed = parseMappings(mappings->str(), lines);
+  bool succeed = parseMappings(mappings->str(), sources.size(), lines);
   if (!succeed) {
     sm.error(genericLoc, "Failed to parse source map mappings");
     return nullptr;
@@ -131,6 +131,7 @@ std::unique_ptr<SourceMap> SourceMapParser::parse(
 
 bool SourceMapParser::parseMappings(
     llvh::StringRef sourceMappings,
+    size_t sourcesCount,
     std::vector<SourceMap::SegmentList> &lines) {
   assert(lines.empty() && "lines is an out parameter so should be empty");
   SourceMap::SegmentList segments;
@@ -164,7 +165,16 @@ bool SourceMapParser::parseMappings(
 
       state.generatedColumn = segmentOpt->generatedColumn;
       if (segmentOpt->representedLocation.hasValue()) {
-        state.sourceIndex = segmentOpt->representedLocation->sourceIndex;
+        // Reject a sourceIndex that does not name an entry in "sources".
+        // Consumers such as getSourceFullPath() index the sources vector with
+        // this value directly, so an out-of-range index is an out-of-bounds
+        // read at query time.
+        int32_t sourceIndex = segmentOpt->representedLocation->sourceIndex;
+        if (sourceIndex < 0 ||
+            static_cast<size_t>(sourceIndex) >= sourcesCount) {
+          return false;
+        }
+        state.sourceIndex = sourceIndex;
         state.representedLine = segmentOpt->representedLocation->lineIndex;
         state.representedColumn = segmentOpt->representedLocation->columnIndex;
 

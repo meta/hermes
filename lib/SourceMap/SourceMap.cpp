@@ -53,7 +53,7 @@ SourceMap::getLocationForAddressFIndex(uint32_t line, uint32_t column) const {
   if (!seg.hasValue() || !seg->representedLocation.hasValue()) {
     return llvh::None;
   }
-  // parseSegment() should have validated this.
+  // parseMappings() rejects any segment with an out-of-range sourceIndex.
   assert(
       (size_t)seg->representedLocation->sourceIndex < sources_.size() &&
       "SourceIndex is out-of-range.");
