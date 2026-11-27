@@ -316,6 +316,12 @@ class JCollator : public jni::JavaClass<JCollator> {
                 jni::alias_ref<jstring>, jni::alias_ref<jstring>)>("compare");
     return method(self(), x, y);
   }
+
+  bool defaultLocaleChanged() {
+    static const auto method =
+        javaClassStatic()->getMethod<jboolean()>("defaultLocaleChanged");
+    return method(self());
+  }
 };
 
 class CollatorAndroid : public Collator {
@@ -336,6 +342,10 @@ class CollatorAndroid : public Collator {
 
   double compare(const std::u16string &x, const std::u16string &y) noexcept {
     return jCollator_->compare(stringToJava(x), stringToJava(y));
+  }
+
+  bool defaultLocaleChanged() noexcept {
+    return jCollator_->defaultLocaleChanged();
   }
 
  private:
@@ -396,6 +406,10 @@ double Collator::compare(
     const std::u16string &x,
     const std::u16string &y) noexcept {
   return static_cast<CollatorAndroid *>(this)->compare(x, y);
+}
+
+bool Collator::defaultLocaleChanged() noexcept {
+  return static_cast<CollatorAndroid *>(this)->defaultLocaleChanged();
 }
 
 namespace {

@@ -19,6 +19,8 @@ public class LocaleMatcher {
   public static class LocaleMatchResult {
     public ILocaleObject<?> matchedLocale;
     public HashMap<String, String> extensions = new HashMap<>();
+    // The default locale the match fell back to because no requested locale is available, or null.
+    public Object defaultLocale;
   }
 
   // https://tc39.es/ecma402/#sec-bestavailablelocale
@@ -62,6 +64,7 @@ public class LocaleMatcher {
     }
 
     result.matchedLocale = LocaleObject.createDefault();
+    result.defaultLocale = result.matchedLocale.getLocale();
     return result;
   }
 
@@ -145,6 +148,7 @@ public class LocaleMatcher {
     }
 
     result.matchedLocale = LocaleObjectICU.createDefault();
+    result.defaultLocale = result.matchedLocale.getLocale();
     return result;
   }
 

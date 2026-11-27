@@ -105,6 +105,7 @@ public class LocaleResolver {
     }
 
     result.put("locale", localeMatchResult.matchedLocale);
+    result.put("defaultLocale", localeMatchResult.defaultLocale);
 
     return result;
   }

@@ -57,6 +57,12 @@ class Option {
     return str_;
   }
 
+  bool operator==(const Option &other) const {
+    if (kind_ != other.kind_)
+      return false;
+    return isString() ? str_ == other.str_ : num_ == other.num_;
+  }
+
  private:
   Kind kind_;
   // I am too lazy to make this a union.
@@ -122,6 +128,11 @@ class Collator : public vm::DecoratedObject::Decoration {
   Options resolvedOptions() noexcept;
 
   double compare(const std::u16string &x, const std::u16string &y) noexcept;
+
+  /// Whether this collator uses a default locale that is no longer the
+  /// platform's default. A collator created now from the same locales and
+  /// options would then resolve to a different locale.
+  bool defaultLocaleChanged() noexcept;
 };
 
 class DateTimeFormat : public vm::DecoratedObject::Decoration {
