@@ -362,6 +362,9 @@ class LoopNode final : public Node {
 
   void reverseChildren() override {
     reverseNodeList(loopee_);
+    // A reversed loopee matches backwards, so a ^ inside it no longer means
+    // the loopee starts at the beginning of the input.
+    loopeeConstraints_ &= ~MatchConstraintAnchoredAtStart;
   }
 
  private:
@@ -498,6 +501,15 @@ class AlternationNode final : public Node {
   void reverseChildren() override {
     for (auto &alternative : alternatives_) {
       reverseNodeList(alternative);
+    }
+    // Reversed alternatives match backwards, so a ^ inside one no longer means
+    // it starts at the beginning of the input. For example, the ^a alternative
+    // in /a(?<=x|^a)/ starts matching after the a.
+    for (auto &constraints : elementConstraints_) {
+      constraints &= ~MatchConstraintAnchoredAtStart;
+    }
+    for (auto &constraints : restConstraints_) {
+      constraints &= ~MatchConstraintAnchoredAtStart;
     }
   }
 
