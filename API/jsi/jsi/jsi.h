@@ -558,6 +558,9 @@ class JSI_EXPORT IRuntime : public ICast {
   virtual bool isHostObject(const jsi::Object&) const = 0;
   virtual bool isHostFunction(const jsi::Function&) const = 0;
   virtual Array getPropertyNames(const Object&) = 0;
+  /// Returns the same names as getPropertyNames, in the same order, as
+  /// PropNameIDs and without creating a JS array.
+  virtual std::vector<PropNameID> getPropertyNameIDs(const Object& object) = 0;
 
   virtual WeakObject createWeakObject(const Object&) = 0;
   virtual Value lockWeakObject(const WeakObject&) = 0;
@@ -731,6 +734,7 @@ class JSI_EXPORT Runtime : public IRuntime {
   void deleteProperty(const Object&, const PropNameID& name) override;
   void deleteProperty(const Object&, const String& name) override;
   void deleteProperty(const Object&, const Value& name) override;
+  std::vector<PropNameID> getPropertyNameIDs(const Object& object) override;
 
   void setRuntimeDataImpl(
       const UUID& uuid,
@@ -1418,6 +1422,11 @@ class JSI_EXPORT Object : public Pointer {
   /// will be isString().  (This is probably not optimal, but it
   /// works.  I only need it in one place.)
   Array getPropertyNames(IRuntime& runtime) const;
+
+  /// \return the names of all enumerable properties in the object and its
+  /// prototype chain, as getPropertyNames does, but as PropNameIDs, which can
+  /// be used to get the property values without converting the names again.
+  std::vector<PropNameID> getPropertyNameIDs(IRuntime& runtime) const;
 
   /// Inform the runtime that there is additional memory associated with a given
   /// JavaScript object that is not visible to the GC. This can be used if an
