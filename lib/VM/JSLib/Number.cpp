@@ -398,6 +398,19 @@ CallResult<HermesValue> numberPrototypeToLocaleString(
 
 CallResult<HermesValue> numberPrototypeToFixed(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  // The number to make a string toFixed.
+  double x;
+  if (args.getThisArg().isNumber()) {
+    x = args.getThisArg().getNumber();
+  } else {
+    auto numPtr = Handle<JSNumber>::dyn_vmcast(args.getThisHandle());
+    if (LLVM_UNLIKELY(!numPtr)) {
+      return runtime.raiseTypeError(
+          "Number.prototype.toFixed() can only be used on Number");
+    }
+    x = numPtr->getPrimitiveNumber();
+  }
+
   auto intRes = toIntegerOrInfinity(runtime, args.getArgHandle(0));
   if (LLVM_UNLIKELY(intRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -413,19 +426,6 @@ CallResult<HermesValue> numberPrototypeToFixed(void *, Runtime &runtime) {
   /// Because we checked, 0 <= f <= 20.
   /// In particular, we know that f is non-negative.
   int32_t f = static_cast<int32_t>(fDouble);
-
-  // The number to make a string toFixed.
-  double x;
-  if (args.getThisArg().isNumber()) {
-    x = args.getThisArg().getNumber();
-  } else {
-    auto numPtr = Handle<JSNumber>::dyn_vmcast(args.getThisHandle());
-    if (LLVM_UNLIKELY(!numPtr)) {
-      return runtime.raiseTypeError(
-          "Number.prototype.toFixed() can only be used on Number");
-    }
-    x = numPtr->getPrimitiveNumber();
-  }
 
   if (std::isnan(x)) {
     return HermesValue::encodeStringValue(
