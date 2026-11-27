@@ -825,7 +825,7 @@ class Parser {
 
   void writeCodePointToUTF16(uint32_t cp, GroupName &output) {
     assert(isValidCodePoint(cp) && "Invalid Unicode code point");
-    if (cp <= 0x10000) {
+    if (isMemberOfBMP(cp)) {
       output.push_back((char16_t)cp);
       return;
     }
