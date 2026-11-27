@@ -1128,20 +1128,24 @@ class HermesRuntimeImpl final : public HermesRuntime,
       HermesRuntimeImpl &rt = hfc->hermesRuntimeImpl;
       assert(&runtime == &rt.runtime_);
 
+      // Construct each argument in place. The move constructor and the
+      // destructor of jsi::Value are not inline, so moving a temporary into
+      // the vector would add two calls for each argument.
       llvh::SmallVector<jsi::Value, 8> apiArgs;
+      apiArgs.reserve(hvArgs.getArgCount());
       for (vm::HermesValue hv : hvArgs) {
-        apiArgs.push_back(rt.valueFromHermesValue(hv));
+        new (apiArgs.end()) jsi::Value(rt.valueFromHermesValue(hv));
+        apiArgs.set_size(apiArgs.size() + 1);
       }
 
-      jsi::Value ret;
       const jsi::Value *args = apiArgs.empty() ? nullptr : &apiArgs.front();
 
       try {
-        ret = (hfc->hostFunction)(
+        return hvFromValue((hfc->hostFunction)(
             rt,
             rt.valueFromHermesValue(hvArgs.getThisArg()),
             args,
-            apiArgs.size());
+            apiArgs.size()));
       }
 #ifdef HERMESVM_EXCEPTION_ON_OOM
       catch (const vm::JSOutOfMemoryError &) {
@@ -1158,8 +1162,6 @@ class HermesRuntimeImpl final : public HermesRuntime,
       } catch (...) {
         return runtime.raiseError("Exception in HostFunction: <unknown>");
       }
-
-      return hvFromValue(ret);
     }
 
     static void finalize(void *context) {
