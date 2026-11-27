@@ -761,18 +761,6 @@ Uint8Array Object::asUint8Array(IRuntime& runtime) const& {
   return getUint8Array(runtime);
 }
 
-Value::Value(Value&& other) noexcept : Value(other.kind_) {
-  if (kind_ == BooleanKind) {
-    data_.boolean = other.data_.boolean;
-  } else if (kind_ == NumberKind) {
-    data_.number = other.data_.number;
-  } else if (kind_ >= PointerKind) {
-    new (&data_.pointer) Pointer(std::move(other.data_.pointer));
-  }
-  // when the other's dtor runs, nothing will happen.
-  other.kind_ = UndefinedKind;
-}
-
 Value::Value(IRuntime& runtime, const Value& other) : Value(other.kind_) {
   // data_ is uninitialized, so use placement new to create non-POD
   // types in it.  Any other kind of initialization will call a dtor
@@ -789,12 +777,6 @@ Value::Value(IRuntime& runtime, const Value& other) : Value(other.kind_) {
     new (&data_.pointer) Pointer(runtime.cloneString(other.data_.pointer.ptr_));
   } else if (kind_ >= ObjectKind) {
     new (&data_.pointer) Pointer(runtime.cloneObject(other.data_.pointer.ptr_));
-  }
-}
-
-Value::~Value() {
-  if (kind_ >= PointerKind) {
-    data_.pointer.~Pointer();
   }
 }
 
