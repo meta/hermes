@@ -1408,4 +1408,27 @@ TEST(Regex, DuplicateNamedGroupsBackRef) {
   EXPECT_EQ("(0-1) nm (0-1)", flatten(matchRanges));
 }
 
+TEST(Regex, NamedGroupU10000Escape) {
+  for (const char16_t *pattern :
+       {u"(?<\\u{10000}>a)", u"(?<\\uD800\\uDC00>a)", u"(?<\U00010000>a)"}) {
+    cregex re(pattern);
+    ASSERT_TRUE(re.valid());
+    ASSERT_EQ(re.getOrderedNamedGroups().size(), 1u);
+    const auto &name = re.getOrderedNamedGroups().front();
+    ASSERT_EQ(name.size(), 2u);
+    EXPECT_EQ(name[0], 0xD800);
+    EXPECT_EQ(name[1], 0xDC00);
+  }
+
+  cregex backref(u"^(?<\U00010000>a)\\k<\\u{10000}>$");
+  ASSERT_TRUE(backref.valid());
+  cmatch matchRanges;
+  EXPECT_TRUE(search(u"aa", matchRanges, backref));
+  EXPECT_FALSE(search(u"ab", matchRanges, backref));
+
+  EXPECT_EQ(
+      error_for(u"(?<\U00010000>a)(?<\\u{10000}>b)"),
+      constants::ErrorType::DuplicateCaptureGroupName);
+}
+
 } // end anonymous namespace
