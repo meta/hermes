@@ -454,6 +454,12 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::parseValue() {
                         lv.curVal) == ExecutionStatus::EXCEPTION))
               return ExecutionStatus::EXCEPTION;
           }
+          // Duplicate keys leave fewer properties than the storage slots
+          // preallocated for numElements.
+          if (LLVM_UNLIKELY(
+                  lv.newObject->getClass(runtime_)->getNumProperties() !=
+                  numElements))
+            JSObject::trimPropStorageToClass(*lv.newObject, runtime_);
           // Populate cache entry. Dictionary-mode HiddenClasses are owned by
           // a single object and mutated in place, so caching one would let a
           // mutation on a sibling object grow the shared class past this

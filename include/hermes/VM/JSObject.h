@@ -513,6 +513,13 @@ class JSObject : public GCCell {
     updateClass(runtime, clazz);
   }
 
+  /// Shrink the property storage of \p self to the number of properties in its
+  /// HiddenClass, keeping the capacity. Needed when the storage was
+  /// preallocated for more properties than were added, because adding a
+  /// property later appends at the end of the storage. All properties of
+  /// \p self must have been added without any deletions.
+  static void trimPropStorageToClass(JSObject *self, Runtime &runtime);
+
   /// Set the HiddenClass of \p self to \p clazz and write \p value to index \p
   /// slot.
   /// Used by the PutById and computed property add caches.

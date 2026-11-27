@@ -3498,6 +3498,18 @@ ExecutionStatus JSObject::addOwnPropertyImpl(
   return ExecutionStatus::RETURNED;
 }
 
+void JSObject::trimPropStorageToClass(JSObject *self, Runtime &runtime) {
+  if (!self->propStorage_)
+    return;
+  unsigned numProperties = self->getClass(runtime)->getNumProperties();
+  unsigned numIndirectSlots = numProperties <= DIRECT_PROPERTY_SLOTS
+      ? 0
+      : numProperties - DIRECT_PROPERTY_SLOTS;
+  PropStorage *storage = self->propStorage_.getNonNull(runtime);
+  if (numIndirectSlots < storage->size())
+    PropStorage::resizeWithinCapacity(storage, runtime, numIndirectSlots);
+}
+
 void JSObject::addNewOwnPropertyInSlot(
     JSObject *self,
     Runtime &runtime,
