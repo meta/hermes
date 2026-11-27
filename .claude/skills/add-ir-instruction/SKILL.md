@@ -23,16 +23,15 @@ skill describes each file, the pattern to follow, and important conventions.
 7. `lib/Optimizer/Scalar/TypeInference.cpp` — Type inference stub
 8. `lib/BCGen/HBC/ISel.cpp` — HBC instruction selection (stub or implementation)
 9. `lib/BCGen/SH/SH.cpp` — Static Hermes codegen (stub or implementation)
-10. `lib/BCGen/facebook/Mins/Mins.cpp` — Mins codegen (stub or implementation)
-11. Tests — At minimum, update or add tests in `test/`
+10. Tests — At minimum, update or add tests in `test/`
 
 If the instruction needs lowering (i.e., it does not map directly to a bytecode
 opcode), you also need:
 
-12. `include/hermes/BCGen/Lowering.h` — Lowering pass declaration
-13. `lib/BCGen/Lowering.cpp` — Lowering pass implementation
-14. `lib/BCGen/HBC/LoweringPipelines.cpp` — Register pass in HBC pipeline
-15. `lib/BCGen/SH/SH.cpp` (in `lowerModuleIR`) — Register pass in SH pipeline
+11. `include/hermes/BCGen/Lowering.h` — Lowering pass declaration
+12. `lib/BCGen/Lowering.cpp` — Lowering pass implementation
+13. `lib/BCGen/HBC/LoweringPipelines.cpp` — Register pass in HBC pipeline
+14. `lib/BCGen/SH/SH.cpp` (in `lowerModuleIR`) — Register pass in SH pipeline
 
 ## Step-by-Step Guide
 
@@ -185,16 +184,6 @@ void HBCISel::generateMyNewInst(MyNewInst *Inst, BasicBlock *next) {
 ```cpp
 void generateMyNewInst(MyNewInst &inst) {
   hermes_fatal("MyNewInst should have been lowered");
-}
-```
-
-**Mins (`lib/BCGen/facebook/Mins/Mins.cpp`):**
-Unless asked to, do not implement Mins codegen for new instructions.
-Leave it as a stub.
-
-```cpp
-void generateMyNewInst(MyNewInst &inst) {
-  unimplemented(inst);
 }
 ```
 

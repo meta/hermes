@@ -27,7 +27,3 @@ add_subdirectory(synth)
 add_subdirectory(hcdp)
 
 add_subdirectory(test-runner)
-
-if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/facebook)
-  add_subdirectory(facebook)
-endif()
