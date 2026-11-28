@@ -4,6 +4,8 @@
   "description": "Flow types for the Flow-ESTree spec produced by the hermes parser",
   "main": "dist/index.js",
   "license": "MIT",
+  "homepage": "https://github.com/facebook/hermes#readme",
+  "bugs": "https://github.com/facebook/hermes/issues",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/facebook/hermes.git",

@@ -3,6 +3,8 @@
   "version": "0.37.0",
   "description": "Hermes parser plugin for Prettier.",
   "license": "MIT",
+  "homepage": "https://github.com/facebook/hermes#readme",
+  "bugs": "https://github.com/facebook/hermes/issues",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/facebook/hermes.git",

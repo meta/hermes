@@ -4,6 +4,8 @@
   "description": "Tools built on top of Hermes-ESTree to enable codebase transformation",
   "main": "dist/index.js",
   "license": "MIT",
+  "homepage": "https://github.com/facebook/hermes#readme",
+  "bugs": "https://github.com/facebook/hermes/issues",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/facebook/hermes.git",
